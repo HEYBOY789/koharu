@@ -16,7 +16,9 @@
     "processing": "処理中",
     "processingFailed": "処理に失敗しました。",
     "stop": "停止",
-    "title": "アクティビティ"
+    "title": "アクティビティ",
+    "summarizingChapter": "Summarizing “{{chapter}}”",
+    "translatingChapter": "Translating “{{chapter}}”"
   },
   "agent": {
     "account": "ChatGPTアカウント",
@@ -70,7 +72,9 @@
     "cancel": "キャンセル",
     "clearSearch": "検索をクリア",
     "loading": "読み込み中…",
-    "reset": "リセット"
+    "reset": "リセット",
+    "save": "Save",
+    "saved": "Saved"
   },
   "errors": {
     "fatalTitle": "Koharuを続行できませんでした",
@@ -212,7 +216,8 @@
     "tr-TR": "Türkçe",
     "wuu": "吴语",
     "zh-CN": "简体中文",
-    "zh-TW": "繁體中文"
+    "zh-TW": "繁體中文",
+    "vi-VN": "Tiếng Việt"
   },
   "layers": {
     "delete": "{{name}}を削除",
@@ -300,7 +305,8 @@
     "rename": "名前を変更",
     "renameDescription": "このページの新しい名前を入力します。",
     "renameTitle": "ページ名を変更",
-    "selected": "{{count}}件選択中"
+    "selected": "{{count}}件選択中",
+    "folderChapterHint": "Importing a folder uses each immediate subfolder as one chapter."
   },
   "outputPicker": {
     "instructions": "翻訳指示",
@@ -431,7 +437,8 @@
       "providers": "プロバイダー",
       "shortcuts": "ショートカット",
       "translation": "翻訳",
-      "typesetting": "組版"
+      "typesetting": "組版",
+      "summarizer": "Summarizer"
     },
     "title": "設定",
     "translation": {
@@ -463,6 +470,33 @@
       "loadingFonts": "フォントを読み込み中…",
       "removeFamily": "{{family}}を削除",
       "title": "組版"
+    },
+    "summarizer": {
+      "title": "Chapter summarizer",
+      "description": "Run a local agent CLI to summarize each chapter, update the wiki, and write a translation prompt before the chapter is translated.",
+      "backendSection": "Agent",
+      "backend": "Agent CLI",
+      "backendDescription": "The agent uses the providers and credentials configured in its own CLI.",
+      "binary": "Binary path",
+      "binaryDescription": "Leave empty to find the command on PATH.",
+      "model": "Model",
+      "modelDescription": "Passed to the agent CLI. Leave empty for its default model.",
+      "modelPlaceholder": "Provider default",
+      "effort": "Reasoning effort",
+      "effortDescription": "Passed to the agent CLI when it supports the level.",
+      "effortDefault": "Default",
+      "skill": "Skill override",
+      "skillDescription": "A folder or SKILL.md. Leave empty to use the bundled manga-summarizer skill.",
+      "skillPlaceholder": "Bundled skill",
+      "summarizeDefault": "Summarize new chapters",
+      "summarizeDefaultDescription": "Can be turned off per chapter.",
+      "enabled": "Enabled",
+      "disabled": "Disabled",
+      "probeSection": "Check",
+      "probe": "Check agent",
+      "modelDefault": "エージェントの既定",
+      "modelCustom": "カスタムモデル ID…",
+      "effortInModel": "モデル ID で指定済み: {{effort}}"
     }
   },
   "start": {
@@ -534,5 +568,55 @@
     "maximize": "最大化",
     "minimize": "最小化",
     "restore": "元のサイズに戻す"
+  },
+  "chapter": {
+    "title": "Chapter",
+    "new": "New chapter",
+    "name": "Chapter name",
+    "rename": "Rename chapter",
+    "renameTitle": "Rename chapter",
+    "deleteTitle": "Delete chapter?",
+    "deleteDescription": "“{{title}}” and its {{count}} pages will be deleted.",
+    "actionsFor": "Actions for {{title}}",
+    "expand": "Expand chapter",
+    "collapse": "Collapse chapter",
+    "run": "Run this chapter",
+    "pageCount": "{{count}} pages",
+    "summarizeToggle": "Summarize before translating",
+    "summarize": "Summarize",
+    "translate": "Translate",
+    "summarizeAndTranslate": "Summarize & translate",
+    "runFromHere": "Run from here ({{count}})",
+    "summarizing": "Summarizing chapter",
+    "translating": "Translating chapter",
+    "start": "Start",
+    "runFromHereTitle": "Run the remaining chapters?",
+    "runFromHereDescription": "Chapters run one at a time. Chapters with summarizing enabled get a summary first.",
+    "edit": "Edit",
+    "tab_summary": "Summary",
+    "tab_wiki": "Wiki",
+    "tab_prompt": "Prompt",
+    "wiki_characters": "Characters",
+    "wiki_world": "World",
+    "wiki_glossary": "Glossary",
+    "wiki_timeline": "Timeline",
+    "empty_summary": "No summary yet. Use Summarize to create one.",
+    "empty_wiki": "The wiki is empty. Summaries append to it as chapters are processed.",
+    "empty_prompt": "No chapter-specific translation prompt yet.",
+    "moveUp": "Move up",
+    "moveDown": "Move down",
+    "importFiles": "ここにファイルを読み込む",
+    "importFolder": "ここにフォルダーを読み込む",
+    "emptyHint": "空のチャプター",
+    "wikiAdd": "Wiki ファイルを追加",
+    "wikiRemove": "この Wiki ファイルを削除",
+    "wikiAddTitle": "新しい Wiki ファイル",
+    "wikiAddDescription": "小文字・数字・アンダースコアのみ。次回の実行で要約エージェントが内容を書き込みます。",
+    "wikiAddPlaceholder": "factions",
+    "wikiAddAction": "追加",
+    "wikiImport": "Wiki フォルダーを読み込む",
+    "wiki_style": "文体",
+    "otherRunning": "{{title}} を実行中です。終了するとチャプター操作が再開します。",
+    "summarizeLocked": "要約エージェントがこのチャプターを書き込み中です。終了後に編集できます。"
   }
 }

@@ -128,10 +128,17 @@ function JobItem({ job }: { job: Job }) {
       <div className='grid grid-cols-[1rem_minmax(0,1fr)_2.25rem_1.5rem] items-start gap-x-2.5'>
         <span className='mt-1.5 size-1.5 justify-self-center rounded-full bg-primary' />
         <div className='min-w-0'>
-          <span className='block truncate text-[12px] font-medium capitalize'>
-            {job.stage
-              ? t(`phase.${job.stage}`, { defaultValue: job.stage })
-              : t('activity.processing')}
+          <span className='block truncate text-[12px] font-medium'>
+            {job.chapter_title && job.phase
+              ? t(
+                  job.phase === 'summarize'
+                    ? 'activity.summarizingChapter'
+                    : 'activity.translatingChapter',
+                  { chapter: job.chapter_title },
+                )
+              : job.stage
+                ? t(`phase.${job.stage}`, { defaultValue: job.stage })
+                : t('activity.processing')}
           </span>
         </div>
         <span className='pt-0.5 text-right text-[10px] tabular-nums'>
@@ -149,6 +156,11 @@ function JobItem({ job }: { job: Job }) {
         {pageLabel ? (
           <p className='col-start-2 col-end-4 mt-0.5 truncate text-[10px] text-muted-foreground'>
             {pageLabel}
+          </p>
+        ) : null}
+        {job.detail ? (
+          <p className='col-start-2 col-end-4 line-clamp-2 text-[9px] leading-3.5 break-words text-muted-foreground'>
+            {job.detail}
           </p>
         ) : null}
         {job.model ? (

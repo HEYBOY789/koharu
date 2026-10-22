@@ -16,7 +16,9 @@
     "processing": "처리 중",
     "processingFailed": "처리에 실패했습니다.",
     "stop": "중지",
-    "title": "활동"
+    "title": "활동",
+    "summarizingChapter": "Summarizing “{{chapter}}”",
+    "translatingChapter": "Translating “{{chapter}}”"
   },
   "agent": {
     "account": "ChatGPT 계정",
@@ -70,7 +72,9 @@
     "cancel": "취소",
     "clearSearch": "검색 지우기",
     "loading": "불러오는 중…",
-    "reset": "초기화"
+    "reset": "초기화",
+    "save": "Save",
+    "saved": "Saved"
   },
   "errors": {
     "fatalTitle": "Koharu를 계속 실행할 수 없습니다",
@@ -212,7 +216,8 @@
     "tr-TR": "Türkçe",
     "wuu": "吴语",
     "zh-CN": "简体中文",
-    "zh-TW": "繁體中文"
+    "zh-TW": "繁體中文",
+    "vi-VN": "Tiếng Việt"
   },
   "layers": {
     "delete": "{{name}} 삭제",
@@ -300,7 +305,8 @@
     "rename": "이름 바꾸기",
     "renameDescription": "이 페이지의 새 이름을 정하세요.",
     "renameTitle": "페이지 이름 바꾸기",
-    "selected": "{{count}}개 선택됨"
+    "selected": "{{count}}개 선택됨",
+    "folderChapterHint": "Importing a folder uses each immediate subfolder as one chapter."
   },
   "outputPicker": {
     "instructions": "번역 지침",
@@ -431,7 +437,8 @@
       "providers": "제공자",
       "shortcuts": "단축키",
       "translation": "번역",
-      "typesetting": "조판"
+      "typesetting": "조판",
+      "summarizer": "Summarizer"
     },
     "title": "설정",
     "translation": {
@@ -463,6 +470,33 @@
       "loadingFonts": "글꼴 불러오는 중…",
       "removeFamily": "{{family}} 삭제",
       "title": "조판"
+    },
+    "summarizer": {
+      "title": "Chapter summarizer",
+      "description": "Run a local agent CLI to summarize each chapter, update the wiki, and write a translation prompt before the chapter is translated.",
+      "backendSection": "Agent",
+      "backend": "Agent CLI",
+      "backendDescription": "The agent uses the providers and credentials configured in its own CLI.",
+      "binary": "Binary path",
+      "binaryDescription": "Leave empty to find the command on PATH.",
+      "model": "Model",
+      "modelDescription": "Passed to the agent CLI. Leave empty for its default model.",
+      "modelPlaceholder": "Provider default",
+      "effort": "Reasoning effort",
+      "effortDescription": "Passed to the agent CLI when it supports the level.",
+      "effortDefault": "Default",
+      "skill": "Skill override",
+      "skillDescription": "A folder or SKILL.md. Leave empty to use the bundled manga-summarizer skill.",
+      "skillPlaceholder": "Bundled skill",
+      "summarizeDefault": "Summarize new chapters",
+      "summarizeDefaultDescription": "Can be turned off per chapter.",
+      "enabled": "Enabled",
+      "disabled": "Disabled",
+      "probeSection": "Check",
+      "probe": "Check agent",
+      "modelDefault": "에이전트 기본값",
+      "modelCustom": "사용자 지정 모델 ID…",
+      "effortInModel": "모델 ID에 이미 지정됨: {{effort}}"
     }
   },
   "start": {
@@ -534,5 +568,55 @@
     "maximize": "최대화",
     "minimize": "최소화",
     "restore": "복원"
+  },
+  "chapter": {
+    "title": "Chapter",
+    "new": "New chapter",
+    "name": "Chapter name",
+    "rename": "Rename chapter",
+    "renameTitle": "Rename chapter",
+    "deleteTitle": "Delete chapter?",
+    "deleteDescription": "“{{title}}” and its {{count}} pages will be deleted.",
+    "actionsFor": "Actions for {{title}}",
+    "expand": "Expand chapter",
+    "collapse": "Collapse chapter",
+    "run": "Run this chapter",
+    "pageCount": "{{count}} pages",
+    "summarizeToggle": "Summarize before translating",
+    "summarize": "Summarize",
+    "translate": "Translate",
+    "summarizeAndTranslate": "Summarize & translate",
+    "runFromHere": "Run from here ({{count}})",
+    "summarizing": "Summarizing chapter",
+    "translating": "Translating chapter",
+    "start": "Start",
+    "runFromHereTitle": "Run the remaining chapters?",
+    "runFromHereDescription": "Chapters run one at a time. Chapters with summarizing enabled get a summary first.",
+    "edit": "Edit",
+    "tab_summary": "Summary",
+    "tab_wiki": "Wiki",
+    "tab_prompt": "Prompt",
+    "wiki_characters": "Characters",
+    "wiki_world": "World",
+    "wiki_glossary": "Glossary",
+    "wiki_timeline": "Timeline",
+    "empty_summary": "No summary yet. Use Summarize to create one.",
+    "empty_wiki": "The wiki is empty. Summaries append to it as chapters are processed.",
+    "empty_prompt": "No chapter-specific translation prompt yet.",
+    "moveUp": "Move up",
+    "moveDown": "Move down",
+    "importFiles": "여기에 파일 가져오기",
+    "importFolder": "여기에 폴더 가져오기",
+    "emptyHint": "빈 챕터",
+    "wikiAdd": "위키 파일 추가",
+    "wikiRemove": "이 위키 파일 삭제",
+    "wikiAddTitle": "새 위키 파일",
+    "wikiAddDescription": "소문자, 숫자, 밑줄만 사용합니다. 다음 실행에서 요약 에이전트가 내용을 채웁니다.",
+    "wikiAddPlaceholder": "factions",
+    "wikiAddAction": "추가",
+    "wikiImport": "위키 폴더 가져오기",
+    "wiki_style": "문체",
+    "otherRunning": "{{title}} 실행 중입니다. 끝나면 챕터 작업을 다시 할 수 있습니다.",
+    "summarizeLocked": "요약 에이전트가 이 챕터를 작성 중입니다. 끝나면 편집할 수 있습니다."
   }
 }

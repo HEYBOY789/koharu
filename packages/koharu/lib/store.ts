@@ -58,12 +58,14 @@ interface KoharuStore {
   tool: CanvasTool
   brush: CanvasBrush
   inspector: InspectorSection
+  inspectorPanel: 'properties' | 'agent' | 'chapter'
   processingScope: PipelineScope
   processingStages: Stage[]
   settingsOpen: boolean
   shortcuts: Shortcuts
   selectPages: (pages: EntityId[]) => void
   showInspector: (section: InspectorSection) => void
+  setInspectorPanel: (panel: 'properties' | 'agent' | 'chapter') => void
   setProcessingScope: (scope: PipelineScope) => void
   setProcessingStages: (stages: Stage[]) => void
   setSettingsOpen: (open: boolean) => void
@@ -106,12 +108,14 @@ export const useKoharuStore = create<KoharuStore>()((set) => ({
   tool: 'select',
   brush: { diameter: 48, color: '#FFFFFF' },
   inspector: 'copy',
+  inspectorPanel: 'properties',
   processingScope: 'selected-pages',
   processingStages: [...pipelineStages],
   settingsOpen: false,
   shortcuts: defaultShortcuts,
   selectPages: (selectedPages) => set({ selectedPages: [...new Set(selectedPages)] }),
   showInspector: (inspector) => set({ inspector }),
+  setInspectorPanel: (inspectorPanel) => set({ inspectorPanel }),
   setProcessingScope: (processingScope) => set({ processingScope }),
   setProcessingStages: (processingStages) => set({ processingStages }),
   setSettingsOpen: (settingsOpen) => set({ settingsOpen }),

@@ -15,6 +15,7 @@ import {
   pagesKey,
   projectKey,
   refresh,
+  useChapters,
   useCommand,
   useImportPages,
   usePage,
@@ -44,13 +45,19 @@ export function TitleBar() {
   const project = useProject().data
   const pagesQuery = usePages(Boolean(project))
   const pageQuery = usePage(Boolean(project))
+  const chapters = useChapters(Boolean(project)).data ?? []
   const pages = project ? (pagesQuery.data ?? []) : []
   const page = project ? (pageQuery.data ?? null) : null
+  const chapter = chapters.find((value) => value.id === page?.chapter)
   const selectedPages = useKoharuStore((state) => state.selectedPages)
   const selectedLayers = useKoharuStore((state) => state.selectedLayers)
   const selectLayers = useKoharuStore((state) => state.selectLayers)
   const setSettingsOpen = useKoharuStore((state) => state.setSettingsOpen)
   const requestCanvasFit = useKoharuStore((state) => state.requestCanvasFit)
+  // One pipeline job runs at a time across the project, including chapter runs.
+  const busy = useKoharuStore((state) =>
+    Object.values(state.jobs).some((job) => job.state === 'running'),
+  )
   const { importPages, importing } = useImportPages()
   const { run: exportProject, busy: exporting } = useCommand(
     ['export-project'],
@@ -98,11 +105,11 @@ export function TitleBar() {
                   {importing ? t('navigator.importing') : t('menu.import')}
                 </MenubarSubTrigger>
                 <MenubarSubContent className='min-w-40 p-1'>
-                  <MenubarItem disabled={importing} onClick={() => importPages('files')}>
+                  <MenubarItem disabled={importing} onClick={() => importPages('files', null)}>
                     <FilePlus2 />
                     {t('navigator.importFiles')}
                   </MenubarItem>
-                  <MenubarItem disabled={importing} onClick={() => importPages('folder')}>
+                  <MenubarItem disabled={importing} onClick={() => importPages('folder', null)}>
                     <FolderOpen />
                     {t('navigator.importFolder')}
                   </MenubarItem>
@@ -195,19 +202,19 @@ export function TitleBar() {
             <MenubarTrigger>{t('menu.process')}</MenubarTrigger>
             <MenubarContent>
               <MenubarItem
-                disabled={!project || pages.length === 0}
+                disabled={busy || !project || pages.length === 0}
                 onClick={() => run({ scope: 'project' })}
               >
                 {t('menu.processProject')}
               </MenubarItem>
               <MenubarItem
-                disabled={selectedPages.length === 0}
+                disabled={busy || selectedPages.length === 0}
                 onClick={() => run({ scope: 'pages', value: selectedPages })}
               >
                 {t('menu.processPages')}
               </MenubarItem>
               <MenubarItem
-                disabled={selectedLayers.length === 0}
+                disabled={busy || selectedLayers.length === 0}
                 onClick={() =>
                   run(
                     { scope: 'entities', value: selectedLayers },
@@ -221,7 +228,7 @@ export function TitleBar() {
               {(['detection', 'ocr', 'translation', 'inpainting'] as Stage[]).map((stage) => (
                 <MenubarItem
                   key={stage}
-                  disabled={!project || pages.length === 0}
+                  disabled={busy || !project || pages.length === 0}
                   onClick={() => run({ scope: 'project' }, { operation: 'through', stage })}
                 >
                   {t('menu.runPhase', {
@@ -267,6 +274,12 @@ export function TitleBar() {
           {project ? (
             <span className='truncate'>
               <span className='font-medium text-foreground'>{project.name}</span>
+              {chapter && (
+                <>
+                  <span className='mx-2'>/</span>
+                  <span>{chapter.title}</span>
+                </>
+              )}
               {page && (
                 <>
                   <span className='mx-2'>/</span>

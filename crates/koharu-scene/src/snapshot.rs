@@ -126,6 +126,37 @@ impl Snapshot {
         self.decode(self.state.project_component(&key))
     }
 
+    pub fn chapters(&self) -> Result<crate::Chapters> {
+        Ok(self
+            .project_component::<crate::Chapters>()?
+            .unwrap_or_default())
+    }
+
+    pub fn chapter(&self, id: crate::ChapterId) -> Result<Option<crate::Chapter>> {
+        Ok(self.chapters()?.chapter(id).cloned())
+    }
+
+    pub fn chapter_for(&self, page: EntityId) -> Result<Option<crate::Chapter>> {
+        Ok(self.chapters()?.chapter_for_page(page).cloned())
+    }
+
+    /// Returns chapter pages in project order, skipping members that no longer
+    /// exist so a stale roster cannot block processing.
+    pub fn chapter_pages(&self, id: crate::ChapterId) -> Result<Vec<EntityId>> {
+        let Some(chapter) = self.chapter(id)? else {
+            return Ok(Vec::new());
+        };
+        Ok(self
+            .pages()
+            .map(|page| page.id())
+            .filter(|page| chapter.pages.contains(page))
+            .collect())
+    }
+
+    pub fn wiki(&self) -> Result<crate::Wiki> {
+        Ok(self.project_component::<crate::Wiki>()?.unwrap_or_default())
+    }
+
     pub fn asset(&self, entity: EntityId, role: &AssetRole) -> Result<Option<Asset>> {
         Ok(self
             .component::<Assets>(entity)?

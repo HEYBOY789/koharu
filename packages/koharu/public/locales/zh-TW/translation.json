@@ -16,7 +16,9 @@
     "processing": "正在處理",
     "processingFailed": "處理失敗。",
     "stop": "停止",
-    "title": "活動"
+    "title": "活動",
+    "summarizingChapter": "Summarizing “{{chapter}}”",
+    "translatingChapter": "Translating “{{chapter}}”"
   },
   "agent": {
     "account": "ChatGPT 帳戶",
@@ -70,7 +72,9 @@
     "cancel": "取消",
     "clearSearch": "清除搜尋",
     "loading": "正在載入…",
-    "reset": "重設"
+    "reset": "重設",
+    "save": "Save",
+    "saved": "Saved"
   },
   "errors": {
     "fatalTitle": "Koharu 無法繼續執行",
@@ -212,7 +216,8 @@
     "tr-TR": "Türkçe",
     "wuu": "吴语",
     "zh-CN": "简体中文",
-    "zh-TW": "繁體中文"
+    "zh-TW": "繁體中文",
+    "vi-VN": "Tiếng Việt"
   },
   "layers": {
     "delete": "刪除 {{name}}",
@@ -300,7 +305,8 @@
     "rename": "重新命名",
     "renameDescription": "為此頁面選擇新名稱。",
     "renameTitle": "重新命名頁面",
-    "selected": "已選擇 {{count}}"
+    "selected": "已選擇 {{count}}",
+    "folderChapterHint": "Importing a folder uses each immediate subfolder as one chapter."
   },
   "outputPicker": {
     "instructions": "翻譯指示",
@@ -431,7 +437,8 @@
       "providers": "提供者",
       "shortcuts": "快捷鍵",
       "translation": "譯文",
-      "typesetting": "排版"
+      "typesetting": "排版",
+      "summarizer": "Summarizer"
     },
     "title": "設定",
     "translation": {
@@ -463,6 +470,33 @@
       "loadingFonts": "正在載入字型…",
       "removeFamily": "移除 {{family}}",
       "title": "排版"
+    },
+    "summarizer": {
+      "title": "Chapter summarizer",
+      "description": "Run a local agent CLI to summarize each chapter, update the wiki, and write a translation prompt before the chapter is translated.",
+      "backendSection": "Agent",
+      "backend": "Agent CLI",
+      "backendDescription": "The agent uses the providers and credentials configured in its own CLI.",
+      "binary": "Binary path",
+      "binaryDescription": "Leave empty to find the command on PATH.",
+      "model": "Model",
+      "modelDescription": "Passed to the agent CLI. Leave empty for its default model.",
+      "modelPlaceholder": "Provider default",
+      "effort": "Reasoning effort",
+      "effortDescription": "Passed to the agent CLI when it supports the level.",
+      "effortDefault": "Default",
+      "skill": "Skill override",
+      "skillDescription": "A folder or SKILL.md. Leave empty to use the bundled manga-summarizer skill.",
+      "skillPlaceholder": "Bundled skill",
+      "summarizeDefault": "Summarize new chapters",
+      "summarizeDefaultDescription": "Can be turned off per chapter.",
+      "enabled": "Enabled",
+      "disabled": "Disabled",
+      "probeSection": "Check",
+      "probe": "Check agent",
+      "modelDefault": "代理預設",
+      "modelCustom": "自訂模型 ID…",
+      "effortInModel": "模型 ID 已指定：{{effort}}"
     }
   },
   "start": {
@@ -534,5 +568,55 @@
     "maximize": "最大化",
     "minimize": "最小化",
     "restore": "還原"
+  },
+  "chapter": {
+    "title": "Chapter",
+    "new": "New chapter",
+    "name": "Chapter name",
+    "rename": "Rename chapter",
+    "renameTitle": "Rename chapter",
+    "deleteTitle": "Delete chapter?",
+    "deleteDescription": "“{{title}}” and its {{count}} pages will be deleted.",
+    "actionsFor": "Actions for {{title}}",
+    "expand": "Expand chapter",
+    "collapse": "Collapse chapter",
+    "run": "Run this chapter",
+    "pageCount": "{{count}} pages",
+    "summarizeToggle": "Summarize before translating",
+    "summarize": "Summarize",
+    "translate": "Translate",
+    "summarizeAndTranslate": "Summarize & translate",
+    "runFromHere": "Run from here ({{count}})",
+    "summarizing": "Summarizing chapter",
+    "translating": "Translating chapter",
+    "start": "Start",
+    "runFromHereTitle": "Run the remaining chapters?",
+    "runFromHereDescription": "Chapters run one at a time. Chapters with summarizing enabled get a summary first.",
+    "edit": "Edit",
+    "tab_summary": "Summary",
+    "tab_wiki": "Wiki",
+    "tab_prompt": "Prompt",
+    "wiki_characters": "Characters",
+    "wiki_world": "World",
+    "wiki_glossary": "Glossary",
+    "wiki_timeline": "Timeline",
+    "empty_summary": "No summary yet. Use Summarize to create one.",
+    "empty_wiki": "The wiki is empty. Summaries append to it as chapters are processed.",
+    "empty_prompt": "No chapter-specific translation prompt yet.",
+    "moveUp": "Move up",
+    "moveDown": "Move down",
+    "importFiles": "匯入檔案到此章節",
+    "importFolder": "匯入資料夾到此章節",
+    "emptyHint": "空章節",
+    "wikiAdd": "新增 Wiki 檔案",
+    "wikiRemove": "刪除此 Wiki 檔案",
+    "wikiAddTitle": "新增 Wiki 檔案",
+    "wikiAddDescription": "僅能使用小寫字母、數字與底線。下次執行時摘要代理會填入內容。",
+    "wikiAddPlaceholder": "factions",
+    "wikiAddAction": "新增",
+    "wikiImport": "匯入 Wiki 資料夾",
+    "wiki_style": "文風",
+    "otherRunning": "正在執行 {{title}}，結束後才能操作章節。",
+    "summarizeLocked": "摘要 agent 正在寫這一章，結束後才能編輯。"
   }
 }

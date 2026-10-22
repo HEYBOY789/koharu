@@ -1,13 +1,12 @@
 use anyhow::{Context as _, Result};
 use koharu_desktop::{CanvasState, Desktop};
-use koharu_scene::{AssetInput, AssetMetadata, AssetRole, At, PageDraft};
+use koharu_scene::ChapterId;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use specta::Type;
 use strum::{EnumMessage as _, IntoEnumIterator as _};
 use tauri::{AppHandle, Manager as _, State, WebviewWindow, ipc::Channel};
 use tauri_runtime_cef::CefRuntime;
-use walkdir::WalkDir;
 
 use super::{
     ChannelExt as _, Error,
@@ -19,6 +18,7 @@ use super::{
     project::{
         CurrentProject, Page, PageSummary, Project, ProjectInfo, ProjectLibrary, ProjectSummary,
     },
+    summarizer::SummarizerConfig,
 };
 
 #[derive(Clone, Debug, Serialize, Type)]
@@ -336,6 +336,7 @@ async fn close_current_project(handle: &AppHandle<CefRuntime>) -> Result<()> {
 #[specta::specta]
 pub(crate) async fn import(
     source: PageImportSource,
+    chapter: Option<ChapterId>,
     window: WebviewWindow<CefRuntime>,
     desktop: State<'_, Desktop>,
     project: State<'_, CurrentProject>,
@@ -351,81 +352,67 @@ pub(crate) async fn import(
     let dialog = rfd::AsyncFileDialog::new()
         .add_filter("Images, archives, and PDF", &extensions)
         .set_parent(&window);
-    let files = match source {
-        PageImportSource::Files => dialog.pick_files().await.map(|files| {
-            files
+    let imported = match source {
+        PageImportSource::Files => {
+            let Some(files) = dialog.pick_files().await else {
+                return Ok(());
+            };
+            let paths = files
                 .into_iter()
                 .map(|file| file.path().to_owned())
-                .collect::<Vec<_>>()
-        }),
-        PageImportSource::Folder => dialog.pick_folder().await.map(|folder| {
-            WalkDir::new(folder.path())
-                .follow_links(false)
-                .into_iter()
-                .filter_map(|entry| match entry {
-                    Ok(entry) if entry.file_type().is_file() => Some(entry.into_path()),
-                    Ok(_) => None,
-                    Err(error) => {
-                        tracing::warn!(%error, "could not inspect an import directory entry");
-                        None
-                    }
-                })
-                .filter(|path| {
-                    path.extension()
-                        .and_then(|extension| extension.to_str())
-                        .is_some_and(|extension| extension.parse::<import::Format>().is_ok())
-                })
-                .collect::<Vec<_>>()
-        }),
+                .collect::<Vec<_>>();
+            let pages = tokio_rayon::spawn(move || import::import(paths)).await?;
+            if pages.is_empty() {
+                return Err(
+                    anyhow::anyhow!("no supported images were found in the selection").into(),
+                );
+            }
+            Import::Pages(pages)
+        }
+        PageImportSource::Folder => {
+            let Some(folder) = dialog.pick_folder().await else {
+                return Ok(());
+            };
+            let root = folder.path().to_owned();
+            if chapter.is_some() {
+                Import::Pages(tokio_rayon::spawn(move || import::import_flat(&root)).await?)
+            } else {
+                Import::Chapters(tokio_rayon::spawn(move || import::import_folder(&root)).await?)
+            }
+        }
     };
-    let Some(files) = files else {
-        return Ok(());
-    };
-    if files.is_empty() {
-        return Err(anyhow::anyhow!("no supported images were found in the selection").into());
-    }
-    let pages = tokio_rayon::spawn(move || import::import(files)).await?;
-
+    let summarize = SummarizerConfig::load()?.read()?.summarize_default;
     let (commit, page) = {
         let mut project = project.project.lock().await;
         let project = project.as_mut().context("no project is open")?;
-        let source = AssetRole::new("source")?;
-        let patch = project.snapshot().patch(|edit| {
-            for imported in pages {
-                let page = edit.add_page(
-                    PageDraft::new(
-                        imported.name,
-                        f64::from(imported.width),
-                        f64::from(imported.height),
-                    ),
-                    At::End,
-                )?;
-                edit.set_asset(
-                    page,
-                    &source,
-                    AssetInput::new(
-                        imported.bytes,
-                        imported.format.to_mime_type(),
-                        AssetMetadata {
-                            width: Some(imported.width),
-                            height: Some(imported.height),
-                            attributes: Default::default(),
-                        },
-                    ),
-                )?;
+        let active_chapter = project
+            .active_page
+            .and_then(|page| project.snapshot().chapter_for(page).ok().flatten())
+            .map(|chapter| chapter.id);
+        let (commit, page) = match imported {
+            Import::Pages(pages) => {
+                project
+                    .import_pages(pages, chapter.or(active_chapter), summarize)
+                    .await?
             }
-            Ok(())
-        })?;
-        let commit = project.session.commit(patch).await?;
+            Import::Chapters(chapters) => project.import_chapters(chapters, summarize).await?,
+        };
         project.record(vec![commit.revision]);
-        project.reconcile_page();
-        let page = project.active_page();
-        (commit, page)
+        if let Some(page) = page {
+            project.select_page(page)?;
+        }
+        let active = project.active_page();
+        (commit, active)
     };
     desktop.synchronize(&commit.snapshot, page, &commit).await?;
     let canvas = desktop.canvas_state();
     canvas_channel.channel.publish(canvas);
     Ok(())
+}
+
+enum Import {
+    Pages(Vec<import::ImportedPage>),
+    Chapters(Vec<import::ImportedChapter>),
 }
 
 #[tauri::command]

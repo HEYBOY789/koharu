@@ -44,6 +44,7 @@ macro_rules! entity_id {
 
 entity_id!(EntityId);
 entity_id!(RelationId);
+entity_id!(ChapterId);
 
 #[derive(
     Copy, Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize, Type,

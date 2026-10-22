@@ -1,5 +1,6 @@
 pub(crate) mod agent;
 pub(crate) mod canvas;
+pub(crate) mod chapter;
 pub(crate) mod editing;
 pub(crate) mod fonts;
 pub(crate) mod import;
@@ -8,6 +9,7 @@ pub(crate) mod output;
 pub(crate) mod preferences;
 pub(crate) mod processing;
 pub(crate) mod project;
+pub(crate) mod summarizer;
 
 use parking_lot::Mutex;
 use serde::Serialize;
@@ -74,6 +76,26 @@ pub fn bindings() -> tauri_specta::Builder<tauri_runtime_cef::CefRuntime> {
             lifecycle::close_project,
             lifecycle::import,
             lifecycle::select_page,
+            chapter::get_chapters,
+            chapter::get_chapter,
+            chapter::create_chapter,
+            chapter::rename_chapter,
+            chapter::move_chapter,
+            chapter::assign_page,
+            chapter::delete_chapter,
+            chapter::set_chapter_summarize,
+            chapter::set_chapter_summary,
+            chapter::set_chapter_setting,
+            chapter::set_wiki,
+            chapter::add_wiki_file,
+            chapter::delete_wiki_file,
+            chapter::import_wiki,
+            chapter::summarize_chapter,
+            chapter::translate_chapter,
+            chapter::run_chapters,
+            summarizer::get_summarizer_config,
+            summarizer::save_summarizer_config,
+            summarizer::probe_summarizer,
             editing::rename_page,
             editing::delete_pages,
             editing::move_page,

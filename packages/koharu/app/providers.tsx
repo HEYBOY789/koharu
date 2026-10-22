@@ -10,7 +10,7 @@ import { Updater } from '@/components/app/Updater'
 import ClientOnly from '@/components/ClientOnly'
 import { refreshTranslationModels } from '@/lib/backend'
 import i18n from '@/lib/i18n'
-import { pageKey, pagesKey, projectKey, queryClient, refresh } from '@/lib/queries'
+import { chaptersKey, pageKey, pagesKey, projectKey, queryClient, refresh } from '@/lib/queries'
 import {
   receiveCanvas,
   receiveDownload,
@@ -54,7 +54,10 @@ export function Providers({ children }: { children: ReactNode }) {
             completed.set(job.id, job.completed)
             receiveJob(job)
             if (job.completed > previous || job.state !== 'running') {
-              void refresh(projectKey, pagesKey, pageKey).catch(() => undefined)
+              void refresh(projectKey, pagesKey, pageKey, chaptersKey).catch(() => undefined)
+            }
+            if (job.state !== 'running') {
+              void queryClient.invalidateQueries({ queryKey: ['chapter'] }).catch(() => undefined)
             }
           }),
           channel<Download>(receiveDownload),

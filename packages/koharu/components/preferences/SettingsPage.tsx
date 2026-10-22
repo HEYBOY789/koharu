@@ -9,6 +9,7 @@ import {
   Monitor,
   Moon,
   Palette,
+  Sparkles,
   Sun,
   Type,
 } from 'lucide-react'
@@ -23,6 +24,7 @@ import {
   PreferenceSection,
 } from '@/components/preferences/PreferenceFields'
 import { ProviderPreferences } from '@/components/preferences/ProviderPreferences'
+import { SummarizerPreferences } from '@/components/preferences/SummarizerPreferences'
 import { TranslationPreferences } from '@/components/preferences/TranslationPreferences'
 import { TypesettingPreferences } from '@/components/preferences/TypesettingPreferences'
 import { refreshPreferences, refreshTranslationModels, savePreferences } from '@/lib/backend'
@@ -50,6 +52,7 @@ const tabs = [
   ['pipeline', Cpu],
   ['providers', KeyRound],
   ['translation', Languages],
+  ['summarizer', Sparkles],
   ['typesetting', Type],
   ['shortcuts', Keyboard],
 ] as const
@@ -224,6 +227,7 @@ export function SettingsPage() {
               ) : (
                 <LoadingPreferences />
               ))}
+            {tab === 'summarizer' && <SummarizerPreferences />}
             {tab === 'typesetting' &&
               (typesetting ? (
                 <TypesettingPreferences value={typesetting} onChange={setTypesetting} />

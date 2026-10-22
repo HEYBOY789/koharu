@@ -16,7 +16,9 @@
     "processing": "Procesando",
     "processingFailed": "Error de procesamiento.",
     "stop": "Detener",
-    "title": "Actividad"
+    "title": "Actividad",
+    "summarizingChapter": "Summarizing “{{chapter}}”",
+    "translatingChapter": "Translating “{{chapter}}”"
   },
   "agent": {
     "account": "Cuenta de ChatGPT",
@@ -70,7 +72,9 @@
     "cancel": "Cancelar",
     "clearSearch": "Borrar búsqueda",
     "loading": "Cargando…",
-    "reset": "Restablecer"
+    "reset": "Restablecer",
+    "save": "Save",
+    "saved": "Saved"
   },
   "errors": {
     "fatalTitle": "Koharu no pudo continuar",
@@ -212,7 +216,8 @@
     "tr-TR": "Türkçe",
     "wuu": "吴语",
     "zh-CN": "简体中文",
-    "zh-TW": "繁體中文"
+    "zh-TW": "繁體中文",
+    "vi-VN": "Tiếng Việt"
   },
   "layers": {
     "delete": "Eliminar {{name}}",
@@ -300,7 +305,8 @@
     "rename": "Cambiar nombre",
     "renameDescription": "Elige un nombre nuevo para esta página.",
     "renameTitle": "Cambiar nombre de página",
-    "selected": "{{count}} seleccionadas"
+    "selected": "{{count}} seleccionadas",
+    "folderChapterHint": "Importing a folder uses each immediate subfolder as one chapter."
   },
   "outputPicker": {
     "instructions": "Instrucciones de traducción",
@@ -431,7 +437,8 @@
       "providers": "Proveedores",
       "shortcuts": "Atajos",
       "translation": "Traducción",
-      "typesetting": "Composición"
+      "typesetting": "Composición",
+      "summarizer": "Summarizer"
     },
     "title": "Ajustes",
     "translation": {
@@ -463,6 +470,33 @@
       "loadingFonts": "Cargando fuentes…",
       "removeFamily": "Eliminar {{family}}",
       "title": "Composición tipográfica"
+    },
+    "summarizer": {
+      "title": "Chapter summarizer",
+      "description": "Run a local agent CLI to summarize each chapter, update the wiki, and write a translation prompt before the chapter is translated.",
+      "backendSection": "Agent",
+      "backend": "Agent CLI",
+      "backendDescription": "The agent uses the providers and credentials configured in its own CLI.",
+      "binary": "Binary path",
+      "binaryDescription": "Leave empty to find the command on PATH.",
+      "model": "Model",
+      "modelDescription": "Passed to the agent CLI. Leave empty for its default model.",
+      "modelPlaceholder": "Provider default",
+      "effort": "Reasoning effort",
+      "effortDescription": "Passed to the agent CLI when it supports the level.",
+      "effortDefault": "Default",
+      "skill": "Skill override",
+      "skillDescription": "A folder or SKILL.md. Leave empty to use the bundled manga-summarizer skill.",
+      "skillPlaceholder": "Bundled skill",
+      "summarizeDefault": "Summarize new chapters",
+      "summarizeDefaultDescription": "Can be turned off per chapter.",
+      "enabled": "Enabled",
+      "disabled": "Disabled",
+      "probeSection": "Check",
+      "probe": "Check agent",
+      "modelDefault": "Predeterminado del agente",
+      "modelCustom": "Identificador personalizado…",
+      "effortInModel": "Ya lo define el identificador del modelo: {{effort}}."
     }
   },
   "start": {
@@ -534,5 +568,55 @@
     "maximize": "Maximizar",
     "minimize": "Minimizar",
     "restore": "Restaurar"
+  },
+  "chapter": {
+    "title": "Chapter",
+    "new": "New chapter",
+    "name": "Chapter name",
+    "rename": "Rename chapter",
+    "renameTitle": "Rename chapter",
+    "deleteTitle": "Delete chapter?",
+    "deleteDescription": "“{{title}}” and its {{count}} pages will be deleted.",
+    "actionsFor": "Actions for {{title}}",
+    "expand": "Expand chapter",
+    "collapse": "Collapse chapter",
+    "run": "Run this chapter",
+    "pageCount": "{{count}} pages",
+    "summarizeToggle": "Summarize before translating",
+    "summarize": "Summarize",
+    "translate": "Translate",
+    "summarizeAndTranslate": "Summarize & translate",
+    "runFromHere": "Run from here ({{count}})",
+    "summarizing": "Summarizing chapter",
+    "translating": "Translating chapter",
+    "start": "Start",
+    "runFromHereTitle": "Run the remaining chapters?",
+    "runFromHereDescription": "Chapters run one at a time. Chapters with summarizing enabled get a summary first.",
+    "edit": "Edit",
+    "tab_summary": "Summary",
+    "tab_wiki": "Wiki",
+    "tab_prompt": "Prompt",
+    "wiki_characters": "Characters",
+    "wiki_world": "World",
+    "wiki_glossary": "Glossary",
+    "wiki_timeline": "Timeline",
+    "empty_summary": "No summary yet. Use Summarize to create one.",
+    "empty_wiki": "The wiki is empty. Summaries append to it as chapters are processed.",
+    "empty_prompt": "No chapter-specific translation prompt yet.",
+    "moveUp": "Move up",
+    "moveDown": "Move down",
+    "importFiles": "Importar archivos aquí",
+    "importFolder": "Importar carpeta aquí",
+    "emptyHint": "Capítulo vacío",
+    "wikiAdd": "Añadir archivo wiki",
+    "wikiRemove": "Eliminar este archivo wiki",
+    "wikiAddTitle": "Nuevo archivo wiki",
+    "wikiAddDescription": "Minúsculas, dígitos y guiones bajos. El resumidor lo rellenará en la próxima ejecución.",
+    "wikiAddPlaceholder": "facciones",
+    "wikiAddAction": "Añadir",
+    "wikiImport": "Importar una carpeta wiki",
+    "wiki_style": "Estilo",
+    "otherRunning": "{{title}} se está ejecutando. Las acciones de capítulo se reanudan al terminar.",
+    "summarizeLocked": "El resumidor está escribiendo este capítulo. La edición se reanuda al terminar."
   }
 }

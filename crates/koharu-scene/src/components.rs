@@ -6,6 +6,7 @@
 
 mod analysis;
 mod assets;
+mod chapters;
 mod groups;
 mod layers;
 mod provenance;
@@ -18,6 +19,7 @@ pub use analysis::{
 };
 pub(crate) use assets::Assets;
 pub use assets::{Asset, AssetInput, AssetMetadata, AssetRole};
+pub use chapters::{Chapter, Chapters, DEFAULT_WIKI_SLUGS, Wiki, WikiFile};
 pub use groups::{Group, TextGroup};
 pub use layers::{
     FontStyle, RasterLayer, RasterLayerKind, TextAlignment, TextLayout, TextLayoutKind, Typography,

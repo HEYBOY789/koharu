@@ -54,7 +54,15 @@ impl StageProcessor for Processor {
             targets.iter().map(|(_, source)| source.clone()),
             self.config.target_language,
         );
-        if let Some(instructions) = self.config.instructions.as_deref() {
+        let chapter = input.scene.chapter_for(input.page)?;
+        let chapter_setting = chapter
+            .as_ref()
+            .and_then(|chapter| chapter.setting.as_deref())
+            .map(str::trim)
+            .filter(|setting| !setting.is_empty());
+        let instructions =
+            merged_instructions(self.config.instructions.as_deref(), chapter_setting);
+        if let Some(instructions) = instructions.as_deref() {
             request = request.with_instructions(instructions);
         }
         if Translator::supports_vision(&self.config.model, &self.config.generation)
@@ -95,5 +103,37 @@ impl StageProcessor for Processor {
             )?;
         }
         finish(edit)
+    }
+}
+
+fn merged_instructions(global: Option<&str>, chapter: Option<&str>) -> Option<String> {
+    match (global, chapter) {
+        (Some(global), Some(chapter)) => {
+            Some(format!("{global}\n\n## Chapter setting\n\n{chapter}"))
+        }
+        (Some(instructions), None) | (None, Some(instructions)) => Some(instructions.to_owned()),
+        (None, None) => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::merged_instructions;
+
+    #[test]
+    fn chapter_setting_is_appended_to_global_instructions() {
+        assert_eq!(
+            merged_instructions(Some("global"), Some("chapter")).as_deref(),
+            Some("global\n\n## Chapter setting\n\nchapter")
+        );
+        assert_eq!(
+            merged_instructions(None, Some("chapter")).as_deref(),
+            Some("chapter")
+        );
+        assert_eq!(
+            merged_instructions(Some("global"), None).as_deref(),
+            Some("global")
+        );
+        assert_eq!(merged_instructions(None, None), None);
     }
 }

@@ -3,12 +3,16 @@
 import { useQuery } from '@tanstack/react-query'
 import { observeElementRect, useVirtualizer } from '@tanstack/react-virtual'
 import {
+  BookOpen,
+  ChevronRight,
   FilePlus2,
   FolderOpen,
   LoaderCircle,
   MoreHorizontal,
+  Plus,
   Search,
   Settings,
+  Sparkles,
   Trash2,
 } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
@@ -17,12 +21,14 @@ import { useTranslation } from 'react-i18next'
 import { ResourceMonitor } from '@/components/editor/ResourceMonitor'
 import { call } from '@/lib/backend'
 import {
+  chaptersKey,
   pageKey,
   pagesKey,
   preparedPageKey,
   projectKey,
   queryClient,
   refresh,
+  useChapters,
   useImportPages,
   usePage,
   usePages,
@@ -32,6 +38,7 @@ import { prefetchCanvasPages, showCanvasPage } from '@koharu/bridge/canvas'
 import {
   commands,
   type CanvasPagePreparation,
+  type ChapterInfo,
   type Page,
   type PageImportSource,
   type PageSummary,
@@ -59,6 +66,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@koharu/ui/components/t
 import { cn } from '@koharu/ui/lib/utils'
 
 const emptyPages: PageSummary[] = []
+const emptyChapters: ChapterInfo[] = []
 
 interface IntentPrefetchState {
   project: string
@@ -66,36 +74,89 @@ interface IntentPrefetchState {
   pages: Set<string>
 }
 
+type Row =
+  | { kind: 'chapter'; chapter: ChapterInfo }
+  | { kind: 'empty'; chapter: ChapterInfo }
+  | { kind: 'page'; page: PageSummary; index: number }
+
 export function PageRail() {
   const { t } = useTranslation()
   const pages = usePages().data ?? emptyPages
+  const chapters = useChapters().data ?? emptyChapters
   const active = usePage().data?.id ?? null
   const selected = useKoharuStore((state) => state.selectedPages)
   const selectPages = useKoharuStore((state) => state.selectPages)
   const selectLayers = useKoharuStore((state) => state.selectLayers)
   const setSettingsOpen = useKoharuStore((state) => state.setSettingsOpen)
+  const setInspectorPanel = useKoharuStore((state) => state.setInspectorPanel)
+  const busy = useKoharuStore((state) =>
+    Object.values(state.jobs).some((job) => job.state === 'running'),
+  )
   const { importPages, importing } = useImportPages()
   const anchor = useRef<number | null>(null)
   const selectionRequest = useRef(0)
   const intentPrefetch = useRef<IntentPrefetchState | null>(null)
   const [dragged, setDragged] = useState<string | null>(null)
   const [query, setQuery] = useState('')
+  const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
   const [renaming, setRenaming] = useState<PageSummary | null>(null)
   const [renameValue, setRenameValue] = useState('')
+  const [chapterDialog, setChapterDialog] = useState<
+    | { mode: 'create' }
+    | { mode: 'rename'; chapter: ChapterInfo }
+    | { mode: 'delete'; chapter: ChapterInfo }
+    | null
+  >(null)
+  const [chapterTitle, setChapterTitle] = useState('')
   const normalized = query.trim().toLocaleLowerCase()
-  const visiblePages = useMemo(
-    () =>
-      pages
+
+  const activeChapter = chapters.find((chapter) => chapter.pages.includes(active ?? ''))?.id ?? null
+  useEffect(() => {
+    if (!activeChapter) return
+    setCollapsed((current) => {
+      if (!current.has(activeChapter)) return current
+      const next = new Set(current)
+      next.delete(activeChapter)
+      return next
+    })
+  }, [activeChapter])
+
+  const rows = useMemo(() => {
+    const result: Row[] = []
+    const assigned = new Set<string>()
+    for (const chapter of chapters) {
+      const matching = pages
         .map((page, index) => ({ page, index }))
-        .filter(({ page }) => !normalized || page.label.toLocaleLowerCase().includes(normalized)),
-    [normalized, pages],
-  )
+        .filter(({ page }) => chapter.pages.includes(page.id))
+        .filter(({ page }) => !normalized || page.label.toLocaleLowerCase().includes(normalized))
+      for (const { page } of matching) assigned.add(page.id)
+      if (matching.length === 0 && (normalized || chapter.pages.length > 0)) continue
+      result.push({ kind: 'chapter', chapter })
+      if (normalized || !collapsed.has(chapter.id)) {
+        for (const item of matching) result.push({ kind: 'page', ...item })
+        if (matching.length === 0) result.push({ kind: 'empty', chapter })
+      }
+    }
+    const loose = pages
+      .map((page, index) => ({ page, index }))
+      .filter(({ page }) => !assigned.has(page.id))
+      .filter(({ page }) => !normalized || page.label.toLocaleLowerCase().includes(normalized))
+    for (const item of loose) result.push({ kind: 'page', ...item })
+    return result
+  }, [chapters, collapsed, normalized, pages])
+
   const pageList = useRef<HTMLDivElement>(null)
   const pageVirtualizer = useVirtualizer({
-    count: visiblePages.length,
+    count: rows.length,
     getScrollElement: () => pageList.current,
-    getItemKey: (index) => visiblePages[index]?.page.id ?? index,
-    estimateSize: () => 72,
+    getItemKey: (index) => {
+      const row = rows[index]
+      if (!row) return index
+      if (row.kind === 'page') return row.page.id
+      return `${row.kind}:${row.chapter.id}`
+    },
+    estimateSize: (index) => (rows[index]?.kind === 'page' ? 72 : 32),
+    measureElement: (element) => element.getBoundingClientRect().height,
     gap: 2,
     overscan: 6,
     initialRect: { width: 240, height: 600 },
@@ -176,9 +237,9 @@ export function PageRail() {
     if (prepared?.revision === project.revision || state.pages.has(page)) return
     state.pages.add(page)
     void prefetchCanvasPages([page])
-      .then((pages) => {
+      .then((preparedPages) => {
         const current = queryClient.getQueryData<ProjectInfo | null>(projectKey)
-        const preparedPage = pages.find(
+        const preparedPage = preparedPages.find(
           (candidate) => candidate.page.id === page && candidate.revision === project.revision,
         )
         if (
@@ -201,7 +262,7 @@ export function PageRail() {
       .then(() => {
         selectPages(selected.filter((selectedPage) => selectedPage !== page))
         if (active === page) selectLayers([])
-        return refresh(projectKey, pagesKey, pageKey)
+        return refresh(projectKey, pagesKey, pageKey, chaptersKey)
       })
       .catch(() => undefined)
 
@@ -228,6 +289,45 @@ export function PageRail() {
       .finally(closeRename)
   }
 
+  const openChapter = (chapter: ChapterInfo) => {
+    const first = pages.findIndex((page) => page.id === chapter.pages[0])
+    if (first >= 0) select(first, false, false)
+    setInspectorPanel('chapter')
+  }
+
+  const movePage = (index: number) => {
+    if (!dragged) return
+    const current = pages.findIndex((page) => page.id === dragged)
+    if (current !== index) {
+      void call(commands.movePage, dragged, index)
+        .then(() => refresh(projectKey, pagesKey, chaptersKey, pageKey))
+        .catch(() => undefined)
+    }
+    setDragged(null)
+  }
+
+  const submitChapter = () => {
+    if (!chapterDialog) return
+    let request: Promise<unknown> | null = null
+    if (chapterDialog.mode === 'delete') {
+      request = call(commands.deleteChapter, chapterDialog.chapter.id)
+    } else {
+      const title = chapterTitle.trim()
+      if (!title) return
+      request =
+        chapterDialog.mode === 'create'
+          ? call(commands.createChapter, title)
+          : call(commands.renameChapter, chapterDialog.chapter.id, title)
+    }
+    void request
+      .then(() => {
+        setChapterDialog(null)
+        setChapterTitle('')
+        return refresh(projectKey, pagesKey, pageKey, chaptersKey)
+      })
+      .catch(() => undefined)
+  }
+
   return (
     <>
       <aside className='flex h-full min-h-0 flex-col bg-[var(--surface-sidebar)]'>
@@ -238,8 +338,6 @@ export function PageRail() {
               {pages.length}
             </span>
           </div>
-          {/* One selected page behaves exactly like acting on the active
-              page, so saying so would be noise. */}
           {selected.length > 1 && (
             <span
               role='status'
@@ -249,6 +347,19 @@ export function PageRail() {
               {t('navigator.selected', { count: selected.length })}
             </span>
           )}
+          <Button
+            type='button'
+            variant='ghost'
+            size='icon-xs'
+            className='ml-auto size-6'
+            aria-label={t('chapter.new')}
+            onClick={() => {
+              setChapterTitle('')
+              setChapterDialog({ mode: 'create' })
+            }}
+          >
+            <Plus className='size-3.5' />
+          </Button>
         </header>
 
         {pages.length > 0 && (
@@ -272,11 +383,17 @@ export function PageRail() {
             <p className='mt-1 text-[10px] leading-4 text-muted-foreground'>
               {t('navigator.emptyDescription')}
             </p>
+            <p className='mt-2 text-[9px] leading-4 text-muted-foreground'>
+              {t('navigator.folderChapterHint')}
+            </p>
             <div className='mt-3'>
-              <PageImportMenu importing={importing} onImport={importPages} />
+              <PageImportMenu
+                importing={importing}
+                onImport={(source) => importPages(source, null)}
+              />
             </div>
           </div>
-        ) : visiblePages.length === 0 ? (
+        ) : rows.length === 0 ? (
           <div className='grid flex-1 place-items-center px-4 text-center text-[10px] text-muted-foreground'>
             {t('navigator.noResults')}
           </div>
@@ -288,36 +405,83 @@ export function PageRail() {
           >
             <div className='relative w-full' style={{ height: pageVirtualizer.getTotalSize() }}>
               {pageVirtualizer.getVirtualItems().map((virtualRow) => {
-                const item = visiblePages[virtualRow.index]
-                if (!item) return null
-                const { page, index } = item
+                const row = rows[virtualRow.index]
+                if (!row) return null
                 return (
                   <div
                     key={virtualRow.key}
                     data-index={virtualRow.index}
+                    ref={pageVirtualizer.measureElement}
                     className='absolute top-0 left-0 w-full'
                     style={{ transform: `translateY(${virtualRow.start}px)` }}
                   >
-                    <PageItem
-                      page={page}
-                      active={active === page.id}
-                      selected={selected.includes(page.id)}
-                      dragged={dragged === page.id}
-                      onIntent={active === page.id ? undefined : () => prefetchOnIntent(page.id)}
-                      onSelect={(additive, range) => select(index, additive, range)}
-                      onDragStart={() => setDragged(page.id)}
-                      onDragEnd={() => setDragged(null)}
-                      onRename={() => openRename(page)}
-                      onDelete={() => deletePage(page.id)}
-                      onDrop={() => {
-                        if (dragged && dragged !== page.id) {
-                          void call(commands.movePage, dragged, index)
-                            .then(() => refresh(projectKey, pagesKey))
-                            .catch(() => undefined)
+                    {row.kind === 'chapter' ? (
+                      <ChapterHeader
+                        chapter={row.chapter}
+                        index={chapters.findIndex((chapter) => chapter.id === row.chapter.id)}
+                        last={chapters.at(-1)?.id === row.chapter.id}
+                        active={row.chapter.id === activeChapter}
+                        collapsed={collapsed.has(row.chapter.id) && !normalized}
+                        onOpen={() => openChapter(row.chapter)}
+                        onToggle={() =>
+                          setCollapsed((current) => {
+                            const next = new Set(current)
+                            if (next.has(row.chapter.id)) next.delete(row.chapter.id)
+                            else next.add(row.chapter.id)
+                            return next
+                          })
                         }
-                        setDragged(null)
-                      }}
-                    />
+                        onRename={() => {
+                          setChapterTitle(row.chapter.title)
+                          setChapterDialog({ mode: 'rename', chapter: row.chapter })
+                        }}
+                        onMove={(offset) => {
+                          const index = chapters.findIndex(
+                            (chapter) => chapter.id === row.chapter.id,
+                          )
+                          if (index < 0) return
+                          void call(commands.moveChapter, row.chapter.id, index + offset)
+                            .then(() => refresh(projectKey, chaptersKey))
+                            .catch(() => undefined)
+                        }}
+                        onDelete={() => setChapterDialog({ mode: 'delete', chapter: row.chapter })}
+                        importing={importing}
+                        busy={busy}
+                        onImport={(source) => importPages(source, row.chapter.id)}
+                        onDrop={() => {
+                          const first = pages.findIndex((page) => page.id === row.chapter.pages[0])
+                          if (first >= 0) movePage(first)
+                          else if (dragged) {
+                            void call(commands.assignPage, dragged, row.chapter.id)
+                              .then(() => refresh(projectKey, pagesKey, chaptersKey, pageKey))
+                              .catch(() => undefined)
+                              .finally(() => setDragged(null))
+                          }
+                        }}
+                      />
+                    ) : row.kind === 'empty' ? (
+                      <EmptyChapterRow
+                        importing={importing}
+                        onImport={(source) => importPages(source, row.chapter.id)}
+                      />
+                    ) : (
+                      <PageItem
+                        page={row.page}
+                        active={active === row.page.id}
+                        selected={selected.includes(row.page.id)}
+                        dragged={dragged === row.page.id}
+                        nested={Boolean(row.page.chapter)}
+                        onIntent={
+                          active === row.page.id ? undefined : () => prefetchOnIntent(row.page.id)
+                        }
+                        onSelect={(additive, range) => select(row.index, additive, range)}
+                        onDragStart={() => setDragged(row.page.id)}
+                        onDragEnd={() => setDragged(null)}
+                        onRename={() => openRename(row.page)}
+                        onDelete={() => deletePage(row.page.id)}
+                        onDrop={() => movePage(row.index)}
+                      />
+                    )}
                   </div>
                 )
               })}
@@ -382,16 +546,207 @@ export function PageRail() {
           </form>
         </DialogContent>
       </Dialog>
+
+      <Dialog
+        open={chapterDialog !== null}
+        onOpenChange={(open) => {
+          if (!open) setChapterDialog(null)
+        }}
+      >
+        <DialogContent className='sm:max-w-md'>
+          <form
+            onSubmit={(event) => {
+              event.preventDefault()
+              submitChapter()
+            }}
+          >
+            <DialogHeader>
+              <DialogTitle>
+                {chapterDialog?.mode === 'create'
+                  ? t('chapter.new')
+                  : chapterDialog?.mode === 'rename'
+                    ? t('chapter.renameTitle')
+                    : t('chapter.deleteTitle')}
+              </DialogTitle>
+              <DialogDescription>
+                {chapterDialog?.mode === 'delete'
+                  ? t('chapter.deleteDescription', {
+                      title: chapterDialog.chapter.title,
+                      count: chapterDialog.chapter.pages.length,
+                    })
+                  : t('chapter.titleDescription')}
+              </DialogDescription>
+            </DialogHeader>
+            {chapterDialog?.mode !== 'delete' ? (
+              <Input
+                autoFocus
+                value={chapterTitle}
+                aria-label={t('chapter.name')}
+                className='mt-4'
+                onChange={(event) => setChapterTitle(event.currentTarget.value)}
+              />
+            ) : null}
+            <DialogFooter className='mt-4'>
+              <Button type='button' variant='ghost' onClick={() => setChapterDialog(null)}>
+                {t('common.cancel')}
+              </Button>
+              <Button
+                type='submit'
+                variant={chapterDialog?.mode === 'delete' ? 'destructive' : 'default'}
+                disabled={chapterDialog?.mode !== 'delete' && !chapterTitle.trim()}
+              >
+                {chapterDialog?.mode === 'delete' ? t('navigator.delete') : t('common.save')}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
     </>
+  )
+}
+
+function ChapterHeader({
+  chapter,
+  index,
+  last,
+  active,
+  collapsed,
+  onOpen,
+  onToggle,
+  onRename,
+  onMove,
+  onDelete,
+  onImport,
+  importing,
+  busy,
+  onDrop,
+}: {
+  chapter: ChapterInfo
+  index: number
+  last: boolean
+  active: boolean
+  collapsed: boolean
+  onOpen: () => void
+  onToggle: () => void
+  onRename: () => void
+  onMove: (offset: number) => void
+  onDelete: () => void
+  onImport: (source: PageImportSource) => void
+  importing: boolean
+  busy: boolean
+  onDrop: () => void
+}) {
+  const { t } = useTranslation()
+  return (
+    <div
+      className={cn(
+        'group flex h-7 items-center gap-1 rounded-md pr-1 pl-0.5 select-none',
+        active ? 'bg-primary/[0.07]' : 'hover:bg-foreground/[0.045]',
+      )}
+      onDragOver={(event) => event.preventDefault()}
+      onDrop={(event) => {
+        event.preventDefault()
+        onDrop()
+      }}
+    >
+      <Button
+        variant='ghost'
+        size='icon-xs'
+        className='size-5 shrink-0 text-muted-foreground'
+        aria-label={collapsed ? t('chapter.expand') : t('chapter.collapse')}
+        onClick={onToggle}
+      >
+        <ChevronRight className={cn('size-3 transition-transform', !collapsed && 'rotate-90')} />
+      </Button>
+      <button
+        type='button'
+        className='flex min-w-0 flex-1 items-center gap-1.5 text-left'
+        onClick={onOpen}
+      >
+        <BookOpen className='size-3 shrink-0 text-muted-foreground' />
+        <span className='truncate text-[10px] font-semibold'>{chapter.title}</span>
+      </button>
+      <span className='text-[9px] text-muted-foreground tabular-nums'>{chapter.pages.length}</span>
+      <span
+        className={cn(
+          'size-1.5 rounded-full',
+          chapter.has_setting ? 'bg-primary' : chapter.has_summary ? 'bg-amber-500' : 'bg-border',
+        )}
+        aria-hidden='true'
+      />
+      <DropdownMenu>
+        <DropdownMenuTrigger
+          render={
+            <Button
+              variant='ghost'
+              size='icon-xs'
+              aria-label={t('chapter.actionsFor', { title: chapter.title })}
+              className='size-5 shrink-0 opacity-0 group-hover:opacity-100 aria-expanded:opacity-100'
+            />
+          }
+        >
+          <MoreHorizontal />
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align='end'>
+          <DropdownMenuItem
+            disabled={busy}
+            onClick={() =>
+              void call(commands.runChapters, [chapter.id], null, true).catch(() => undefined)
+            }
+          >
+            <Sparkles /> {t('chapter.run')}
+          </DropdownMenuItem>
+          <DropdownMenuItem onClick={onRename}>{t('chapter.rename')}</DropdownMenuItem>
+          <DropdownMenuSeparator />
+          <DropdownMenuItem disabled={importing} onClick={() => onImport('files')}>
+            <FilePlus2 /> {t('chapter.importFiles')}
+          </DropdownMenuItem>
+          <DropdownMenuItem disabled={importing} onClick={() => onImport('folder')}>
+            <FolderOpen /> {t('chapter.importFolder')}
+          </DropdownMenuItem>
+          <DropdownMenuSeparator />
+          <DropdownMenuItem disabled={index === 0} onClick={() => onMove(-1)}>
+            {t('chapter.moveUp')}
+          </DropdownMenuItem>
+          <DropdownMenuItem disabled={last} onClick={() => onMove(1)}>
+            {t('chapter.moveDown')}
+          </DropdownMenuItem>
+          <DropdownMenuSeparator />
+          <DropdownMenuItem variant='destructive' onClick={onDelete}>
+            <Trash2 /> {t('navigator.delete')}
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+    </div>
+  )
+}
+
+function EmptyChapterRow({
+  importing,
+  onImport,
+}: {
+  importing: boolean
+  onImport: (source: PageImportSource) => void
+}) {
+  const { t } = useTranslation()
+  return (
+    <div className='ml-4 flex h-7 items-center gap-1.5 rounded-md border border-dashed border-border/70 px-1.5'>
+      <span className='truncate text-[9px] text-muted-foreground'>{t('chapter.emptyHint')}</span>
+      <div className='ml-auto shrink-0'>
+        <PageImportMenu importing={importing} onImport={onImport} compact />
+      </div>
+    </div>
   )
 }
 
 function PageImportMenu({
   importing,
   onImport,
+  compact = false,
 }: {
   importing: boolean
   onImport: (source: PageImportSource) => void
+  compact?: boolean
 }) {
   const { t } = useTranslation()
   const icon = importing ? (
@@ -405,16 +760,17 @@ function PageImportMenu({
       <DropdownMenuTrigger
         render={
           <Button
-            size='sm'
+            size={compact ? 'icon-xs' : 'sm'}
             variant='outline'
             disabled={importing}
             aria-busy={importing}
-            className='rounded-lg text-[10px]'
+            aria-label={importing ? t('navigator.importingAction') : t('navigator.importAction')}
+            className={compact ? 'size-5 rounded-md' : 'rounded-lg text-[10px]'}
           />
         }
       >
         {icon}
-        {importing ? t('navigator.importingAction') : t('navigator.importAction')}
+        {compact ? null : importing ? t('navigator.importingAction') : t('navigator.importAction')}
       </DropdownMenuTrigger>
       <DropdownMenuContent
         align='start'
@@ -446,6 +802,7 @@ function PageItem({
   active,
   selected,
   dragged,
+  nested,
   onIntent,
   onSelect,
   onDragStart,
@@ -458,6 +815,7 @@ function PageItem({
   active: boolean
   selected: boolean
   dragged: boolean
+  nested: boolean
   onIntent?: () => void
   onSelect: (additive: boolean, range: boolean) => void
   onDragStart: () => void
@@ -475,6 +833,7 @@ function PageItem({
       data-selected={selected}
       className={cn(
         'group grid cursor-default grid-cols-[48px_minmax(0,1fr)] gap-2.5 rounded-xl p-1.5 transition-colors select-none',
+        nested && 'ml-3',
         active
           ? 'bg-primary/[0.09] hover:bg-primary/[0.09]'
           : selected

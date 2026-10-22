@@ -45,9 +45,20 @@ pub struct Job {
     #[specta(type = f64)]
     pub total: usize,
     pub page: Option<koharu_scene::EntityId>,
+    pub chapter: Option<koharu_scene::ChapterId>,
+    pub chapter_title: Option<String>,
+    pub phase: Option<ChapterPhase>,
     pub stage: Option<koharu_pipeline::Stage>,
     pub model: Option<String>,
+    pub detail: Option<String>,
     pub error: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Type)]
+#[serde(rename_all = "snake_case")]
+pub enum ChapterPhase {
+    Summarize,
+    Translate,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Type)]
@@ -69,6 +80,89 @@ pub(crate) struct Processing {
 #[derive(Default)]
 pub(crate) struct JobChannel {
     pub(crate) channel: Mutex<Option<Channel<Job>>>,
+}
+
+pub(crate) struct PipelineCommitter {
+    handle: AppHandle<CefRuntime>,
+}
+
+impl PipelineCommitter {
+    pub(crate) fn new(handle: AppHandle<CefRuntime>) -> Self {
+        Self { handle }
+    }
+}
+
+#[async_trait::async_trait]
+impl Committer for PipelineCommitter {
+    async fn commit(&mut self, output: StageOutput) -> Result<Snapshot> {
+        let (commit, page) = {
+            let projects = self.handle.state::<CurrentProject>();
+            let mut projects = projects.project.lock().await;
+            let project = projects.as_mut().context("no project is open")?;
+            let Some(commit) = project.commit_rebased(output.patch).await? else {
+                return Ok(project.snapshot());
+            };
+            project.record_commit(&commit);
+            let page = project.active_page();
+            (commit, page)
+        };
+        let snapshot = commit.snapshot.clone();
+        let desktop = self.handle.state::<Desktop>();
+        desktop.synchronize(&commit.snapshot, page, &commit).await?;
+        let canvas = desktop.canvas_state();
+        self.handle.state::<CanvasChannel>().channel.publish(canvas);
+        Ok(snapshot)
+    }
+}
+
+pub(crate) fn progress_sink(
+    handle: AppHandle<CefRuntime>,
+    id: JobId,
+) -> koharu_pipeline::ProgressSink {
+    let progress = Arc::new(Mutex::new((0_usize, 0_usize)));
+    Arc::new(move |event| {
+        let update = match event {
+            Progress::Started { pages, stages } => {
+                let mut progress = progress.lock();
+                *progress = (0, pages.len().saturating_mul(stages.len()));
+                Some((0, progress.1, None, None, None))
+            }
+            Progress::Loading { page, stage, model } => {
+                let progress = progress.lock();
+                Some((progress.0, progress.1, Some(page), Some(stage), Some(model)))
+            }
+            Progress::Finished {
+                page, stage, model, ..
+            } => {
+                let mut progress = progress.lock();
+                progress.0 = progress.0.saturating_add(1).min(progress.1);
+                Some((progress.0, progress.1, Some(page), Some(stage), Some(model)))
+            }
+            Progress::Skipped { page, stage } => {
+                let mut progress = progress.lock();
+                progress.0 = progress.0.saturating_add(1).min(progress.1);
+                Some((progress.0, progress.1, Some(page), Some(stage), None))
+            }
+            Progress::Running { .. } => None,
+        };
+        if let Some((completed, total, page, stage, model)) = update {
+            let job = {
+                let processing = handle.state::<Processing>();
+                let mut jobs = processing.jobs.lock();
+                jobs.get_mut(&id).map(|job| {
+                    job.completed = completed;
+                    job.total = total;
+                    job.page = page;
+                    job.stage = stage;
+                    job.model = model;
+                    job.clone()
+                })
+            };
+            if let Some(job) = job {
+                handle.state::<JobChannel>().channel.publish(job);
+            }
+        }
+    })
 }
 
 #[tauri::command]
@@ -104,8 +198,12 @@ pub(crate) async fn process(
         completed: 0,
         total: 0,
         page: None,
+        chapter: None,
+        chapter_title: None,
+        phase: None,
         stage: None,
         model: None,
+        detail: None,
         error: None,
     };
     processing.jobs.lock().insert(id, job.clone());
@@ -115,89 +213,14 @@ pub(crate) async fn process(
     let task_handle = handle.clone();
     let inpainting_mask = processing.inpainting_mask.lock().take();
     drop(tokio::spawn(async move {
-        let progress = Arc::new(Mutex::new((0_usize, 0_usize)));
-        let progress_handle = task_handle.clone();
-        let mut request = koharu_pipeline::Request {
+        let request = koharu_pipeline::Request {
             operation,
             scope,
             stop: stop.clone(),
-            progress: None,
+            progress: Some(progress_sink(task_handle.clone(), id)),
             inpainting_mask,
         };
-        request.progress = Some(Arc::new(move |event| {
-            let update = match event {
-                Progress::Started { pages, stages } => {
-                    let mut progress = progress.lock();
-                    *progress = (0, pages.len().saturating_mul(stages.len()));
-                    Some((0, progress.1, None, None, None))
-                }
-                Progress::Loading { page, stage, model } => {
-                    let progress = progress.lock();
-                    Some((progress.0, progress.1, Some(page), Some(stage), Some(model)))
-                }
-                Progress::Finished {
-                    page, stage, model, ..
-                } => {
-                    let mut progress = progress.lock();
-                    progress.0 = progress.0.saturating_add(1).min(progress.1);
-                    Some((progress.0, progress.1, Some(page), Some(stage), Some(model)))
-                }
-                Progress::Skipped { page, stage } => {
-                    let mut progress = progress.lock();
-                    progress.0 = progress.0.saturating_add(1).min(progress.1);
-                    Some((progress.0, progress.1, Some(page), Some(stage), None))
-                }
-                Progress::Running { .. } => None,
-            };
-            if let Some((completed, total, page, stage, model)) = update {
-                let job = {
-                    let processing = progress_handle.state::<Processing>();
-                    let mut jobs = processing.jobs.lock();
-                    jobs.get_mut(&id).map(|job| {
-                        job.completed = completed;
-                        job.total = total;
-                        job.page = page;
-                        job.stage = stage;
-                        job.model = model;
-                        job.clone()
-                    })
-                };
-                if let Some(job) = job {
-                    progress_handle.state::<JobChannel>().channel.publish(job);
-                }
-            }
-        }));
-
-        struct PipelineCommitter {
-            handle: AppHandle<CefRuntime>,
-        }
-
-        #[async_trait::async_trait]
-        impl Committer for PipelineCommitter {
-            async fn commit(&mut self, output: StageOutput) -> Result<Snapshot> {
-                let (commit, page) = {
-                    let projects = self.handle.state::<CurrentProject>();
-                    let mut projects = projects.project.lock().await;
-                    let project = projects.as_mut().context("no project is open")?;
-                    let Some(commit) = project.commit_rebased(output.patch).await? else {
-                        return Ok(project.snapshot());
-                    };
-                    project.record_commit(&commit);
-                    let page = project.active_page();
-                    (commit, page)
-                };
-                let snapshot = commit.snapshot.clone();
-                let desktop = self.handle.state::<Desktop>();
-                desktop.synchronize(&commit.snapshot, page, &commit).await?;
-                let canvas = desktop.canvas_state();
-                self.handle.state::<CanvasChannel>().channel.publish(canvas);
-                Ok(snapshot)
-            }
-        }
-
-        let mut committer = PipelineCommitter {
-            handle: task_handle.clone(),
-        };
+        let mut committer = PipelineCommitter::new(task_handle.clone());
         let result = pipeline.execute(snapshot, request, &mut committer).await;
         let (stopped, error) = match result {
             Ok(report) => (report.status == RunStatus::Stopped, None),

@@ -192,6 +192,7 @@ function installProject() {
   const page = {
     id: 'page',
     label: 'Page 1',
+    chapter: null,
     size: { width: 1000, height: 1500 },
     layers: [textLayer],
     regions: [],
@@ -482,10 +483,18 @@ describe('greenfield editor', () => {
   it('keeps rapid page switches on the latest native selection', async () => {
     installProject()
     const pages = [
-      { id: 'page', label: 'Page 1', size: { width: 1000, height: 1500 }, layers: [], regions: [] },
+      {
+        id: 'page',
+        label: 'Page 1',
+        chapter: null,
+        size: { width: 1000, height: 1500 },
+        layers: [],
+        regions: [],
+      },
       {
         id: 'page-2',
         label: 'Page 2',
+        chapter: null,
         size: { width: 1000, height: 1500 },
         layers: [],
         regions: [],
@@ -493,6 +502,7 @@ describe('greenfield editor', () => {
       {
         id: 'page-3',
         label: 'Page 3',
+        chapter: null,
         size: { width: 1000, height: 1500 },
         layers: [],
         regions: [],
@@ -596,6 +606,7 @@ describe('greenfield editor', () => {
     const page = {
       id: 'page-2',
       label: 'Page 2',
+      chapter: null,
       size: { width: 1000, height: 1500 },
       layers: [],
       regions: [],
@@ -629,6 +640,7 @@ describe('greenfield editor', () => {
     const page = {
       id: 'page-2',
       label: 'Page 2',
+      chapter: null,
       size: { width: 1000, height: 1500 },
       layers: [],
       regions: [],
@@ -1803,6 +1815,10 @@ describe('greenfield editor', () => {
           completed: 1,
           total: 4,
           page: 'page',
+          chapter: null,
+          chapter_title: null,
+          phase: null,
+          detail: null,
           stage: 'ocr',
           model: 'manga-ocr',
           error: null,

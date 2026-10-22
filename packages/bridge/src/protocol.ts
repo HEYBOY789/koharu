@@ -30,6 +30,7 @@ export const commands = {
 	getPage: () => __TAURI_INVOKE<{
 	id: EntityId,
 	label: string,
+	chapter: ChapterId | null,
 	size: PageSize,
 	layers: Layer[],
 	regions: AnalysisRegion[],
@@ -39,8 +40,33 @@ export const commands = {
 	openProject: (name: string) => __TAURI_INVOKE<null>("open_project", { name }),
 	deleteProject: (name: string) => __TAURI_INVOKE<null>("delete_project", { name }),
 	closeProject: () => __TAURI_INVOKE<null>("close_project"),
-	import: (source: PageImportSource) => __TAURI_INVOKE<null>("import", { source }),
+	import: (source: PageImportSource, chapter: string | null) => __TAURI_INVOKE<null>("import", { source, chapter }),
 	selectPage: (page: EntityId) => __TAURI_INVOKE<PageSelection>("select_page", { page }).then((v) => (({...v,page:({...v.page,layers:v.page.layers.map(i=>i),regions:v.page.regions.map(i=>({...i,geometry:({...i.geometry,points:i.geometry.points.map(i=>i)})}))})}) as typeof v)),
+	getChapters: () => __TAURI_INVOKE<ChapterInfo[]>("get_chapters"),
+	getChapter: (chapter: ChapterId) => __TAURI_INVOKE<ChapterDetail>("get_chapter", { chapter }),
+	createChapter: (title: string) => __TAURI_INVOKE<null>("create_chapter", { title }),
+	renameChapter: (chapter: ChapterId, title: string) => __TAURI_INVOKE<null>("rename_chapter", { chapter, title }),
+	moveChapter: (chapter: ChapterId, index: number) => __TAURI_INVOKE<null>("move_chapter", { chapter, index }),
+	assignPage: (page: EntityId, chapter: ChapterId) => __TAURI_INVOKE<null>("assign_page", { page, chapter }),
+	deleteChapter: (chapter: ChapterId) => __TAURI_INVOKE<null>("delete_chapter", { chapter }),
+	setChapterSummarize: (chapter: ChapterId, summarize: boolean) => __TAURI_INVOKE<null>("set_chapter_summarize", { chapter, summarize }),
+	setChapterSummary: (chapter: ChapterId, summary: string | null) => __TAURI_INVOKE<null>("set_chapter_summary", { chapter, summary }),
+	setChapterSetting: (chapter: ChapterId, setting: string | null) => __TAURI_INVOKE<null>("set_chapter_setting", { chapter, setting }),
+	setWiki: (file: string, text: string) => __TAURI_INVOKE<null>("set_wiki", { file, text }),
+	addWikiFile: (file: string) => __TAURI_INVOKE<null>("add_wiki_file", { file }),
+	deleteWikiFile: (file: string) => __TAURI_INVOKE<null>("delete_wiki_file", { file }),
+	/**
+	 *  Seeds the wiki from a folder of Markdown files so an existing series wiki
+	 *  does not have to be retyped. Files match by name; an empty file is skipped.
+	 */
+	importWiki: () => __TAURI_INVOKE<string[]>("import_wiki"),
+	summarizeChapter: (chapter: ChapterId) => __TAURI_INVOKE<JobId>("summarize_chapter", { chapter }),
+	translateChapter: (chapter: ChapterId) => __TAURI_INVOKE<JobId>("translate_chapter", { chapter }),
+	/**  `summarize = None` follows each chapter's toggle, `Some` forces the choice. */
+	runChapters: (chapters: ChapterId[], summarize: boolean | null, translate: boolean) => __TAURI_INVOKE<JobId>("run_chapters", { chapters, summarize, translate }),
+	getSummarizerConfig: () => __TAURI_INVOKE<SummarizerConfig>("get_summarizer_config"),
+	saveSummarizerConfig: (config: SummarizerConfig) => __TAURI_INVOKE<SummarizerConfig>("save_summarizer_config", { config }),
+	probeSummarizer: (config: SummarizerConfig) => __TAURI_INVOKE<SummarizerProbe>("probe_summarizer", { config }),
 	renamePage: (page: EntityId, label: string) => __TAURI_INVOKE<null>("rename_page", { page, label }),
 	deletePages: (pages: EntityId[]) => __TAURI_INVOKE<null>("delete_pages", { pages }),
 	movePage: (page: EntityId, index: number) => __TAURI_INVOKE<null>("move_page", { page, index }),
@@ -125,6 +151,29 @@ export type CanvasState = {
 	size: [number, number],
 	element_frames: TransformFrame[],
 };
+
+export type ChapterDetail = {
+	id: ChapterId,
+	title: string,
+	pages: EntityId[],
+	summary: string | null,
+	setting: string | null,
+	wiki: Wiki,
+	summarize: boolean,
+};
+
+export type ChapterId = string;
+
+export type ChapterInfo = {
+	id: ChapterId,
+	title: string,
+	pages: EntityId[],
+	has_summary: boolean,
+	has_setting: boolean,
+	summarize: boolean,
+};
+
+export type ChapterPhase = "summarize" | "translate";
 
 export type ClaudeConfig = Record<string, never>;
 
@@ -270,8 +319,12 @@ export type Job = {
 	completed: number,
 	total: number,
 	page: EntityId | null,
+	chapter: ChapterId | null,
+	chapter_title: string | null,
+	phase: ChapterPhase | null,
 	stage: Stage | null,
 	model: string | null,
+	detail: string | null,
 	error: string | null,
 };
 
@@ -351,6 +404,7 @@ export type Operation = { operation: "full" } | { operation: "through"; stage: S
 export type Page = {
 	id: EntityId,
 	label: string,
+	chapter: ChapterId | null,
 	size: PageSize,
 	layers: Layer[],
 	regions: AnalysisRegion[],
@@ -371,6 +425,7 @@ export type PageSize = {
 export type PageSummary = {
 	id: EntityId,
 	label: string,
+	chapter: ChapterId | null,
 	size: PageSize,
 	source_asset: string | null,
 	layer_count: number,
@@ -474,6 +529,24 @@ export type StartupState = {
 	canvas: CanvasState,
 };
 
+export type SummarizerBackend = "agy" | "pi";
+
+export type SummarizerConfig = {
+	backend?: SummarizerBackend,
+	binary?: string | null,
+	model?: string | null,
+	effort?: string | null,
+	skill?: string | null,
+	summarize_default?: boolean,
+};
+
+export type SummarizerProbe = {
+	path: string | null,
+	version: string | null,
+	models: string[],
+	error: string | null,
+};
+
 export type TextAlignment = "Start" | "Center" | "End" | "Justify";
 
 export type TextContent = {
@@ -525,6 +598,19 @@ export type Typography = {
 export type TypographyUpdate = {
 	layer: EntityId,
 	typography: Typography,
+};
+
+/**
+ *  Wiki pages are kept whole so a summarizer can rewrite one file at a time
+ *  without inventing a second document format.
+ */
+export type Wiki = {
+	files: WikiFile[],
+};
+
+export type WikiFile = {
+	slug: string,
+	body: string,
 };
 
 export type WritingMode = "Horizontal" | "Vertical";

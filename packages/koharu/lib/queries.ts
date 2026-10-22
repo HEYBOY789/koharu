@@ -16,8 +16,11 @@ import { call } from './backend'
 export const projectKey = ['project'] as const
 export const pagesKey = ['pages'] as const
 export const pageKey = ['page'] as const
+export const chaptersKey = ['chapters'] as const
+export const chapterKey = (chapter: string) => ['chapter', chapter] as const
 export const preparedPageKey = (page: string) => ['prepared-page', page] as const
 export const fontsKey = ['fonts'] as const
+export const summarizerConfigKey = ['summarizer-config'] as const
 
 const projectQuery = queryOptions({
   queryKey: projectKey,
@@ -37,6 +40,16 @@ const pageQuery = queryOptions({
 const fontsQuery = queryOptions({
   queryKey: fontsKey,
   queryFn: () => call(commands.getFonts),
+})
+
+const chaptersQuery = queryOptions({
+  queryKey: chaptersKey,
+  queryFn: () => call(commands.getChapters),
+})
+
+const summarizerConfigQuery = queryOptions({
+  queryKey: summarizerConfigKey,
+  queryFn: () => call(commands.getSummarizerConfig),
 })
 
 export const queryClient = new QueryClient({
@@ -64,6 +77,22 @@ export function usePage(enabled = true) {
 
 export function useFonts(enabled = true) {
   return useQuery({ ...fontsQuery, enabled })
+}
+
+export function useChapters(enabled = true) {
+  return useQuery({ ...chaptersQuery, enabled })
+}
+
+export function useChapter(chapter: string | undefined, enabled = true) {
+  return useQuery({
+    queryKey: chapterKey(chapter ?? ''),
+    queryFn: () => call(commands.getChapter, chapter as string),
+    enabled: enabled && Boolean(chapter),
+  })
+}
+
+export function useSummarizerConfig(enabled = true) {
+  return useQuery({ ...summarizerConfigQuery, enabled })
 }
 
 export function useFontPreview(font: FontFamily | undefined, enabled = true) {
@@ -100,7 +129,7 @@ export function useCommand<Args extends unknown[], Result>(
 
 export function useImportPages() {
   const { run, busy } = useCommand(['import-pages'], commands.import, 'navigator.importing', () =>
-    refresh(projectKey, pagesKey, pageKey),
+    refresh(projectKey, pagesKey, pageKey, chaptersKey),
   )
   return { importPages: run, importing: busy }
 }

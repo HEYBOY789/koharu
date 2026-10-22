@@ -4,12 +4,13 @@ use anyhow::{Context as _, Result, anyhow, bail};
 use image::{DynamicImage, ImageFormat, RgbaImage};
 use koharu_desktop::Frame;
 use koharu_scene::{
-    AssetInput, AssetMetadata, AssetRole, At, Authored, Commit, EntityId, EntityOrigin,
-    Geometry as SceneGeometry, Group as SceneGroup, Origin, PageDraft, Point as ScenePoint,
-    Presents, RasterLayer as SceneRasterLayer, RasterLayerKind, Region as SceneRegion,
-    RemovePolicy, Revision, Session, Snapshot, SourceText as SceneSourceText,
-    TextGroup as SceneTextGroup, TextLayout as SceneTextLayout, TextLayoutKind,
-    Translation as SceneTranslation, Typography as SceneTypography, Visibility as SceneVisibility,
+    AssetInput, AssetMetadata, AssetRole, At, Authored, Chapter as SceneChapter, ChapterId,
+    Chapters as SceneChapters, Commit, EntityId, EntityOrigin, Geometry as SceneGeometry,
+    Group as SceneGroup, Origin, PageDraft, Point as ScenePoint, Presents,
+    RasterLayer as SceneRasterLayer, RasterLayerKind, Region as SceneRegion, RemovePolicy,
+    Revision, Session, Snapshot, SourceText as SceneSourceText, TextGroup as SceneTextGroup,
+    TextLayout as SceneTextLayout, TextLayoutKind, Translation as SceneTranslation,
+    Typography as SceneTypography, Visibility as SceneVisibility,
 };
 use serde::Serialize;
 use specta::Type;
@@ -18,6 +19,7 @@ use tokio::sync::Mutex;
 use super::{
     canvas::Point,
     editing::{GeometryUpdate, TypographyUpdate},
+    import::{ImportedChapter, ImportedPage},
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -50,6 +52,7 @@ pub struct PageSize {
 pub struct PageSummary {
     pub id: EntityId,
     pub label: String,
+    pub chapter: Option<ChapterId>,
     pub size: PageSize,
     pub source_asset: Option<String>,
     #[specta(type = f64)]
@@ -60,6 +63,7 @@ pub struct PageSummary {
 pub struct Page {
     pub id: EntityId,
     pub label: String,
+    pub chapter: Option<ChapterId>,
     pub size: PageSize,
     pub layers: Vec<Layer>,
     pub regions: Vec<AnalysisRegion>,
@@ -254,6 +258,7 @@ impl ProjectLibrary {
 pub(crate) struct Project {
     pub(crate) session: Session,
     pub(crate) name: String,
+    pub(crate) path: PathBuf,
     pub(crate) active_page: Option<EntityId>,
     pub(crate) undo: Vec<Vec<Revision>>,
     pub(crate) redo: Vec<Vec<Revision>>,
@@ -264,21 +269,54 @@ impl Project {
         let session = Session::create(&path)
             .await
             .with_context(|| format!("failed to create {}", path.display()))?;
-        Ok(Self::new(session, name))
+        let mut project = Self::new(session, name, path);
+        project.bootstrap_chapters().await?;
+        Ok(project)
     }
 
     pub(crate) async fn open(name: String, path: PathBuf) -> Result<Self> {
         let session = Session::open(&path)
             .await
             .with_context(|| format!("failed to open {}", path.display()))?;
-        Ok(Self::new(session, name))
+        let mut project = Self::new(session, name, path);
+        project.bootstrap_chapters().await?;
+        Ok(project)
     }
 
-    fn new(session: Session, name: String) -> Self {
+    async fn bootstrap_chapters(&mut self) -> Result<()> {
+        let snapshot = self.snapshot();
+        let mut chapters = snapshot.chapters()?;
+        let loose = snapshot
+            .pages()
+            .map(|page| page.id())
+            .filter(|page| chapters.chapter_for_page(*page).is_none())
+            .collect::<Vec<_>>();
+        if loose.is_empty() {
+            return Ok(());
+        }
+        let existing = chapters
+            .entries
+            .iter()
+            .position(|chapter| chapter.title == self.name);
+        match existing {
+            Some(index) => chapters.entries[index].pages.extend(loose),
+            None => {
+                let mut chapter = SceneChapter::new(&self.name);
+                chapter.pages = loose;
+                chapters.entries.push(chapter);
+            }
+        }
+        let patch = snapshot.patch(|edit| edit.set_project(&chapters))?;
+        self.session.commit(patch).await?;
+        Ok(())
+    }
+
+    fn new(session: Session, name: String, path: PathBuf) -> Self {
         let active_page = session.snapshot().pages().next().map(|page| page.id());
         Self {
             session,
             name,
+            path,
             active_page,
             undo: Vec::new(),
             redo: Vec::new(),
@@ -324,10 +362,14 @@ impl Project {
     }
 
     pub(crate) fn pages(snapshot: &Snapshot) -> Result<Vec<PageSummary>> {
+        let chapters = snapshot.chapters()?;
         snapshot
             .pages()
             .map(|page| {
                 let value = page.page()?;
+                let chapter = chapters
+                    .chapter_for_page(page.id())
+                    .map(|chapter| chapter.id);
                 let source_asset = Self::asset_id(snapshot, page.id(), "source")?;
                 let layer_count = snapshot
                     .descendants(page.id())?
@@ -340,6 +382,7 @@ impl Project {
                 Ok(PageSummary {
                     id: page.id(),
                     label: value.label,
+                    chapter,
                     size: PageSize {
                         width: value.width,
                         height: value.height,
@@ -363,10 +406,16 @@ impl Project {
     pub(crate) async fn delete_pages(&mut self, pages: Vec<EntityId>) -> Result<Commit> {
         let snapshot = self.snapshot();
         let pages = Self::unique_roots(&snapshot, pages)?;
+        let mut chapters = snapshot.chapters()?;
+        for page in &pages {
+            chapters.remove_page(*page);
+        }
+        chapters.prune_empty();
         let patch = snapshot.patch(|edit| {
             for page in pages {
                 edit.remove_entity(page, RemovePolicy::Cascade)?;
             }
+            edit.set_project(&chapters)?;
             Ok(())
         })?;
         self.commit(patch).await
@@ -376,8 +425,312 @@ impl Project {
         let snapshot = self.snapshot();
         let siblings = snapshot.pages().map(|page| page.id()).collect::<Vec<_>>();
         let at = Self::placement(&siblings, page, index);
-        let patch = snapshot.patch(|edit| edit.move_entity(page, None, at))?;
+        let order = Self::order_after_move(&siblings, page, index);
+        let mut chapters = snapshot.chapters()?;
+        let source = chapters.chapter_for_page(page).map(|chapter| chapter.id);
+        let target = Self::chapter_at(&order, index, source, &chapters);
+        if let Some(target) = target {
+            chapters.remove_page(page);
+            let position = order
+                .iter()
+                .take(index)
+                .filter(|candidate| {
+                    chapters
+                        .chapter_for_page(**candidate)
+                        .is_some_and(|chapter| chapter.id == target)
+                })
+                .count();
+            if let Some(chapter) = chapters.chapter_mut(target) {
+                chapter
+                    .pages
+                    .insert(position.min(chapter.pages.len()), page);
+            }
+        } else {
+            chapters.remove_page(page);
+        }
+        let patch = snapshot.patch(|edit| {
+            edit.move_entity(page, None, at)?;
+            edit.set_project(&chapters)?;
+            Ok(())
+        })?;
         self.commit(patch).await
+    }
+
+    pub(crate) async fn assign_page(
+        &mut self,
+        page: EntityId,
+        chapter: ChapterId,
+    ) -> Result<Commit> {
+        let snapshot = self.snapshot();
+        let mut chapters = snapshot.chapters()?;
+        if chapters.chapter(chapter).is_none() {
+            bail!("chapter does not exist");
+        }
+        chapters.remove_page(page);
+        chapters
+            .chapter_mut(chapter)
+            .expect("chapter was checked")
+            .pages
+            .push(page);
+        let patch = snapshot.patch(|edit| edit.set_project(&chapters))?;
+        self.commit(patch).await
+    }
+
+    pub(crate) async fn create_chapter(
+        &mut self,
+        title: String,
+        summarize: bool,
+    ) -> Result<(Commit, ChapterId)> {
+        let snapshot = self.snapshot();
+        let mut chapters = snapshot.chapters()?;
+        let mut chapter = SceneChapter::new(title);
+        chapter.summarize = summarize;
+        let id = chapter.id;
+        chapters.entries.push(chapter);
+        let patch = snapshot.patch(|edit| edit.set_project(&chapters))?;
+        self.commit(patch).await.map(|commit| (commit, id))
+    }
+
+    pub(crate) async fn rename_chapter(
+        &mut self,
+        chapter: ChapterId,
+        title: String,
+    ) -> Result<Commit> {
+        let snapshot = self.snapshot();
+        let mut chapters = snapshot.chapters()?;
+        let value = chapters
+            .chapter_mut(chapter)
+            .context("chapter does not exist")?;
+        value.title = title;
+        let patch = snapshot.patch(|edit| edit.set_project(&chapters))?;
+        self.commit(patch).await
+    }
+
+    pub(crate) async fn set_chapter_summarize(
+        &mut self,
+        chapter: ChapterId,
+        summarize: bool,
+    ) -> Result<Commit> {
+        let snapshot = self.snapshot();
+        let mut chapters = snapshot.chapters()?;
+        chapters
+            .chapter_mut(chapter)
+            .context("chapter does not exist")?
+            .summarize = summarize;
+        let patch = snapshot.patch(|edit| edit.set_project(&chapters))?;
+        self.commit(patch).await
+    }
+
+    pub(crate) async fn set_chapter_summary(
+        &mut self,
+        chapter: ChapterId,
+        summary: Option<String>,
+    ) -> Result<Commit> {
+        let snapshot = self.snapshot();
+        let mut chapters = snapshot.chapters()?;
+        chapters
+            .chapter_mut(chapter)
+            .context("chapter does not exist")?
+            .summary = summary;
+        let patch = snapshot.patch(|edit| edit.set_project(&chapters))?;
+        self.commit(patch).await
+    }
+
+    pub(crate) async fn set_chapter_setting(
+        &mut self,
+        chapter: ChapterId,
+        setting: Option<String>,
+    ) -> Result<Commit> {
+        let snapshot = self.snapshot();
+        let mut chapters = snapshot.chapters()?;
+        chapters
+            .chapter_mut(chapter)
+            .context("chapter does not exist")?
+            .setting = setting;
+        let patch = snapshot.patch(|edit| edit.set_project(&chapters))?;
+        self.commit(patch).await
+    }
+
+    pub(crate) async fn set_wiki(&mut self, slug: String, text: String) -> Result<Commit> {
+        let snapshot = self.snapshot();
+        let mut wiki = snapshot.wiki()?;
+        wiki.upsert(&slug, text)?;
+        let patch = snapshot.patch(|edit| edit.set_project(&wiki))?;
+        self.commit(patch).await
+    }
+
+    pub(crate) async fn add_wiki_file(&mut self, slug: String) -> Result<Commit> {
+        let snapshot = self.snapshot();
+        let mut wiki = snapshot.wiki()?;
+        wiki.insert(&slug)?;
+        let patch = snapshot.patch(|edit| edit.set_project(&wiki))?;
+        self.commit(patch).await
+    }
+
+    pub(crate) async fn delete_wiki_file(&mut self, slug: String) -> Result<Commit> {
+        let snapshot = self.snapshot();
+        let mut wiki = snapshot.wiki()?;
+        if !wiki.remove(&slug) {
+            bail!("the wiki has no such file");
+        }
+        let patch = snapshot.patch(|edit| edit.set_project(&wiki))?;
+        self.commit(patch).await
+    }
+
+    pub(crate) async fn import_wiki(
+        &mut self,
+        files: Vec<(String, String)>,
+    ) -> Result<(Commit, Vec<String>)> {
+        let snapshot = self.snapshot();
+        let mut wiki = snapshot.wiki()?;
+        let mut imported = Vec::with_capacity(files.len());
+        for (slug, body) in files {
+            wiki.upsert(&slug, body)?;
+            imported.push(slug);
+        }
+        let patch = snapshot.patch(|edit| edit.set_project(&wiki))?;
+        Ok((self.commit(patch).await?, imported))
+    }
+
+    pub(crate) async fn delete_chapter(&mut self, chapter: ChapterId) -> Result<Commit> {
+        let snapshot = self.snapshot();
+        let mut chapters = snapshot.chapters()?;
+        let value = chapters
+            .entries
+            .iter()
+            .position(|value| value.id == chapter)
+            .context("chapter does not exist")?;
+        let pages = chapters.entries.remove(value).pages;
+        let patch = snapshot.patch(|edit| {
+            for page in pages {
+                edit.remove_entity(page, RemovePolicy::Cascade)?;
+            }
+            edit.set_project(&chapters)?;
+            Ok(())
+        })?;
+        self.commit(patch).await
+    }
+
+    pub(crate) async fn move_chapter(
+        &mut self,
+        chapter: ChapterId,
+        index: usize,
+    ) -> Result<Commit> {
+        let snapshot = self.snapshot();
+        let mut chapters = snapshot.chapters()?;
+        let position = chapters
+            .entries
+            .iter()
+            .position(|value| value.id == chapter)
+            .context("chapter does not exist")?;
+        let value = chapters.entries.remove(position);
+        chapters
+            .entries
+            .insert(index.min(chapters.entries.len()), value);
+        let patch = snapshot.patch(|edit| edit.set_project(&chapters))?;
+        self.commit(patch).await
+    }
+
+    pub(crate) async fn import_pages(
+        &mut self,
+        pages: Vec<ImportedPage>,
+        chapter: Option<ChapterId>,
+        summarize: bool,
+    ) -> Result<(Commit, Option<EntityId>)> {
+        let snapshot = self.snapshot();
+        let mut chapters = snapshot.chapters()?;
+        let chapter = match chapter {
+            Some(chapter) => {
+                if chapters.chapter(chapter).is_none() {
+                    bail!("chapter does not exist");
+                }
+                chapter
+            }
+            None => self
+                .active_page
+                .and_then(|page| chapters.chapter_for_page(page).map(|chapter| chapter.id))
+                .unwrap_or_else(|| {
+                    let mut value = SceneChapter::new(&self.name);
+                    value.summarize = summarize;
+                    let id = value.id;
+                    chapters.entries.push(value);
+                    id
+                }),
+        };
+        let source = AssetRole::new("source")?;
+        let mut first = None;
+        let patch = snapshot.patch(|edit| {
+            let mut imported = Vec::with_capacity(pages.len());
+            for page in pages {
+                let page = Self::add_imported_page(edit, &source, page)?;
+                imported.push(page);
+            }
+            first = imported.first().copied();
+            if let Some(value) = chapters.chapter_mut(chapter) {
+                value.pages.extend(imported);
+            }
+            edit.set_project(&chapters)?;
+            Ok(())
+        })?;
+        self.commit(patch).await.map(|commit| (commit, first))
+    }
+
+    pub(crate) async fn import_chapters(
+        &mut self,
+        groups: Vec<ImportedChapter>,
+        summarize: bool,
+    ) -> Result<(Commit, Option<EntityId>)> {
+        let snapshot = self.snapshot();
+        let mut chapters = snapshot.chapters()?;
+        let source = AssetRole::new("source")?;
+        let mut first = None;
+        let patch = snapshot.patch(|edit| {
+            for group in groups {
+                let mut chapter = SceneChapter::new(group.title);
+                chapter.summarize = summarize;
+                for page in group.pages {
+                    let page = Self::add_imported_page(edit, &source, page)?;
+                    first.get_or_insert(page);
+                    chapter.pages.push(page);
+                }
+                chapters.entries.push(chapter);
+            }
+            edit.set_project(&chapters)?;
+            Ok(())
+        })?;
+        self.commit(patch).await.map(|commit| (commit, first))
+    }
+
+    fn add_imported_page(
+        edit: &mut koharu_scene::Edit,
+        source: &AssetRole,
+        imported: ImportedPage,
+    ) -> koharu_scene::Result<EntityId> {
+        let ImportedPage {
+            name,
+            bytes,
+            format,
+            width,
+            height,
+        } = imported;
+        let page = edit.add_page(
+            PageDraft::new(name, f64::from(width), f64::from(height)),
+            At::End,
+        )?;
+        edit.set_asset(
+            page,
+            source,
+            AssetInput::new(
+                bytes,
+                format.to_mime_type(),
+                AssetMetadata {
+                    width: Some(width),
+                    height: Some(height),
+                    attributes: Default::default(),
+                },
+            ),
+        )?;
+        Ok(page)
     }
 
     pub(crate) async fn add_point_text(
@@ -928,6 +1281,7 @@ impl Project {
 
     pub(crate) fn page(snapshot: &Snapshot, page: EntityId) -> Result<Page> {
         let value = snapshot.page(page)?.page()?;
+        let chapter = snapshot.chapter_for(page)?.map(|chapter| chapter.id);
         let source = Self::asset_id(snapshot, page, "source")?;
         let mut layers = Vec::new();
         Self::collect_layer_views(snapshot, page, &mut layers)?;
@@ -978,6 +1332,7 @@ impl Project {
         Ok(Page {
             id: page,
             label: value.label,
+            chapter,
             size: PageSize {
                 width: value.width,
                 height: value.height,
@@ -1172,6 +1527,27 @@ impl Project {
             .content()
             .map(|content| content.id())
             .map_err(Into::into)
+    }
+
+    fn order_after_move(siblings: &[EntityId], moving: EntityId, index: usize) -> Vec<EntityId> {
+        let mut order = siblings.to_vec();
+        order.retain(|candidate| *candidate != moving);
+        order.insert(index.min(order.len()), moving);
+        order
+    }
+
+    fn chapter_at(
+        order: &[EntityId],
+        index: usize,
+        current: Option<ChapterId>,
+        chapters: &SceneChapters,
+    ) -> Option<ChapterId> {
+        order
+            .get(index + 1)
+            .or_else(|| index.checked_sub(1).and_then(|index| order.get(index)))
+            .and_then(|page| chapters.chapter_for_page(*page))
+            .map(|chapter| chapter.id)
+            .or(current)
     }
 
     fn placement(siblings: &[EntityId], moving: EntityId, index: usize) -> At {
@@ -1377,7 +1753,7 @@ mod tests {
             .add_page(PageDraft::new("manual", 100.0, 100.0), At::End)
             .unwrap();
         session.commit(setup.finish().unwrap()).await.unwrap();
-        let mut project = Project::new(session, "test".to_owned());
+        let mut project = Project::new(session, "test".to_owned(), PathBuf::new());
 
         let base = project.snapshot();
         let pipeline = base
@@ -1442,6 +1818,34 @@ mod tests {
                 .label,
             "latest manual"
         );
+    }
+
+    #[tokio::test]
+    async fn deleting_a_chapter_removes_its_pages() {
+        let session = Session::memory().await.unwrap();
+        let mut project = Project::new(session, "test".to_owned(), PathBuf::new());
+        let (_, chapter) = project.create_chapter("Chapter 01".to_owned(), true).await.unwrap();
+        assert_eq!(project.snapshot().chapters().unwrap().entries.len(), 1);
+        let mut page = None;
+        {
+            let snapshot = project.snapshot();
+            let mut chapters = snapshot.chapters().unwrap();
+            let patch = snapshot
+                .patch(|edit| {
+                    let added = edit.add_page(PageDraft::new("p1", 100.0, 100.0), At::End)?;
+                    page = Some(added);
+                    chapters.chapter_mut(chapter).unwrap().pages.push(added);
+                    edit.set_project(&chapters)?;
+                    Ok(())
+                })
+                .unwrap();
+            project.commit(patch).await.unwrap();
+        }
+        let page = page.unwrap();
+        project.delete_chapter(chapter).await.unwrap();
+        let snapshot = project.snapshot();
+        assert_eq!(snapshot.chapters().unwrap().entries.len(), 0);
+        assert!(snapshot.page(page).is_err());
     }
 
     #[test]
