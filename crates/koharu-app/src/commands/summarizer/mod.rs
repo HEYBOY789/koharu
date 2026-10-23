@@ -119,7 +119,9 @@ pub(crate) async fn save_summarizer_config(
     // `agy` encodes effort in some model ids (`gemini-3.8-flash-high`) and rejects a
     // conflicting `--effort`, so the model id wins and the separate choice is dropped.
     let effort = if config.backend == SummarizerBackend::Agy
-        && model.as_deref().is_some_and(|model| effort_suffix(model).is_some())
+        && model
+            .as_deref()
+            .is_some_and(|model| effort_suffix(model).is_some())
     {
         None
     } else {

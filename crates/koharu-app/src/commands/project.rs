@@ -1824,7 +1824,10 @@ mod tests {
     async fn deleting_a_chapter_removes_its_pages() {
         let session = Session::memory().await.unwrap();
         let mut project = Project::new(session, "test".to_owned(), PathBuf::new());
-        let (_, chapter) = project.create_chapter("Chapter 01".to_owned(), true).await.unwrap();
+        let (_, chapter) = project
+            .create_chapter("Chapter 01".to_owned(), true)
+            .await
+            .unwrap();
         assert_eq!(project.snapshot().chapters().unwrap().entries.len(), 1);
         let mut page = None;
         {

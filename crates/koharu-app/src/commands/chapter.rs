@@ -736,7 +736,11 @@ fn wiki_doc(slug: &str, value: &str) -> String {
 /// accepted too, in which case its `wiki/` subdirectory is used.
 fn read_wiki_folder(root: &Path) -> Result<Vec<(String, String)>> {
     let nested = root.join("wiki");
-    let directory = if nested.is_dir() { nested } else { root.to_owned() };
+    let directory = if nested.is_dir() {
+        nested
+    } else {
+        root.to_owned()
+    };
     let mut files = Vec::new();
     for entry in std::fs::read_dir(&directory)
         .with_context(|| format!("failed to read {}", directory.display()))?
