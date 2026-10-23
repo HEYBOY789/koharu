@@ -268,7 +268,8 @@
     "selectAllLayers": "Selecionar todas as camadas",
     "settings": "Configurações",
     "undo": "Desfazer",
-    "view": "Exibir"
+    "view": "Exibir",
+    "exportWiki": "Exportar wiki…"
   },
   "model": {
     "baseUrl": "URL base",

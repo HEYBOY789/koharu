@@ -82,6 +82,11 @@ export const commands = {
 	process: (scope: Scope, operation: Operation) => __TAURI_INVOKE<JobId>("process", { scope, operation }),
 	stopJob: (job: JobId) => __TAURI_INVOKE<null>("stop_job", { job }),
 	export: (format: ExportFormat) => __TAURI_INVOKE<null>("export", { format }),
+	/**
+	 *  Writes the wiki as `wiki/<slug>.md` inside the picked folder, which is the
+	 *  layout the wiki importer reads back, so a backup restores as-is.
+	 */
+	exportWiki: () => __TAURI_INVOKE<null>("export_wiki"),
 	getThumbnail: (page: EntityId) => __TAURI_INVOKE<ThumbnailBytes>("get_thumbnail", { page }),
 	getFonts: () => __TAURI_INVOKE<FontFamily[]>("get_fonts"),
 	getFontPreview: (familyName: string) => __TAURI_INVOKE<FontPreviewBytes>("get_font_preview", { familyName }),

@@ -268,7 +268,8 @@
     "selectAllLayers": "图层侪选",
     "settings": "设置",
     "undo": "撤销",
-    "view": "视图"
+    "view": "视图",
+    "exportWiki": "导出 Wiki…"
   },
   "model": {
     "baseUrl": "基础 URL",

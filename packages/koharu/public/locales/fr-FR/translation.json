@@ -268,7 +268,8 @@
     "selectAllLayers": "Sélectionner tous les calques",
     "settings": "Paramètres",
     "undo": "Annuler",
-    "view": "Affichage"
+    "view": "Affichage",
+    "exportWiki": "Exporter le wiki…"
   },
   "model": {
     "baseUrl": "URL de base",

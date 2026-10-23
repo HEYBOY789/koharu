@@ -268,7 +268,8 @@
     "selectAllLayers": "Select All Layers",
     "settings": "Settings",
     "undo": "Undo",
-    "view": "View"
+    "view": "View",
+    "exportWiki": "Export Wiki…"
   },
   "model": {
     "baseUrl": "Base URL",

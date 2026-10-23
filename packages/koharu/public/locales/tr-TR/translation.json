@@ -268,7 +268,8 @@
     "selectAllLayers": "Tüm Katmanları Seç",
     "settings": "Ayarlar",
     "undo": "Geri Al",
-    "view": "Görünüm"
+    "view": "Görünüm",
+    "exportWiki": "Wiki’yi dışa aktar…"
   },
   "model": {
     "baseUrl": "Temel URL",

@@ -268,7 +268,8 @@
     "selectAllLayers": "すべてのレイヤーを選択",
     "settings": "設定",
     "undo": "元に戻す",
-    "view": "表示"
+    "view": "表示",
+    "exportWiki": "Wiki を書き出す…"
   },
   "model": {
     "baseUrl": "ベース URL",

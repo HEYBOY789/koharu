@@ -268,7 +268,8 @@
     "selectAllLayers": "選取所有圖層",
     "settings": "設定",
     "undo": "復原",
-    "view": "檢視"
+    "view": "檢視",
+    "exportWiki": "匯出 Wiki…"
   },
   "model": {
     "baseUrl": "基礎 URL",

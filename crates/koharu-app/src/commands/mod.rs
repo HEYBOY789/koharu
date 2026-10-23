@@ -111,6 +111,7 @@ pub fn bindings() -> tauri_specta::Builder<tauri_runtime_cef::CefRuntime> {
             processing::process,
             processing::stop_job,
             output::export,
+            output::export_wiki,
             output::get_thumbnail,
             fonts::get_fonts,
             fonts::get_font_preview,

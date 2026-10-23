@@ -268,7 +268,8 @@
     "selectAllLayers": "Выбрать все слои",
     "settings": "Настройки",
     "undo": "Отменить",
-    "view": "Вид"
+    "view": "Вид",
+    "exportWiki": "Экспорт вики…"
   },
   "model": {
     "baseUrl": "Базовый URL",

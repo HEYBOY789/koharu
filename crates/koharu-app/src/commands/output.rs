@@ -7,11 +7,15 @@ use image::{
 use koharu_psd::{PsdExportOptions, export_page};
 use koharu_rasterizer::{Raster, RasterOptions, Rasterizer};
 use koharu_renderer::{Frame, Renderer};
-use koharu_scene::{AssetRole, EntityId, Snapshot};
+use koharu_scene::{AssetRole, Chapters, EntityId, Snapshot};
 use rayon::prelude::*;
 use serde::Deserialize;
 use specta::Type;
-use std::{io::Write as _, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    io::Write as _,
+    sync::Arc,
+};
 use tauri::{State, WebviewWindow, ipc::IpcResponse};
 use tauri_runtime_cef::CefRuntime;
 
@@ -55,20 +59,17 @@ pub(crate) async fn export(
     if pages.is_empty() {
         return Err(anyhow::anyhow!("there are no pages to export").into());
     }
-    let dialog = rfd::AsyncFileDialog::new().set_parent(&window);
-    let destination = match format {
-        ExportFormat::Png | ExportFormat::Psd => dialog.pick_folder().await,
-        ExportFormat::Cbz => {
-            dialog
-                .add_filter("Comic Book Archive", &["cbz"])
-                .set_file_name(format!("{name}.cbz"))
-                .save_file()
-                .await
-        }
-    };
-    let Some(destination) = destination.map(|destination| destination.path().to_owned()) else {
+    // A chapter run is one folder or archive per chapter, so every format picks
+    // a destination folder instead of a single file.
+    let Some(destination) = rfd::AsyncFileDialog::new()
+        .set_parent(&window)
+        .pick_folder()
+        .await
+        .map(|destination| destination.path().to_owned())
+    else {
         return Ok(());
     };
+    let groups = export_groups(&snapshot.chapters()?, &pages);
     let renderer = desktop.renderer();
     let rasterizer = desktop.rasterizer().await?;
     let frames = try_join_all(pages.iter().map(|&page| renderer.render(&snapshot, page))).await?;
@@ -111,49 +112,158 @@ pub(crate) async fn export(
             ("psd", images)
         }
     };
+    let mut images = pages.iter().copied().zip(images).collect::<HashMap<_, _>>();
     tokio_rayon::spawn(move || -> Result<()> {
-        let mut archive = if matches!(format, ExportFormat::Cbz) {
-            let directory = destination.parent().context("archive path has no parent")?;
-            Some(zip::ZipWriter::new(tempfile::NamedTempFile::new_in(
-                directory,
-            )?))
-        } else {
-            None
-        };
-        let width = pages.len().to_string().len().max(4);
-        // Async preparation and indexed encoding both preserve project order.
-        for (index, (page_id, bytes)) in pages.into_iter().zip(images).enumerate() {
-            let page = snapshot.page(page_id)?.page()?;
-            let name = page
-                .label
-                .trim()
-                .trim_end_matches(|character: char| character == '.' || character.is_whitespace());
-            let name = name
-                .rsplit_once('.')
-                .map_or(name, |(stem, _)| stem)
-                .replace(['<', '>', ':', '"', '/', '\\', '|', '?', '*'], "_");
-            let name = format!(
-                "{:0width$}_{}.{extension}",
-                index + 1,
-                if name.is_empty() { "page" } else { &name }
-            );
-            if let Some(archive) = &mut archive {
-                // PNG data is already compressed.
-                let options = zip::write::SimpleFileOptions::default()
-                    .compression_method(zip::CompressionMethod::Stored);
-                archive.start_file(name, options)?;
-                archive.write_all(&bytes)?;
+        for (folder, members) in &groups {
+            let width = members.len().to_string().len().max(4);
+            let mut archive = if matches!(format, ExportFormat::Cbz) {
+                Some(zip::ZipWriter::new(tempfile::NamedTempFile::new_in(
+                    &destination,
+                )?))
             } else {
-                std::fs::write(destination.join(name), bytes)?;
+                None
+            };
+            for (ordinal, page_id) in members.iter().enumerate() {
+                let page = snapshot.page(*page_id)?.page()?;
+                let bytes = images
+                    .remove(page_id)
+                    .context("a rendered page went missing during export")?;
+                let name = format!(
+                    "{:0width$}_{}.{extension}",
+                    ordinal + 1,
+                    page_stem(&page.label),
+                    width = width,
+                );
+                if let Some(archive) = &mut archive {
+                    // PNG data is already compressed.
+                    let options = zip::write::SimpleFileOptions::default()
+                        .compression_method(zip::CompressionMethod::Stored);
+                    archive.start_file(name, options)?;
+                    archive.write_all(&bytes)?;
+                } else {
+                    let directory = match folder {
+                        Some(folder) => {
+                            let directory = destination.join(folder);
+                            std::fs::create_dir_all(&directory)?;
+                            directory
+                        }
+                        None => destination.clone(),
+                    };
+                    std::fs::write(directory.join(name), bytes)?;
+                }
             }
-        }
-        if let Some(archive) = archive {
-            archive.finish()?.persist(destination)?;
+            if let Some(archive) = archive {
+                let name = match folder {
+                    Some(folder) => format!("{folder}.cbz"),
+                    None => format!("{name}.cbz"),
+                };
+                archive.finish()?.persist(destination.join(name))?;
+            }
         }
         Ok(())
     })
     .await?;
     Ok(())
+}
+
+/// Chapter folders in roster order, with every page outside a chapter last. A
+/// project without chapters has nothing to separate, so it keeps writing
+/// straight into the picked folder.
+fn export_groups(chapters: &Chapters, pages: &[EntityId]) -> Vec<(Option<String>, Vec<EntityId>)> {
+    if chapters.entries.is_empty() {
+        return vec![(None, pages.to_vec())];
+    }
+    let mut groups = Vec::new();
+    let mut assigned = HashSet::new();
+    for (index, chapter) in chapters.entries.iter().enumerate() {
+        let members = pages
+            .iter()
+            .copied()
+            .filter(|page| chapter.pages.contains(page))
+            .collect::<Vec<_>>();
+        if members.is_empty() {
+            continue;
+        }
+        assigned.extend(members.iter().copied());
+        let title = sanitize(&chapter.title);
+        let title = if title.is_empty() {
+            "chapter".to_owned()
+        } else {
+            title
+        };
+        groups.push((Some(format!("{:02}_{title}", index + 1)), members));
+    }
+    let unassigned = pages
+        .iter()
+        .copied()
+        .filter(|page| !assigned.contains(page))
+        .collect::<Vec<_>>();
+    if !unassigned.is_empty() {
+        groups.push((Some("unassigned".to_owned()), unassigned));
+    }
+    groups
+}
+
+/// Writes the wiki as `wiki/<slug>.md` inside the picked folder, which is the
+/// layout the wiki importer reads back, so a backup restores as-is.
+#[tauri::command]
+#[specta::specta]
+pub(crate) async fn export_wiki(
+    window: WebviewWindow<CefRuntime>,
+    project: State<'_, CurrentProject>,
+) -> std::result::Result<(), Error> {
+    let wiki = {
+        let project = project.project.lock().await;
+        let project = project.as_ref().context("no project is open")?;
+        project.snapshot().wiki()?
+    };
+    if wiki.files.iter().all(|file| file.body.trim().is_empty()) {
+        return Err(anyhow::anyhow!("the wiki has no content to export").into());
+    }
+    let Some(destination) = rfd::AsyncFileDialog::new()
+        .set_parent(&window)
+        .pick_folder()
+        .await
+        .map(|destination| destination.path().to_owned())
+    else {
+        return Ok(());
+    };
+    let directory = destination.join("wiki");
+    tokio_rayon::spawn(move || -> Result<()> {
+        std::fs::create_dir_all(&directory)?;
+        for file in &wiki.files {
+            if file.body.trim().is_empty() {
+                continue;
+            }
+            std::fs::write(directory.join(format!("{}.md", file.slug)), &file.body)?;
+        }
+        Ok(())
+    })
+    .await?;
+    Ok(())
+}
+
+/// Windows rejects these characters and a trailing dot in a path segment.
+fn sanitize(value: &str) -> String {
+    value
+        .replace(['<', '>', ':', '"', '/', '\\', '|', '?', '*'], "_")
+        .trim()
+        .trim_end_matches('.')
+        .trim()
+        .to_owned()
+}
+
+fn page_stem(label: &str) -> String {
+    let trimmed = label
+        .trim()
+        .trim_end_matches(|character: char| character == '.' || character.is_whitespace());
+    let stem = trimmed.rsplit_once('.').map_or(trimmed, |(stem, _)| stem);
+    let stem = sanitize(stem);
+    if stem.is_empty() {
+        "page".to_owned()
+    } else {
+        stem
+    }
 }
 
 #[tauri::command]
@@ -218,4 +328,56 @@ async fn rasterize(
     tokio_rayon::spawn(move || rasterizer.rasterize(&frame, options))
         .await
         .map_err(Into::into)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{export_groups, page_stem, sanitize};
+    use koharu_scene::{Chapter, Chapters, EntityId};
+
+    /// Chapter order drives folder order, a page outside every chapter still
+    /// lands in its own folder, and titles stay usable as Windows path segments.
+    #[test]
+    fn chapters_become_one_folder_each_with_unassigned_pages_last() {
+        let pages = (0..5).map(|_| EntityId::new()).collect::<Vec<_>>();
+        let mut first = Chapter::new("Chapter 01");
+        first.pages = vec![pages[0], pages[1]];
+        let mut second = Chapter::new("Prologue: A/B");
+        second.pages = vec![pages[2]];
+        let chapters = Chapters {
+            entries: vec![first, second],
+        };
+        let groups = export_groups(&chapters, &pages);
+        let summary = groups
+            .iter()
+            .map(|(folder, members)| (folder.clone(), members.len()))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            summary,
+            vec![
+                (Some("01_Chapter 01".to_owned()), 2),
+                (Some("02_Prologue_ A_B".to_owned()), 1),
+                (Some("unassigned".to_owned()), 2),
+            ]
+        );
+        assert_eq!(groups[2].1, vec![pages[3], pages[4]]);
+    }
+
+    /// A project with no chapters keeps the flat layout it always had.
+    #[test]
+    fn a_project_without_chapters_exports_flat() {
+        let pages = (0..3).map(|_| EntityId::new()).collect::<Vec<_>>();
+        assert_eq!(
+            export_groups(&Chapters::default(), &pages),
+            vec![(None, pages)]
+        );
+    }
+
+    #[test]
+    fn titles_and_labels_stay_valid_path_segments() {
+        assert_eq!(sanitize("A/B: C?"), "A_B_ C_");
+        assert_eq!(sanitize("Chapter 01."), "Chapter 01");
+        assert_eq!(page_stem("001.jpg"), "001");
+        assert_eq!(page_stem("  ..  "), "page");
+    }
 }

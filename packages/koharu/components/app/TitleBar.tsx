@@ -1,7 +1,7 @@
 'use client'
 
 import { openUrl } from '@tauri-apps/plugin-opener'
-import { FilePlus2, FolderOpen, LoaderCircle, Settings } from 'lucide-react'
+import { BookOpen, FilePlus2, FolderOpen, LoaderCircle, Settings } from 'lucide-react'
 import Image from 'next/image'
 import { useState, type ComponentProps } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -63,6 +63,11 @@ export function TitleBar() {
     ['export-project'],
     commands.export,
     'menu.export',
+  )
+  const { run: exportWiki, busy: exportingWiki } = useCommand(
+    ['export-wiki'],
+    commands.exportWiki,
+    'menu.exportWiki',
   )
 
   const run = (scope: Scope, operation: Operation = { operation: 'full' }) =>
@@ -136,6 +141,18 @@ export function TitleBar() {
                   ))}
                 </MenubarSubContent>
               </MenubarSub>
+              <MenubarItem
+                disabled={!project || exportingWiki}
+                aria-busy={exportingWiki}
+                onClick={() => exportWiki()}
+              >
+                {exportingWiki ? (
+                  <LoaderCircle className='animate-spin' aria-hidden='true' />
+                ) : (
+                  <BookOpen />
+                )}
+                {t('menu.exportWiki')}
+              </MenubarItem>
               <MenubarSeparator />
               <MenubarItem disabled={!project} onClick={closeProject}>
                 {t('menu.closeProject')}
