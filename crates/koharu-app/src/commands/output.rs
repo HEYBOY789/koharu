@@ -175,7 +175,8 @@ fn export_groups(chapters: &Chapters, pages: &[EntityId]) -> Vec<(Option<String>
     }
     let mut groups = Vec::new();
     let mut assigned = HashSet::new();
-    for (index, chapter) in chapters.entries.iter().enumerate() {
+    let mut used = HashSet::new();
+    for chapter in &chapters.entries {
         let members = pages
             .iter()
             .copied()
@@ -185,13 +186,8 @@ fn export_groups(chapters: &Chapters, pages: &[EntityId]) -> Vec<(Option<String>
             continue;
         }
         assigned.extend(members.iter().copied());
-        let title = sanitize(&chapter.title);
-        let title = if title.is_empty() {
-            "chapter".to_owned()
-        } else {
-            title
-        };
-        groups.push((Some(format!("{:02}_{title}", index + 1)), members));
+        let folder = unique_folder(&mut used, &chapter.title);
+        groups.push((Some(folder), members));
     }
     let unassigned = pages
         .iter()
@@ -202,6 +198,28 @@ fn export_groups(chapters: &Chapters, pages: &[EntityId]) -> Vec<(Option<String>
         groups.push((Some("unassigned".to_owned()), unassigned));
     }
     groups
+}
+
+/// The folder is the chapter title exactly as it appears in the rail, with only
+/// the characters Windows rejects replaced. Two chapters sharing a title would
+/// write into one folder, so the second and later ones get a numeric suffix.
+fn unique_folder(used: &mut HashSet<String>, title: &str) -> String {
+    let title = sanitize(title);
+    let title = if title.is_empty() {
+        "chapter".to_owned()
+    } else {
+        title
+    };
+    if used.insert(title.clone()) {
+        return title;
+    }
+    for suffix in 2.. {
+        let candidate = format!("{title} ({suffix})");
+        if used.insert(candidate.clone()) {
+            return candidate;
+        }
+    }
+    unreachable!("an unbounded suffix always finds a free name")
 }
 
 /// Writes the wiki as `wiki/<slug>.md` inside the picked folder, which is the
@@ -335,17 +353,22 @@ mod tests {
     use super::{export_groups, page_stem, sanitize};
     use koharu_scene::{Chapter, Chapters, EntityId};
 
-    /// Chapter order drives folder order, a page outside every chapter still
-    /// lands in its own folder, and titles stay usable as Windows path segments.
+    /// Folder names are the chapter titles themselves, so a chapter titled "11"
+    /// exports to `11`. A page outside every chapter still lands in its own
+    /// folder, and duplicate titles stay distinct.
     #[test]
-    fn chapters_become_one_folder_each_with_unassigned_pages_last() {
-        let pages = (0..5).map(|_| EntityId::new()).collect::<Vec<_>>();
-        let mut first = Chapter::new("Chapter 01");
-        first.pages = vec![pages[0], pages[1]];
-        let mut second = Chapter::new("Prologue: A/B");
-        second.pages = vec![pages[2]];
+    fn chapters_become_one_folder_named_after_the_chapter() {
+        let pages = (0..6).map(|_| EntityId::new()).collect::<Vec<_>>();
+        let mut eleven = Chapter::new("11");
+        eleven.pages = vec![pages[0], pages[1]];
+        let mut twelve = Chapter::new("12");
+        twelve.pages = vec![pages[2]];
+        let mut prologue = Chapter::new("Prologue: A/B");
+        prologue.pages = vec![pages[3]];
+        let mut twin = Chapter::new("12");
+        twin.pages = vec![pages[4]];
         let chapters = Chapters {
-            entries: vec![first, second],
+            entries: vec![eleven, twelve, prologue, twin],
         };
         let groups = export_groups(&chapters, &pages);
         let summary = groups
@@ -355,12 +378,14 @@ mod tests {
         assert_eq!(
             summary,
             vec![
-                (Some("01_Chapter 01".to_owned()), 2),
-                (Some("02_Prologue_ A_B".to_owned()), 1),
-                (Some("unassigned".to_owned()), 2),
+                (Some("11".to_owned()), 2),
+                (Some("12".to_owned()), 1),
+                (Some("Prologue_ A_B".to_owned()), 1),
+                (Some("12 (2)".to_owned()), 1),
+                (Some("unassigned".to_owned()), 1),
             ]
         );
-        assert_eq!(groups[2].1, vec![pages[3], pages[4]]);
+        assert_eq!(groups[4].1, vec![pages[5]]);
     }
 
     /// A project with no chapters keeps the flat layout it always had.
