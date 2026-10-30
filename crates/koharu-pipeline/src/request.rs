@@ -63,6 +63,7 @@ impl Operation {
 
 #[derive(Clone)]
 pub struct Request {
+    pub resume: bool,
     pub operation: Operation,
     pub scope: Scope,
     pub stop: StopToken,
@@ -73,6 +74,7 @@ pub struct Request {
 impl Default for Request {
     fn default() -> Self {
         Self {
+            resume: false,
             operation: Operation::Full,
             scope: Scope::Project,
             stop: StopToken::default(),

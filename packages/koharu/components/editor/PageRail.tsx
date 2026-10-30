@@ -32,6 +32,7 @@ import {
   useImportPages,
   usePage,
   usePages,
+  useProjectBusy,
 } from '@/lib/queries'
 import { useKoharuStore } from '@/lib/store'
 import { prefetchCanvasPages, showCanvasPage } from '@koharu/bridge/canvas'
@@ -89,9 +90,7 @@ export function PageRail() {
   const selectLayers = useKoharuStore((state) => state.selectLayers)
   const setSettingsOpen = useKoharuStore((state) => state.setSettingsOpen)
   const setInspectorPanel = useKoharuStore((state) => state.setInspectorPanel)
-  const busy = useKoharuStore((state) =>
-    Object.values(state.jobs).some((job) => job.state === 'running'),
-  )
+  const busy = useProjectBusy()
   const { importPages, importing } = useImportPages()
   const anchor = useRef<number | null>(null)
   const selectionRequest = useRef(0)
@@ -691,7 +690,9 @@ function ChapterHeader({
           <DropdownMenuItem
             disabled={busy}
             onClick={() =>
-              void call(commands.runChapters, [chapter.id], null, true).catch(() => undefined)
+              void call(commands.runChapters, [chapter.id], null, true, false).catch(
+                () => undefined,
+              )
             }
           >
             <Sparkles /> {t('chapter.run')}

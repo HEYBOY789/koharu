@@ -5,6 +5,8 @@
 //! relation endpoints.
 
 use crate::{
+    DetectionCheckpoint, OcrCheckpoint, TranslationCheckpoint, InpaintingCheckpoint,
+    PublicationMetadata, ImportedSource,
     BubbleRegion, Chapters, DetectionAnalysis, EntityId, EntityOrigin, Error, Geometry, Group,
     OcrAnalysis, Page, Project, RasterLayer, Region, RegionSpec, Relation, Result, SourceText,
     TextContent, TextGroup, TextLayout, TextRegion, TextRole, Translation, Typography, Visibility,
@@ -63,6 +65,12 @@ component_schema! {
     ENTITY_ORIGIN = 17 => EntityOrigin,
     CHAPTERS = 18 => Chapters,
     WIKI = 19 => Wiki,
+    PUBLICATION_METADATA = 20 => PublicationMetadata,
+    IMPORTED_SOURCE = 21 => ImportedSource,
+    DETECTION_CHECKPOINT = 22 => DetectionCheckpoint,
+    OCR_CHECKPOINT = 23 => OcrCheckpoint,
+    TRANSLATION_CHECKPOINT = 24 => TranslationCheckpoint,
+    INPAINTING_CHECKPOINT = 25 => InpaintingCheckpoint,
 }
 
 pub(crate) fn validate_components(

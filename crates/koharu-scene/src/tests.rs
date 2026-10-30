@@ -4,6 +4,66 @@ use revision::revisioned;
 
 use crate::*;
 
+#[tokio::test]
+async fn resume_checkpoints_persist_and_parallel_stage_patches_rebase() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("resume.khrproj");
+    let mut session = Session::create(&root).await.unwrap();
+    let mut edit = session.snapshot().edit();
+    let page = edit
+        .add_page(PageDraft::new("page", 10.0, 10.0), At::End)
+        .unwrap();
+    session.commit(edit.finish().unwrap()).await.unwrap();
+    let base = session.snapshot();
+    let input = BlobId::for_bytes(b"stable inputs");
+    let ocr = base
+        .patch(|edit| {
+            edit.set(
+                page,
+                &OcrCheckpoint {
+                    origin: Origin::User,
+                    input,
+                },
+            )
+        })
+        .unwrap();
+    let cleanup = base
+        .patch(|edit| {
+            edit.set(
+                page,
+                &InpaintingCheckpoint {
+                    origin: Origin::User,
+                    input,
+                },
+            )
+        })
+        .unwrap();
+    session.commit(ocr).await.unwrap();
+    let cleanup = cleanup.rebase_on(&session.snapshot()).unwrap();
+    session.commit(cleanup).await.unwrap();
+    drop(base);
+    drop(session);
+    let session = Session::open(&root).await.unwrap();
+    assert_eq!(
+        session
+            .snapshot()
+            .component::<OcrCheckpoint>(page)
+            .unwrap()
+            .unwrap()
+            .input,
+        input
+    );
+    assert_eq!(
+        session
+            .snapshot()
+            .component::<InpaintingCheckpoint>(page)
+            .unwrap()
+            .unwrap()
+            .input,
+        input
+    );
+}
+
 const EVOLVING_COMPONENT_KIND: &str = "dev.koharu.test.evolving";
 
 #[revisioned(revision = 1)]
@@ -584,6 +644,46 @@ async fn typed_page_entity_and_components_round_trip() {
             .text
             .value,
         "こんにちは"
+    );
+}
+
+#[tokio::test]
+async fn publication_metadata_is_validated_and_undoable_project_state() {
+    let mut session = Session::memory().await.unwrap();
+    let metadata = PublicationMetadata {
+        title: "Animan".to_owned(),
+        slug: "animan".to_owned(),
+        author: "OKADA Takuya".to_owned(),
+        release_year: Some(2023),
+        country: "Nhật Bản".to_owned(),
+        ..PublicationMetadata::default()
+    };
+    let patch = session
+        .snapshot()
+        .patch(|edit| edit.set_project(&metadata))
+        .unwrap();
+    let commit = session.commit(patch).await.unwrap();
+    assert_eq!(
+        commit
+            .snapshot
+            .project_component::<PublicationMetadata>()
+            .unwrap(),
+        Some(metadata.clone())
+    );
+    let invalid = PublicationMetadata {
+        slug: "../animan".to_owned(),
+        ..metadata
+    };
+    assert!(
+        commit
+            .snapshot
+            .patch(|edit| edit.set_project(&invalid))
+            .is_err()
+    );
+    let snapshot = session.undo(commit.revision).await.unwrap().snapshot;
+    assert_eq!(
+        snapshot.project_component::<PublicationMetadata>().unwrap(),
+        None
     );
 }
 

@@ -16,7 +16,7 @@ use super::{
         ChapterPhase, Job, JobChannel, JobId, JobState, PipelineCommitter, Processing,
         progress_sink,
     },
-    project::CurrentProject,
+    project::{CurrentProject, JobProject},
     summarizer::{self, SummarizerConfig},
 };
 use koharu_desktop::Desktop;
@@ -154,14 +154,22 @@ pub(crate) async fn move_chapter(
 #[tauri::command]
 #[specta::specta]
 pub(crate) async fn set_chapter_summarize(
-    chapter: ChapterId,
+    chapter: Option<ChapterId>,
     summarize: bool,
     project: State<'_, CurrentProject>,
+    processing: State<'_, Processing>,
 ) -> std::result::Result<(), Error> {
     let mut project = project.project.lock().await;
     let project = project.as_mut().context("no project is open")?;
-    let commit = project.set_chapter_summarize(chapter, summarize).await?;
-    project.record_commit(&commit);
+    if processing.busy_for(&project.name) {
+        return Err(anyhow::anyhow!(
+            "wait for the running workflow before changing chapter summary settings"
+        )
+        .into());
+    }
+    if let Some(commit) = project.set_chapter_summarize(chapter, summarize).await? {
+        project.record_commit(&commit);
+    }
     Ok(())
 }
 
@@ -287,7 +295,7 @@ pub(crate) async fn summarize_chapter(
     chapter: ChapterId,
     handle: AppHandle<CefRuntime>,
 ) -> std::result::Result<JobId, Error> {
-    start(handle, vec![chapter], Some(true), false).await
+    start(handle, vec![chapter], Some(true), false, false).await
 }
 
 #[tauri::command]
@@ -296,7 +304,7 @@ pub(crate) async fn translate_chapter(
     chapter: ChapterId,
     handle: AppHandle<CefRuntime>,
 ) -> std::result::Result<JobId, Error> {
-    start(handle, vec![chapter], Some(false), true).await
+    start(handle, vec![chapter], Some(false), true, false).await
 }
 
 /// `summarize = None` follows each chapter's toggle, `Some` forces the choice.
@@ -306,9 +314,10 @@ pub(crate) async fn run_chapters(
     chapters: Vec<ChapterId>,
     summarize: Option<bool>,
     translate: bool,
+    resume: bool,
     handle: AppHandle<CefRuntime>,
 ) -> std::result::Result<JobId, Error> {
-    start(handle, chapters, summarize, translate).await
+    start(handle, chapters, summarize, translate, resume).await
 }
 
 async fn start(
@@ -316,6 +325,7 @@ async fn start(
     chapters: Vec<ChapterId>,
     summarize: Option<bool>,
     translate: bool,
+    resume: bool,
 ) -> std::result::Result<JobId, Error> {
     if chapters.is_empty() {
         return Err(anyhow::anyhow!("no chapters were selected").into());
@@ -326,21 +336,25 @@ async fn start(
         .translation
         .target_language
         .to_string();
-    let needs_summary = match summarize {
-        Some(value) => value,
-        None => {
-            let project = handle.state::<CurrentProject>();
-            let project = project.project.lock().await;
-            let project = project.as_ref().context("no project is open")?;
-            let snapshot = project.snapshot();
-            chapters.iter().any(|chapter| {
-                snapshot
-                    .chapter(*chapter)
-                    .ok()
-                    .flatten()
-                    .is_some_and(|chapter| chapter.summarize)
-            })
+    let (needs_summary, origin) = {
+        let project = handle.state::<CurrentProject>();
+        let project = project.project.lock().await;
+        let project = project.as_ref().context("no project is open")?;
+        let snapshot = project.snapshot();
+        let mut needed = false;
+        for chapter in &chapters {
+            let value = snapshot
+                .chapter(*chapter)?
+                .context("chapter does not exist")?;
+            if (!resume || !value.pages.is_empty())
+                && summarize.unwrap_or(value.summarize)
+                && !(resume && summary_ready(&snapshot, *chapter)?)
+            {
+                needed = true;
+                break;
+            }
         }
+        (needed, project.instance_id)
     };
     if needs_summary {
         config.resolved_binary()?;
@@ -351,6 +365,9 @@ async fn start(
         let project = project.project.lock().await;
         let project = project.as_ref().context("no project is open")?;
         let snapshot = project.snapshot();
+        if project.instance_id != origin {
+            return Err(anyhow::anyhow!("the project changed before processing started").into());
+        }
         snapshot
             .chapter(chapters[0])?
             .context("chapter does not exist")?
@@ -358,16 +375,22 @@ async fn start(
     };
     let id = JobId::new();
     let stop = StopToken::default();
+    let permit = handle.state::<Processing>().try_admit()?;
     {
         let processing = handle.state::<Processing>();
         let mut stops = processing.stops.lock();
-        if !stops.is_empty() {
-            return Err(anyhow::anyhow!("another process is already running").into());
-        }
         stops.insert(id, stop.clone());
     }
+    let target = match handle.state::<CurrentProject>().project.bind(origin).await {
+        Ok(target) => target,
+        Err(error) => {
+            handle.state::<Processing>().stops.lock().remove(&id);
+            return Err(error.into());
+        }
+    };
     let job = Job {
         id,
+        project: Some(target.name.clone()),
         state: JobState::Running,
         completed: 0,
         total: chapters.len(),
@@ -382,6 +405,7 @@ async fn start(
         stage: None,
         model: config.model.clone(),
         detail: None,
+        retry: None,
         error: None,
     };
     handle
@@ -391,121 +415,34 @@ async fn start(
         .insert(id, job.clone());
     handle.state::<JobChannel>().channel.publish(job);
 
-    let pipeline = handle.state::<koharu_pipeline::Pipeline>().inner().clone();
     let task = handle.clone();
     drop(tokio::spawn(async move {
-        let mut failure = None;
-        let mut stopped = false;
-        let outcome: Result<()> = async {
-            for (index, chapter) in chapters.iter().copied().enumerate() {
-                if stop.stopped() {
-                    stopped = true;
-                    break;
-                }
-                let (title, toggle, pages) = {
-                    let projects = task.state::<CurrentProject>();
-                    let projects = projects.project.lock().await;
-                    let Some(project) = projects.as_ref() else {
-                        failure = Some("no project is open".to_owned());
-                        break;
-                    };
-                    let snapshot = project.snapshot();
-                    match snapshot.chapter(chapter)? {
-                        Some(value) => (
-                            value.title,
-                            value.summarize,
-                            snapshot.chapter_pages(chapter)?,
-                        ),
-                        None => continue,
-                    }
-                };
-                update(&task, id, |job| {
-                    job.chapter = Some(chapter);
-                    job.chapter_title = Some(title.clone());
-                    job.completed = index;
-                    job.total = chapters.len();
-                    job.page = None;
-                    job.stage = None;
-                    job.detail = None;
-                });
-                let do_summary = summarize.unwrap_or(toggle);
-                if do_summary {
-                    update(&task, id, |job| job.phase = Some(ChapterPhase::Summarize));
-                    match summarize_one(&task, id, chapter, &config, &language, &stop).await {
-                        Ok(true) => {}
-                        Ok(false) => {
-                            stopped = true;
-                            break;
-                        }
-                        Err(error) => {
-                            failure = Some(format!("{error:#}"));
-                            break;
-                        }
-                    }
-                }
-                if !translate {
-                    update(&task, id, |job| job.completed = index + 1);
-                    continue;
-                }
-                update(&task, id, |job| {
-                    job.phase = Some(ChapterPhase::Translate);
-                    job.detail = None;
-                });
-                let snapshot = {
-                    let projects = task.state::<CurrentProject>();
-                    let projects = projects.project.lock().await;
-                    projects.as_ref().map(|project| project.snapshot())
-                };
-                let Some(snapshot) = snapshot else {
-                    failure = Some("no project is open".to_owned());
-                    break;
-                };
-                let pages = if pages.is_empty() {
-                    snapshot.chapter_pages(chapter)?
-                } else {
-                    pages
-                };
-                if pages.is_empty() {
-                    update(&task, id, |job| job.completed = index + 1);
-                    continue;
-                }
-                let request = Request {
-                    operation: Operation::Full,
-                    scope: Scope::Pages(pages),
-                    stop: stop.clone(),
-                    progress: Some(progress_sink(task.clone(), id)),
-                    inpainting_mask: None,
-                };
-                let mut committer = PipelineCommitter::new(task.clone());
-                match pipeline.execute(snapshot, request, &mut committer).await {
-                    Ok(report) if report.status == RunStatus::Stopped => {
-                        stopped = true;
-                        break;
-                    }
-                    Ok(_) => {}
-                    Err(error) => {
-                        failure = Some(format!("{:#}", error));
-                        break;
-                    }
-                }
-                update(&task, id, |job| job.completed = index + 1);
-            }
-            Ok(())
-        }
+        let _permit = permit;
+        let outcome = run_bound(
+            task.clone(),
+            id,
+            target.clone(),
+            chapters,
+            summarize,
+            translate,
+            resume,
+            config,
+            language,
+            stop,
+        )
         .await;
-        if let Err(error) = outcome {
-            if failure.is_none() {
-                tracing::error!(%error, "chapter run failed");
-                failure = Some(format!("{error:#}"));
-            }
-        }
+        let (stopped, failure) = match outcome {
+            Ok(stopped) => (stopped, None),
+            Err(error) => (false, Some(format!("{error:#}"))),
+        };
+        task.state::<CurrentProject>().project.finish(&target).await;
         task.state::<Processing>().stops.lock().remove(&id);
         let job = task
             .state::<Processing>()
             .jobs
             .lock()
-            .remove(&id)
-            .map(|mut job| {
+            .get_mut(&id)
+            .map(|job| {
                 job.state = if stopped {
                     JobState::Stopped
                 } else if failure.is_some() {
@@ -515,7 +452,8 @@ async fn start(
                 };
                 job.detail = None;
                 job.error = failure;
-                job
+                job.retry = None;
+                job.clone()
             });
         if let Some(job) = job {
             task.state::<JobChannel>().channel.publish(job);
@@ -524,19 +462,167 @@ async fn start(
     Ok(id)
 }
 
+#[allow(clippy::too_many_arguments)]
+pub(super) async fn run_bound(
+    task: AppHandle<CefRuntime>,
+    id: JobId,
+    target: JobProject,
+    chapters: Vec<ChapterId>,
+    summarize: Option<bool>,
+    translate: bool,
+    resume: bool,
+    config: SummarizerConfig,
+    language: String,
+    stop: StopToken,
+) -> Result<bool> {
+    let pipeline = task.state::<koharu_pipeline::Pipeline>().inner().clone();
+    let mut failure = None;
+    let mut stopped = false;
+    let outcome: Result<()> = async {
+        for (index, chapter) in chapters.iter().copied().enumerate() {
+            if stop.stopped() {
+                stopped = true;
+                break;
+            }
+            let (title, toggle, pages, summarized) = {
+                let projects = task.state::<CurrentProject>();
+                let (project, _) = projects.project.target(&target).await?;
+                let snapshot = project.snapshot();
+                match snapshot.chapter(chapter)? {
+                    Some(value) => (
+                        value.title,
+                        value.summarize,
+                        snapshot.chapter_pages(chapter)?,
+                        summary_ready(&snapshot, chapter)?,
+                    ),
+                    None => continue,
+                }
+            };
+            update(&task, id, |job| {
+                job.chapter = Some(chapter);
+                job.chapter_title = Some(title.clone());
+                job.completed = index;
+                job.total = chapters.len();
+                job.page = None;
+                job.stage = None;
+                job.detail = None;
+                job.retry = None;
+            });
+            if resume && pages.is_empty() {
+                update(&task, id, |job| job.completed = index + 1);
+                continue;
+            }
+            let do_summary = summarize.unwrap_or(toggle) && !(resume && summarized);
+            if do_summary {
+                update(&task, id, |job| job.phase = Some(ChapterPhase::Summarize));
+                match summarize_one(&task, &target, id, chapter, &config, &language, &stop).await {
+                    Ok(true) => {}
+                    Ok(false) => {
+                        stopped = true;
+                        break;
+                    }
+                    Err(error) => {
+                        failure = Some(format!("{error:#}"));
+                        break;
+                    }
+                }
+            }
+            if !translate {
+                update(&task, id, |job| job.completed = index + 1);
+                continue;
+            }
+            update(&task, id, |job| {
+                job.phase = Some(ChapterPhase::Translate);
+                job.detail = None;
+            });
+            let snapshot = task
+                .state::<CurrentProject>()
+                .project
+                .snapshot(&target)
+                .await?;
+            let pages = if pages.is_empty() {
+                snapshot.chapter_pages(chapter)?
+            } else {
+                pages
+            };
+            let pages = if resume {
+                pipeline.pending_pages(&snapshot, &pages)?
+            } else {
+                pages
+            };
+            if pages.is_empty() {
+                update(&task, id, |job| job.completed = index + 1);
+                continue;
+            }
+            let request = Request {
+                resume,
+                operation: Operation::Full,
+                scope: Scope::Pages(pages),
+                stop: stop.clone(),
+                progress: Some(progress_sink(task.clone(), id)),
+                inpainting_mask: None,
+            };
+            let mut committer = PipelineCommitter::new(task.clone(), target.clone());
+            match pipeline.execute(snapshot, request, &mut committer).await {
+                Ok(report) if report.status == RunStatus::Stopped => {
+                    stopped = true;
+                    break;
+                }
+                Ok(_) => {}
+                Err(error) => {
+                    failure = Some(format!("{:#}", error));
+                    break;
+                }
+            }
+            update(&task, id, |job| job.completed = index + 1);
+        }
+        Ok(())
+    }
+    .await;
+    if let Err(error) = outcome {
+        if failure.is_none() {
+            tracing::error!(%error, "chapter run failed");
+            failure = Some(format!("{error:#}"));
+        }
+    }
+    if let Some(error) = failure {
+        bail!("{error}");
+    }
+    Ok(stopped)
+}
+
+fn summary_ready(snapshot: &koharu_scene::Snapshot, chapter: ChapterId) -> Result<bool> {
+    let value = snapshot
+        .chapter(chapter)?
+        .context("chapter does not exist")?;
+    Ok(value
+        .summary
+        .as_ref()
+        .is_some_and(|text| !text.trim().is_empty())
+        && value
+            .setting
+            .as_ref()
+            .is_some_and(|text| !text.trim().is_empty())
+        && snapshot
+            .wiki()?
+            .files
+            .iter()
+            .any(|file| !file.body.trim().is_empty()))
+}
+
 /// Returns `false` when cancellation was requested.
 async fn summarize_one(
     handle: &AppHandle<CefRuntime>,
+    target: &JobProject,
     id: JobId,
     chapter: ChapterId,
     config: &SummarizerConfig,
     language: &str,
     stop: &StopToken,
 ) -> Result<bool> {
-    let (path, title, labels, wiki) = {
+    let (path, title, labels, wiki, snapshot) = {
         let projects = handle.state::<CurrentProject>();
-        let projects = projects.project.lock().await;
-        let project = projects.as_ref().context("no project is open")?;
+        let (project, _) = projects.project.target(target).await?;
         let snapshot = project.snapshot();
         let value = snapshot
             .chapter(chapter)?
@@ -549,7 +635,13 @@ async fn summarize_one(
         for page in &pages {
             labels.push((*page, snapshot.page(*page)?.page()?.label));
         }
-        (project.path.clone(), value.title, labels, snapshot.wiki()?)
+        (
+            project.path.clone(),
+            value.title,
+            labels,
+            snapshot.wiki()?,
+            snapshot,
+        )
     };
     let workspace = path.join("summaries").join(chapter.to_string());
     if workspace.exists() {
@@ -561,11 +653,6 @@ async fn summarize_one(
     tokio::fs::create_dir_all(workspace.join("wiki")).await?;
     tokio::fs::create_dir_all(workspace.join("chapters")).await?;
     let source = AssetRole::new("source")?;
-    let snapshot = {
-        let projects = handle.state::<CurrentProject>();
-        let projects = projects.project.lock().await;
-        projects.as_ref().context("no project is open")?.snapshot()
-    };
     for (index, (page, _)) in labels.iter().enumerate() {
         let Some(asset) = snapshot.asset(*page, &source)? else {
             bail!("page {} has no source image", index + 1);
@@ -666,10 +753,15 @@ async fn summarize_one(
         bail!("the summarizer did not write any wiki file");
     }
 
-    let commit = {
+    if stop.stopped() {
+        return Ok(false);
+    }
+    {
         let projects = handle.state::<CurrentProject>();
-        let mut projects = projects.project.lock().await;
-        let project = projects.as_mut().context("no project is open")?;
+        let (mut project, _) = projects.project.target(target).await?;
+        if stop.stopped() {
+            return Ok(false);
+        }
         let snapshot = project.snapshot();
         let mut chapters = snapshot.chapters()?;
         let value = chapters
@@ -682,12 +774,7 @@ async fn summarize_one(
             edit.set_project(&updated)?;
             Ok(())
         })?;
-        project.commit_rebased(patch).await?
-    };
-    if let Some(commit) = commit {
-        let projects = handle.state::<CurrentProject>();
-        let mut projects = projects.project.lock().await;
-        if let Some(project) = projects.as_mut() {
+        if let Some(commit) = project.commit_rebased(patch).await? {
             project.record_commit(&commit);
         }
     }
@@ -827,6 +914,49 @@ async fn read_summary(workspace: &Path) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::read_wiki_folder;
+
+    #[tokio::test]
+    async fn resume_reuses_only_committed_summary_prompt_and_wiki_outputs() {
+        use koharu_scene::{Chapter, Chapters, Session, Wiki, WikiFile};
+        let mut session = Session::memory().await.unwrap();
+        let mut chapter = Chapter::new("Chapter 1");
+        let id = chapter.id;
+        chapter.summary = Some("Existing summary".into());
+        let patch = session
+            .snapshot()
+            .patch(|edit| {
+                edit.set_project(&Chapters {
+                    entries: vec![chapter.clone()],
+                })
+            })
+            .unwrap();
+        session.commit(patch).await.unwrap();
+        assert!(!super::summary_ready(&session.snapshot(), id).unwrap());
+        chapter.setting = Some("Translate using the saved conventions".into());
+        let patch = session
+            .snapshot()
+            .patch(|edit| {
+                edit.set_project(&Chapters {
+                    entries: vec![chapter.clone()],
+                })
+            })
+            .unwrap();
+        session.commit(patch).await.unwrap();
+        assert!(!super::summary_ready(&session.snapshot(), id).unwrap());
+        let wiki = Wiki {
+            files: vec![WikiFile {
+                slug: "characters".into(),
+                body: "Saved character facts".into(),
+            }],
+        };
+        let patch = session
+            .snapshot()
+            .patch(|edit| edit.set_project(&wiki))
+            .unwrap();
+        session.commit(patch).await.unwrap();
+        assert!(super::summary_ready(&session.snapshot(), id).unwrap());
+        assert_eq!(session.snapshot().wiki().unwrap(), wiki);
+    }
 
     /// A picked series folder must resolve its `wiki/` subdirectory, and file
     /// names must become the slugs the wiki validates.

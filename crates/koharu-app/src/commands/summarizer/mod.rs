@@ -12,6 +12,7 @@ use specta::Type;
 use tokio::process::Command;
 
 pub(crate) use backend::run_agent;
+pub(crate) use backend::stop_process;
 
 use super::Error;
 

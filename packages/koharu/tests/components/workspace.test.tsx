@@ -136,6 +136,26 @@ function renderWorkspace() {
 }
 
 describe('canvas interaction adapter', () => {
+  it('ignores editor shortcuts while the MangaDex workspace or settings are active', async () => {
+    installProject()
+    const remove = vi.spyOn(commands, 'deleteLayers').mockResolvedValue(null)
+    const undo = vi.spyOn(commands, 'undo').mockResolvedValue(null)
+    renderWorkspace()
+    act(() => useKoharuStore.setState({ workspaceTab: 'mangadex', selectedLayers: ['element'] }))
+    fireEvent.keyDown(window, { key: 'Delete' })
+    fireEvent.keyDown(window, { key: 'Escape' })
+    fireEvent.keyDown(window, { key: 'z', ctrlKey: true })
+    expect(remove).not.toHaveBeenCalled()
+    expect(undo).not.toHaveBeenCalled()
+    expect(useKoharuStore.getState().selectedLayers).toEqual(['element'])
+    act(() => useKoharuStore.setState({ workspaceTab: 'projects', settingsOpen: true }))
+    fireEvent.keyDown(window, { key: 'Delete' })
+    expect(remove).not.toHaveBeenCalled()
+    act(() => useKoharuStore.setState({ settingsOpen: false }))
+    fireEvent.keyDown(window, { key: 'Delete' })
+    await waitFor(() => expect(remove).toHaveBeenCalledWith(['element']))
+  })
+
   it('prefetches only after the authoritative canvas page and generation are active', async () => {
     installProject()
     queryClient.setQueryData(pagesKey, [

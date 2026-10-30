@@ -118,6 +118,7 @@ describe('Tauri runtime', () => {
     act(() => {
       jobChannel.onmessage({
         id: 'job',
+        project: 'Book',
         state: 'running',
         completed: 0,
         total: 4,
@@ -126,6 +127,7 @@ describe('Tauri runtime', () => {
         chapter_title: null,
         phase: null,
         detail: null,
+        retry: null,
         stage: 'detection',
         model: 'model',
         error: null,
@@ -179,14 +181,16 @@ describe('Tauri runtime', () => {
   })
 
   it('refreshes project queries when an autonomous job commits work', async () => {
-    vi.spyOn(commands, 'getProject').mockResolvedValueOnce(null).mockResolvedValue(project)
+    const getProject = vi.spyOn(commands, 'getProject').mockResolvedValue(project)
     const binding = vi.spyOn(commands, 'subscribe').mockResolvedValue(startupState())
     const view = render(createElement(Providers, null, createElement(ProjectProbe)))
-    expect(await screen.findByText('Closed')).toBeInTheDocument()
+    expect(await screen.findByText('Book')).toBeInTheDocument()
+    const previousCalls = getProject.mock.calls.length
 
     const [, jobChannel] = binding.mock.calls[0]
     jobChannel.onmessage({
       id: 'job',
+      project: 'Book',
       state: 'running',
       completed: 1,
       total: 2,
@@ -195,13 +199,57 @@ describe('Tauri runtime', () => {
       chapter_title: null,
       phase: null,
       detail: null,
+      retry: null,
       stage: 'ocr',
       model: 'model',
       error: null,
     })
 
-    expect(await screen.findByText('Book')).toBeInTheDocument()
+    await waitFor(() => expect(getProject.mock.calls.length).toBeGreaterThan(previousCalls))
     view.unmount()
+  })
+
+  it('keeps background progress out of the active editor cache and clears project data on switching', async () => {
+    const { projectKey, pagesKey, pageKey, chaptersKey, chapterKey, queryClient } =
+      await import('@/lib/queries')
+    const { binding, dispose } = await start()
+    queryClient.setQueryData(projectKey, project)
+    queryClient.setQueryData(pagesKey, [{ id: 'a-page' }])
+    queryClient.setQueryData(pageKey, { id: 'a-page' })
+    queryClient.setQueryData(chaptersKey, [{ id: 'a-chapter' }])
+    queryClient.setQueryData(chapterKey('a-chapter'), { summary: 'A draft' })
+    useKoharuStore.setState({ selectedLayers: ['a-layer'], selectedPages: ['a-page'] })
+    const invalidate = vi.spyOn(queryClient, 'invalidateQueries')
+    const [, jobChannel, , , projectChannel] = binding.mock.calls[0]
+    act(() =>
+      jobChannel.onmessage({
+        id: 'background',
+        project: 'B',
+        state: 'running',
+        completed: 12,
+        total: 20,
+        page: 'b-page',
+        chapter: null,
+        chapter_title: null,
+        phase: null,
+        detail: null,
+        retry: null,
+        stage: 'translation',
+        model: 'model',
+        error: null,
+      }),
+    )
+    expect(invalidate).not.toHaveBeenCalled()
+    expect(queryClient.getQueryData(pageKey)).toEqual({ id: 'a-page' })
+    expect(useKoharuStore.getState().selectedLayers).toEqual(['a-layer'])
+    act(() => projectChannel.onmessage({ ...project, name: 'B', active_page: 'b-page' }))
+    expect(queryClient.getQueryData(projectKey)).toMatchObject({ name: 'B' })
+    expect(queryClient.getQueryData(pageKey)).toBeUndefined()
+    expect(queryClient.getQueryData(chapterKey('a-chapter'))).toBeUndefined()
+    expect(useKoharuStore.getState().selectedLayers).toEqual([])
+    expect(useKoharuStore.getState().selectedPages).toEqual(['b-page'])
+    expect(useKoharuStore.getState().jobs.background.project).toBe('B')
+    dispose()
   })
 })
 

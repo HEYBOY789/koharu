@@ -3,6 +3,13 @@ use std::sync::Arc;
 use crate::Stage;
 use koharu_scene::EntityId;
 
+#[derive(Clone, Debug, serde::Serialize, specta::Type)]
+pub struct RetryStatus {
+    pub attempt: u8,
+    pub max_attempts: u8,
+    pub delay_seconds: u32,
+}
+
 #[derive(Clone, Debug)]
 pub enum Progress {
     Started {
@@ -18,6 +25,12 @@ pub enum Progress {
         page: EntityId,
         stage: Stage,
         model: String,
+    },
+    Retrying {
+        page: EntityId,
+        stage: Stage,
+        model: String,
+        retry: RetryStatus,
     },
     Finished {
         page: EntityId,

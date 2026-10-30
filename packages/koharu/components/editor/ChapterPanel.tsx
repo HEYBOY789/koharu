@@ -16,6 +16,7 @@ import {
   useChapter,
   useChapters,
   usePage,
+  useProject,
 } from '@/lib/queries'
 import { useKoharuStore } from '@/lib/store'
 import { commands } from '@koharu/bridge/protocol'
@@ -45,6 +46,7 @@ export function ChapterPanel() {
   const { t } = useTranslation()
   const page = usePage().data
   const chapterId = page?.chapter ?? undefined
+  const project = useProject().data
   const chapter = useChapter(chapterId)
   const chapters = useChapters().data ?? []
   const jobs = useKoharuStore((state) => state.jobs)
@@ -54,6 +56,7 @@ export function ChapterPanel() {
   const [editing, setEditing] = useState(false)
   const [pending, setPending] = useState(false)
   const [runOpen, setRunOpen] = useState(false)
+  const [resume, setResume] = useState(true)
   const [wikiOpen, setWikiOpen] = useState(false)
   const [wikiSlug, setWikiSlug] = useState('')
 
@@ -67,17 +70,19 @@ export function ChapterPanel() {
   // chapter's controls have to yield to a job started from another chapter.
   const running = Object.values(jobs).find((job) => job.state === 'running')
   const busy = Boolean(running)
-  const ownRunning = running?.chapter === chapterId ? running : undefined
+  const currentRunning = running?.project === project?.name ? running : undefined
+  const ownRunning = currentRunning?.chapter === chapterId ? currentRunning : undefined
   if (!data || !chapterId) return null
 
   const position = chapters.findIndex((value) => value.id === chapterId)
   const remaining = chapters.slice(Math.max(position, 0))
   // A chapter run owns a contiguous slice of the roster. `completed` is the
   // current chapter's index inside that slice, so the slice start is derivable.
-  const start = running
-    ? chapters.findIndex((value) => value.id === running.chapter) - running.completed
+  const start = currentRunning
+    ? chapters.findIndex((value) => value.id === currentRunning.chapter) - currentRunning.completed
     : 0
-  const queued = running !== undefined && position >= start && position < start + running.total
+  const queued =
+    currentRunning !== undefined && position >= start && position < start + currentRunning.total
   // The summarizer rewrites this chapter's summary, setting, and wiki when it
   // reaches the chapter, so a save would be overwritten without warning.
   const summarizing = queued && (ownRunning ? ownRunning.phase === 'summarize' : data.summarize)
@@ -122,6 +127,7 @@ export function ChapterPanel() {
       targets,
       summarize ? (fromHere ? null : true) : false,
       translate,
+      fromHere && resume,
     )
       .catch(() => undefined)
       .finally(() => {
@@ -144,9 +150,10 @@ export function ChapterPanel() {
           <Switch
             size='sm'
             checked={data.summarize}
+            disabled={busy || pending}
             onCheckedChange={(checked) => {
               void call(commands.setChapterSummarize, chapterId, checked)
-                .then(() => refresh(chaptersKey, chapterKey(chapterId)))
+                .then(() => refresh(chaptersKey, chapterKey(chapterId), projectKey))
                 .catch(() => undefined)
             }}
           />
@@ -189,7 +196,10 @@ export function ChapterPanel() {
             variant='ghost'
             className='col-span-2 h-6 text-[10px] text-muted-foreground'
             disabled={pending || busy}
-            onClick={() => setRunOpen(true)}
+            onClick={() => {
+              setResume(true)
+              setRunOpen(true)
+            }}
           >
             {t('chapter.runFromHere', { count: remaining.length })}
           </Button>
@@ -214,6 +224,18 @@ export function ChapterPanel() {
             {ownRunning.detail ? (
               <p className='mt-1 line-clamp-2 text-[9px] leading-3.5 text-muted-foreground'>
                 {ownRunning.detail}
+              </p>
+            ) : null}
+            {ownRunning.retry ? (
+              <p
+                role='status'
+                className='mt-1 text-[9px] leading-3.5 break-words text-muted-foreground'
+              >
+                {t('activity.retrying', {
+                  attempt: ownRunning.retry.attempt,
+                  max: ownRunning.retry.max_attempts,
+                  seconds: ownRunning.retry.delay_seconds,
+                })}
               </p>
             ) : null}
           </div>
@@ -369,11 +391,25 @@ export function ChapterPanel() {
               {t('chapter.runFromHereDescription', { count: remaining.length })}
             </DialogDescription>
           </DialogHeader>
+          <label className='flex items-start gap-2 text-xs'>
+            <Switch
+              aria-label={t('chapter.resume')}
+              checked={resume}
+              onCheckedChange={setResume}
+              disabled={busy || pending}
+            />
+            <span>
+              {t('chapter.resume')}
+              <span className='mt-1 block text-[10px] text-muted-foreground'>
+                {t('chapter.resumeDescription')}
+              </span>
+            </span>
+          </label>
           <DialogFooter>
             <Button variant='ghost' onClick={() => setRunOpen(false)}>
               {t('common.cancel')}
             </Button>
-            <Button disabled={busy} onClick={() => run(true, true, true)}>
+            <Button disabled={busy || pending} onClick={() => run(true, true, true)}>
               {t('chapter.start')}
             </Button>
           </DialogFooter>

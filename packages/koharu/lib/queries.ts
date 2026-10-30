@@ -12,6 +12,7 @@ import {
 import { commands, type FontFamily } from '@koharu/bridge/protocol'
 
 import { call } from './backend'
+import { useKoharuStore } from './store'
 
 export const projectKey = ['project'] as const
 export const pagesKey = ['pages'] as const
@@ -65,6 +66,15 @@ export const queryClient = new QueryClient({
 
 export function useProject(enabled = true) {
   return useQuery({ ...projectQuery, enabled })
+}
+
+export function useProjectBusy() {
+  const name = useProject().data?.name
+  return useKoharuStore((state) =>
+    Object.values(state.jobs).some(
+      (job) => job.state === 'running' && (job.project === null || job.project === name),
+    ),
+  )
 }
 
 export function usePages(enabled = true) {

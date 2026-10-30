@@ -1789,8 +1789,11 @@ describe('greenfield editor', () => {
       result.current.run('first', 2)
       result.current.run('second', 3)
     })
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Activity details' })).toBeVisible(),
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Activity details' }))
     await waitFor(() => expect(screen.getAllByRole('status')).toHaveLength(2))
-    expect(screen.getAllByText('Rebuilding index…')).toHaveLength(2)
     expect(command).toHaveBeenNthCalledWith(1, 'first', 2)
     expect(command).toHaveBeenNthCalledWith(2, 'second', 3)
     expect(result.current.busy).toBe(true)
@@ -1802,7 +1805,7 @@ describe('greenfield editor', () => {
     await act(async () => second.reject(new Error('Index failed')))
     await waitFor(() => expect(screen.queryByRole('status')).not.toBeInTheDocument())
     expect(result.current.busy).toBe(false)
-    expect(screen.queryByRole('complementary', { name: 'Activity' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('region', { name: 'Activity' })).not.toBeInTheDocument()
   })
 
   it('keeps running work visible and stoppable', async () => {
@@ -1812,6 +1815,7 @@ describe('greenfield editor', () => {
         job: {
           state: 'running',
           id: 'job',
+          project: 'Book',
           completed: 1,
           total: 4,
           page: 'page',
@@ -1819,6 +1823,7 @@ describe('greenfield editor', () => {
           chapter_title: null,
           phase: null,
           detail: null,
+          retry: null,
           stage: 'ocr',
           model: 'manga-ocr',
           error: null,
@@ -1838,11 +1843,12 @@ describe('greenfield editor', () => {
     ])
     const stop = vi.spyOn(commands, 'stopJob').mockResolvedValue(null)
     render(<ActivityCenter />)
+    fireEvent.click(screen.getByRole('button', { name: 'Activity details' }))
     expect(screen.getByText('25%')).toBeInTheDocument()
     // Separate elements, so a long label truncates without taking the model.
     expect(screen.getByText('Page 1: cover.png')).toBeInTheDocument()
     expect(screen.getByText('manga-ocr')).toBeInTheDocument()
-    fireEvent.click(screen.getByRole('button', { name: 'Stop' }))
+    fireEvent.click(screen.getAllByRole('button', { name: 'Stop' })[0])
     await waitFor(() => expect(stop).toHaveBeenCalledWith('job'))
   })
 
@@ -1870,7 +1876,8 @@ describe('greenfield editor', () => {
 
     render(<ActivityCenter />)
 
-    expect(screen.getByText('Downloading 2 files')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Activity details' }))
+    expect(screen.getAllByText('Downloading 2 files')).toHaveLength(2)
     expect(screen.getByText('50%')).toBeInTheDocument()
     expect(screen.getAllByRole('progressbar')).toHaveLength(1)
     expect(screen.queryByText('one.ttf')).not.toBeInTheDocument()

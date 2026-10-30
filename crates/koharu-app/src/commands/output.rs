@@ -1,21 +1,16 @@
 use anyhow::{Context as _, Result};
-use futures::future::try_join_all;
 use image::{
     ExtendedColorType, ImageEncoder as _,
     codecs::png::{CompressionType, FilterType, PngEncoder},
 };
+use koharu_pipeline::StopToken;
 use koharu_psd::{PsdExportOptions, export_page};
 use koharu_rasterizer::{Raster, RasterOptions, Rasterizer};
 use koharu_renderer::{Frame, Renderer};
 use koharu_scene::{AssetRole, Chapters, EntityId, Snapshot};
-use rayon::prelude::*;
 use serde::Deserialize;
 use specta::Type;
-use std::{
-    collections::{HashMap, HashSet},
-    io::Write as _,
-    sync::Arc,
-};
+use std::{collections::HashSet, io::Write as _, path::PathBuf, sync::Arc};
 use tauri::{State, WebviewWindow, ipc::IpcResponse};
 use tauri_runtime_cef::CefRuntime;
 
@@ -69,16 +64,46 @@ pub(crate) async fn export(
     else {
         return Ok(());
     };
+    export_snapshot(name, snapshot, format, destination, &desktop, None).await?;
+    Ok(())
+}
+
+pub(crate) async fn export_snapshot(
+    name: String,
+    snapshot: Snapshot,
+    format: ExportFormat,
+    destination: PathBuf,
+    desktop: &Desktop,
+    stop: Option<&StopToken>,
+) -> Result<()> {
+    let pages = snapshot.pages().map(|page| page.id()).collect::<Vec<_>>();
     let groups = export_groups(&snapshot.chapters()?, &pages);
     let renderer = desktop.renderer();
     let rasterizer = desktop.rasterizer().await?;
-    let frames = try_join_all(pages.iter().map(|&page| renderer.render(&snapshot, page))).await?;
-    let (extension, images) = match format {
-        ExportFormat::Png | ExportFormat::Cbz => {
-            let images = tokio_rayon::spawn(move || {
-                frames
-                    .par_iter()
-                    .map(|frame| -> Result<_> {
+    // A book may contain hundreds of pages. Keep one prepared frame and encoded
+    // image in memory instead of retaining the entire rendered book.
+    for (folder, members) in groups {
+        let width = members.len().to_string().len().max(4);
+        let directory = folder
+            .as_ref()
+            .map_or_else(|| destination.clone(), |folder| destination.join(folder));
+        if !matches!(format, ExportFormat::Cbz) {
+            tokio::fs::create_dir_all(&directory).await?;
+        }
+        let mut archive = if matches!(format, ExportFormat::Cbz) {
+            Some(zip::ZipWriter::new(tempfile::NamedTempFile::new_in(
+                &destination,
+            )?))
+        } else {
+            None
+        };
+        for (ordinal, page_id) in members.iter().enumerate() {
+            anyhow::ensure!(!stop.is_some_and(StopToken::stopped), "export stopped");
+            let frame = renderer.render(&snapshot, *page_id).await?;
+            let (extension, bytes) = match format {
+                ExportFormat::Png | ExportFormat::Cbz => {
+                    let rasterizer = Arc::clone(&rasterizer);
+                    let bytes = tokio_rayon::spawn(move || -> Result<Vec<u8>> {
                         let image = rasterizer
                             .rasterize(&frame.raster_frame()?, RasterOptions::default())?
                             .image;
@@ -96,73 +121,55 @@ pub(crate) async fn export(
                         )?;
                         Ok(bytes)
                     })
-                    .collect::<Result<Vec<_>>>()
-            })
-            .await?;
-            ("png", images)
-        }
-        ExportFormat::Psd => {
-            let options = PsdExportOptions::default();
-            let images = try_join_all(
-                frames
-                    .iter()
-                    .map(|frame| export_page(Arc::clone(&rasterizer), &snapshot, frame, &options)),
-            )
-            .await?;
-            ("psd", images)
-        }
-    };
-    let mut images = pages.iter().copied().zip(images).collect::<HashMap<_, _>>();
-    tokio_rayon::spawn(move || -> Result<()> {
-        for (folder, members) in &groups {
-            let width = members.len().to_string().len().max(4);
-            let mut archive = if matches!(format, ExportFormat::Cbz) {
-                Some(zip::ZipWriter::new(tempfile::NamedTempFile::new_in(
-                    &destination,
-                )?))
-            } else {
-                None
+                    .await?;
+                    ("png", bytes)
+                }
+                ExportFormat::Psd => (
+                    "psd",
+                    export_page(
+                        Arc::clone(&rasterizer),
+                        &snapshot,
+                        &frame,
+                        &PsdExportOptions::default(),
+                    )
+                    .await?,
+                ),
             };
-            for (ordinal, page_id) in members.iter().enumerate() {
-                let page = snapshot.page(*page_id)?.page()?;
-                let bytes = images
-                    .remove(page_id)
-                    .context("a rendered page went missing during export")?;
-                let name = format!(
-                    "{:0width$}_{}.{extension}",
-                    ordinal + 1,
-                    page_stem(&page.label),
-                    width = width,
-                );
+            let page = snapshot.page(*page_id)?.page()?;
+            let filename = format!(
+                "{:0width$}_{}.{extension}",
+                ordinal + 1,
+                page_stem(&page.label),
+                width = width,
+            );
+            let target = directory.join(&filename);
+            archive = tokio::task::spawn_blocking(move || -> Result<_> {
                 if let Some(archive) = &mut archive {
                     // PNG data is already compressed.
                     let options = zip::write::SimpleFileOptions::default()
                         .compression_method(zip::CompressionMethod::Stored);
-                    archive.start_file(name, options)?;
+                    archive.start_file(filename, options)?;
                     archive.write_all(&bytes)?;
                 } else {
-                    let directory = match folder {
-                        Some(folder) => {
-                            let directory = destination.join(folder);
-                            std::fs::create_dir_all(&directory)?;
-                            directory
-                        }
-                        None => destination.clone(),
-                    };
-                    std::fs::write(directory.join(name), bytes)?;
+                    std::fs::write(target, bytes)?;
                 }
-            }
-            if let Some(archive) = archive {
-                let name = match folder {
-                    Some(folder) => format!("{folder}.cbz"),
-                    None => format!("{name}.cbz"),
-                };
-                archive.finish()?.persist(destination.join(name))?;
-            }
+                Ok(archive)
+            })
+            .await??;
         }
-        Ok(())
-    })
-    .await?;
+        if let Some(archive) = archive {
+            let filename = match folder {
+                Some(folder) => format!("{folder}.cbz"),
+                None => format!("{name}.cbz"),
+            };
+            let target = destination.join(filename);
+            tokio::task::spawn_blocking(move || -> Result<()> {
+                archive.finish()?.persist(target)?;
+                Ok(())
+            })
+            .await??;
+        }
+    }
     Ok(())
 }
 

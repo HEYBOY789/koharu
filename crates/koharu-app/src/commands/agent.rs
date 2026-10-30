@@ -3,7 +3,9 @@ mod host;
 use std::{collections::HashMap, sync::Arc};
 
 use anyhow::{Context as _, Result, anyhow};
-use koharu_agent::{Account, Agent, Codex, CodexModel, Config, Control, Event, LoginEvent, RunId};
+use koharu_agent::{
+    Account, Agent, AgentModel, Backend, Codex, Config, Control, Event, LoginEvent, RunId,
+};
 use parking_lot::Mutex;
 use serde::Serialize;
 use specta::Type;
@@ -17,9 +19,11 @@ use super::Error;
 #[derive(Clone, Debug, Serialize, Type)]
 pub struct AgentStatus {
     pub account: Option<Account>,
-    pub models: Vec<CodexModel>,
+    pub models: Vec<AgentModel>,
     pub config: Config,
     pub running: Option<RunId>,
+    pub ready: bool,
+    pub error: Option<String>,
 }
 
 pub(crate) struct AgentState {
@@ -27,6 +31,7 @@ pub(crate) struct AgentState {
     runs: Mutex<HashMap<RunId, Control>>,
     login: Mutex<Option<Control>>,
     idle: Notify,
+    transition: tokio::sync::Mutex<()>,
 }
 
 impl AgentState {
@@ -36,35 +41,38 @@ impl AgentState {
             runs: Mutex::new(HashMap::new()),
             login: Mutex::new(None),
             idle: Notify::new(),
+            transition: tokio::sync::Mutex::new(()),
         })
     }
 
     async fn status(&self) -> Result<AgentStatus> {
-        let mut account = self.agent.codex().account()?;
-        let models = if account.is_some() {
+        let config = self.agent.config()?;
+        let account = if config.backend == Backend::Codex {
+            self.agent.codex().account()?
+        } else {
+            None
+        };
+        let (models, error) = if config.backend != Backend::Codex || account.is_some() {
             match self.agent.models().await {
-                Ok(models) => models,
-                Err(error) => {
-                    account = self.agent.codex().account()?;
-                    if account.is_some() {
-                        return Err(error);
-                    }
-                    self.agent.clear().await;
-                    Vec::new()
-                }
+                Ok(models) => (models, None),
+                Err(error) => (Vec::new(), Some(format!("{error:#}"))),
             }
         } else {
-            Vec::new()
+            (Vec::new(), None)
         };
+        let ready = !models.is_empty() && error.is_none();
         Ok(AgentStatus {
             account,
             models,
-            config: self.agent.config()?,
+            config,
             running: self.runs.lock().keys().next().copied(),
+            ready,
+            error,
         })
     }
 
     pub(crate) async fn reset(&self) {
+        let _transition = self.transition.lock().await;
         if let Some(login) = self.login.lock().as_ref() {
             login.cancel();
         }
@@ -149,7 +157,16 @@ pub(crate) async fn save_agent_config(
     config: Config,
     state: State<'_, AgentState>,
 ) -> std::result::Result<Config, Error> {
-    Ok(state.agent.save_config(config)?)
+    let _transition = state.transition.lock().await;
+    if !state.runs.lock().is_empty() || state.login.lock().is_some() {
+        return Err(anyhow!("wait for the current agent request or sign-in to finish").into());
+    }
+    let changed = state.agent.config()? != config;
+    let saved = state.agent.save_config(config)?;
+    if changed {
+        state.agent.clear().await;
+    }
+    Ok(saved)
 }
 
 #[tauri::command]
@@ -164,7 +181,8 @@ pub(crate) async fn run_agent(
     if prompt.is_empty() {
         return Err(anyhow!("message cannot be empty").into());
     }
-    if state.agent.codex().account()?.is_none() {
+    let _transition = state.transition.lock().await;
+    if state.agent.config()?.backend == Backend::Codex && state.agent.codex().account()?.is_none() {
         return Err(anyhow!("Codex is not signed in").into());
     }
     let run = RunId::new();

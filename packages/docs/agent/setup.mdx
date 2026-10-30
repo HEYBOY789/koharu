@@ -4,7 +4,21 @@ description: 'Sign in with ChatGPT and configure the integrated project assistan
 icon: 'robot'
 ---
 
-Koharu Agent is a Codex client inside the editor. It uses ChatGPT device-code sign-in; you do not enter an OpenAI API key for the Agent.
+Koharu Agent can use Codex, Pi, or AGY inside the editor. Open a project, select **Agent** on the right, then choose **Agent backend**. Each backend uses its own sign-in. Changing backend, model, or setup starts a new conversation; configuration is locked while a request runs.
+
+## Pi and AGY
+
+Install the CLI and sign in with it first. Pi requires version 1.4 or newer in the 1.x series (`@earendil-works/pi-coding-agent`); AGY 1.4.11 was used for verification. Select **Pi** or **AGY**, then use **Check connection** to discover its models. Neither option requires a Codex account. Koharu reports missing executables, unsupported CLI versions, unavailable models and sign-in errors in the panel.
+
+**Advanced setup** accepts the CLI executable or JavaScript entry point, Node executable when needed, a model ID and an optional reasoning level. Empty paths use automatic detection; Automatic model/reasoning uses the CLI's defaults. Pi can use `dist/cli.js` from its installed package. AGY uses `agy.exe` on Windows.
+
+Koharu keeps one CLI process for the conversation, provides its project tools through a private connection, and revokes tool access between requests. Closing/changing the project or configuration closes the CLI session. Stop retains completed undoable edits and terminates the CLI request; after a CLI failure or cancellation the next request starts a fresh CLI session with the current project context.
+
+The CLI runs in a private temporary workspace. Koharu does not change global MCP configuration, install a global extension, or copy CLI credentials. Pi uses an explicitly loaded extension with built-in file/shell tools disabled. AGY uses a workspace plugin and an agent with no built-in tool components; its MCP tools are injected by the CLI.
+
+## Codex
+
+Codex uses ChatGPT device-code sign-in; you do not enter an OpenAI API key for the editor Agent.
 
 <Steps>
   <Step title='Open the Agent panel'>Open a project and select **Agent** on the right.</Step>
@@ -38,3 +52,7 @@ The Agent starts with the open project's semantic state. It renders and attaches
 <Card title='Work with a project' icon='comment' href='/agent/projects'>
   Give the Agent a precise scope, review its edits, and use project history.
 </Card>
+
+## Platforms
+
+These backends are source integrations for Windows and Linux. Build Koharu for the target OS and install/sign in with the CLI and Node on that machine. Paths are detected locally; Windows executable paths and credentials are not copied to Linux. Windows cancellation stops the process tree; Unix cancellation stops the private process group. The current implementation was exercised on Windows; Linux execution has not yet been verified.

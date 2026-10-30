@@ -3,7 +3,10 @@ mod inpainting;
 mod ocr;
 mod translation;
 
-use std::{collections::BTreeSet, sync::Arc};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::Arc,
+};
 
 use anyhow::Result;
 use async_trait::async_trait;
@@ -16,12 +19,15 @@ use crate::{Bounds, ImageCache, InpaintingMask, PipelineConfig, Stage};
 
 #[derive(Clone)]
 pub(crate) struct StageInput {
-    scene: koharu_scene::Snapshot,
-    page: EntityId,
-    entities: Option<Arc<BTreeSet<EntityId>>>,
-    region: Option<Bounds>,
+    pub(crate) scene: koharu_scene::Snapshot,
+    pub(crate) page: EntityId,
+    pub(crate) entities: Option<Arc<BTreeSet<EntityId>>>,
+    pub(crate) region: Option<Bounds>,
     images: Arc<ImageCache>,
-    inpainting_mask: Option<InpaintingMask>,
+    pub(crate) inpainting_mask: Option<InpaintingMask>,
+    pub(crate) resume: bool,
+    // One immutable page job owns these uncommitted results across attempts.
+    translated: Arc<tokio::sync::Mutex<BTreeMap<EntityId, String>>>,
 }
 
 impl StageInput {
@@ -34,6 +40,8 @@ impl StageInput {
         inpainting_mask: Option<InpaintingMask>,
     ) -> Self {
         Self {
+            translated: Arc::default(),
+            resume: false,
             scene,
             page,
             entities,
@@ -45,6 +53,11 @@ impl StageInput {
 
     pub(crate) fn page(&self) -> EntityId {
         self.page
+    }
+
+    pub(crate) fn with_resume(mut self, resume: bool) -> Self {
+        self.resume = resume;
+        self
     }
 
     fn contains_entity(&self, entity: EntityId) -> Result<bool> {
@@ -59,7 +72,7 @@ impl StageInput {
 }
 
 #[async_trait]
-trait StageProcessor: Send + Sync {
+pub(crate) trait StageProcessor: Send + Sync {
     fn model(&self) -> &'static str;
     fn skip(&self, _input: &StageInput) -> Result<bool> {
         Ok(false)
@@ -70,32 +83,47 @@ trait StageProcessor: Send + Sync {
 }
 
 pub(crate) struct Stages {
-    detection: detection::Processor,
-    ocr: ocr::Processor,
-    translation: translation::Processor,
-    inpainting: inpainting::Processor,
+    language: String,
+    detection: Box<dyn StageProcessor>,
+    ocr: Box<dyn StageProcessor>,
+    translation: Box<dyn StageProcessor>,
+    inpainting: Box<dyn StageProcessor>,
 }
 
 impl Stages {
+    #[cfg(test)]
+    pub(crate) fn replace_translation(&mut self, processor: Box<dyn StageProcessor>) {
+        self.translation = processor;
+    }
     pub(crate) fn new(
         config: &PipelineConfig,
         translator: koharu_translator::Translator,
         device: &koharu_ml::Device,
     ) -> Result<Self> {
         Ok(Self {
-            detection: detection::Processor::new(config.detection()?, device.clone()),
-            ocr: ocr::Processor::new(config.ocr.clone(), device.clone()),
-            translation: translation::Processor::new(config.translation.clone(), translator),
-            inpainting: inpainting::Processor::new(config.inpainting()?, device.clone())?,
+            language: config.translation.target_language.tag().to_owned(),
+            detection: Box::new(detection::Processor::new(
+                config.detection()?,
+                device.clone(),
+            )),
+            ocr: Box::new(ocr::Processor::new(config.ocr.clone(), device.clone())),
+            translation: Box::new(translation::Processor::new(
+                config.translation.clone(),
+                translator,
+            )),
+            inpainting: Box::new(inpainting::Processor::new(
+                config.inpainting()?,
+                device.clone(),
+            )?),
         })
     }
 
     fn processor(&self, stage: Stage) -> &dyn StageProcessor {
         match stage {
-            Stage::Detection => &self.detection,
-            Stage::Ocr => &self.ocr,
-            Stage::Translation => &self.translation,
-            Stage::Inpainting => &self.inpainting,
+            Stage::Detection => self.detection.as_ref(),
+            Stage::Ocr => self.ocr.as_ref(),
+            Stage::Translation => self.translation.as_ref(),
+            Stage::Inpainting => self.inpainting.as_ref(),
         }
     }
 
@@ -104,7 +132,35 @@ impl Stages {
     }
 
     pub(crate) fn skip(&self, stage: Stage, input: &StageInput) -> Result<bool> {
+        if input.resume
+            && input.entities.is_none()
+            && input.region.is_none()
+            && input.inpainting_mask.is_none()
+        {
+            return crate::resume::complete(&input.scene, input.page, stage, &self.language);
+        }
         self.processor(stage).skip(input)
+    }
+
+    pub(crate) fn pending_pages(
+        &self,
+        scene: &Snapshot,
+        pages: &[EntityId],
+    ) -> Result<Vec<EntityId>> {
+        let mut pending = Vec::new();
+        for page in pages {
+            let mut complete = true;
+            for stage in Stage::ALL {
+                if !crate::resume::complete(scene, *page, stage, &self.language)? {
+                    complete = false;
+                    break;
+                }
+            }
+            if !complete {
+                pending.push(*page);
+            }
+        }
+        Ok(pending)
     }
 
     pub(crate) async fn load(&self, stage: Stage) -> Result<()> {
@@ -128,6 +184,11 @@ fn generation(producer: &str, model: &str) -> Result<Generation> {
 
 fn finish(edit: Edit) -> Result<Patch> {
     edit.finish().map_err(Into::into)
+}
+
+fn checkpoint(input: &StageInput, stage: Stage, language: &str, mut edit: Edit) -> Result<Patch> {
+    crate::resume::record(input, stage, language, &mut edit)?;
+    finish(edit)
 }
 
 #[cfg(test)]

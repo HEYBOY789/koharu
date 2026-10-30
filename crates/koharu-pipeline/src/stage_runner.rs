@@ -17,9 +17,28 @@ use crate::{
 pub(crate) struct StageRunner {
     stages: Stages,
     accelerator: AcceleratorGate,
+    retry_delays: Vec<Duration>,
 }
 
 impl StageRunner {
+    #[cfg(test)]
+    pub(crate) fn set_retry_delays(&mut self, delays: Vec<Duration>) {
+        self.retry_delays = delays;
+    }
+    #[cfg(test)]
+    pub(crate) fn replace_translation(
+        &mut self,
+        processor: Box<dyn crate::stages::StageProcessor>,
+    ) {
+        self.stages.replace_translation(processor);
+    }
+    pub(crate) fn pending_pages(
+        &self,
+        scene: &koharu_scene::Snapshot,
+        pages: &[EntityId],
+    ) -> Result<Vec<EntityId>> {
+        self.stages.pending_pages(scene, pages)
+    }
     pub(crate) fn new(
         config: &PipelineConfig,
         translator: koharu_translator::Translator,
@@ -29,6 +48,10 @@ impl StageRunner {
         Ok(Self {
             stages: Stages::new(config, translator, device)?,
             accelerator: AcceleratorGate::new(device, resources),
+            retry_delays: [15, 30, 60, 120, 300]
+                .into_iter()
+                .map(Duration::from_secs)
+                .collect(),
         })
     }
 
@@ -48,6 +71,50 @@ impl StageRunner {
     }
 
     async fn run_with_recovery(
+        &self,
+        job: &StageJob,
+        model: &str,
+    ) -> std::result::Result<StageOutcome, PipelineError> {
+        let mut retries = 0;
+        loop {
+            let failure = match self.run_with_memory_recovery(job, model).await {
+                Ok(outcome) => return Ok(outcome),
+                Err(failure) => failure,
+            };
+            if job.stop.stopped() {
+                return Ok(StageOutcome::Stopped);
+            }
+            let Some(delay) = self
+                .retry_delays
+                .get(retries)
+                .and_then(|&backoff| failure.translation_retry_delay(backoff))
+            else {
+                return Err(failure);
+            };
+            retries += 1;
+            progress::emit(
+                job.progress.as_ref(),
+                Progress::Retrying {
+                    page: job.input.page(),
+                    stage: job.stage,
+                    model: model.to_owned(),
+                    retry: crate::RetryStatus {
+                        attempt: retries as u8,
+                        max_attempts: self.retry_delays.len() as u8,
+                        delay_seconds: delay.as_secs() as u32,
+                    },
+                },
+            );
+            tracing::warn!(stage = %job.stage, page = %job.input.page(), attempt = retries, delay_seconds = delay.as_secs(), "waiting to retry a temporary translation outage");
+            // The failed attempt released the accelerator lane. Keep the same
+            // page job and inputs so committed pages and chapter wiki stay intact.
+            if !wait_for_retry(delay, &job.stop).await {
+                return Ok(StageOutcome::Stopped);
+            }
+        }
+    }
+
+    async fn run_with_memory_recovery(
         &self,
         job: &StageJob,
         model: &str,
@@ -148,6 +215,20 @@ impl StageRunner {
     }
 }
 
+async fn wait_for_retry(delay: Duration, stop: &StopToken) -> bool {
+    let deadline = tokio::time::Instant::now() + delay;
+    loop {
+        if stop.stopped() {
+            return false;
+        }
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        if remaining.is_zero() {
+            return true;
+        }
+        tokio::time::sleep(remaining.min(Duration::from_millis(100))).await;
+    }
+}
+
 struct AttemptFailure {
     kind: ErrorKind,
     error: anyhow::Error,
@@ -197,4 +278,25 @@ pub(crate) struct StageCompletion {
     pub(crate) model: String,
     pub(crate) elapsed: Duration,
     pub(crate) outcome: std::result::Result<StageOutcome, PipelineError>,
+}
+
+#[cfg(test)]
+mod tests {
+    #[tokio::test]
+    async fn automatic_recovery_wait_can_be_cancelled_without_waiting_minutes() {
+        use std::time::Duration;
+        let stop = crate::StopToken::default();
+        let waiting_stop = stop.clone();
+        let waiting = tokio::spawn(async move {
+            super::wait_for_retry(Duration::from_secs(300), &waiting_stop).await
+        });
+        tokio::task::yield_now().await;
+        stop.stop();
+        assert!(
+            !tokio::time::timeout(Duration::from_millis(500), waiting)
+                .await
+                .unwrap()
+                .unwrap()
+        );
+    }
 }

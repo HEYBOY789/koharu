@@ -24,7 +24,7 @@ use koharu_scene::{
 use serde::{Deserialize, Serialize};
 use specta::Type;
 
-use super::{StageInput, StageProcessor, finish, generation};
+use super::{StageInput, StageProcessor, checkpoint, generation};
 use crate::{InpaintingModel, ModelCell};
 
 const PRODUCER: &str = "dev.koharu.pipeline.inpainting";
@@ -177,7 +177,12 @@ impl Model {
     async fn run(&self, input: StageInput) -> Result<koharu_scene::Patch> {
         let mut prepared = prepare(&input).await?;
         if prepared.mask.as_raw().iter().all(|value| *value == 0) {
-            return finish(input.scene.edit());
+            return checkpoint(
+                &input,
+                crate::Stage::Inpainting,
+                "",
+                input.scene.edit_as(generation(PRODUCER, "no-mask")?),
+            );
         }
         let mask = prepared.mask.clone();
         let original = prepared.original.clone();
@@ -364,7 +369,7 @@ impl Model {
                 },
             ),
         )?;
-        finish(edit)
+        checkpoint(&input, crate::Stage::Inpainting, "", edit)
     }
 }
 

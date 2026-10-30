@@ -41,6 +41,9 @@ pub(crate) fn http() -> Result<Client> {
     }
     let config = config()?;
     let client = Client::builder()
+        // Desktop telemetry also enables native-tls; keep feature unification from changing
+        // the transport backend between library tests and the packaged Windows app.
+        .tls_backend_rustls()
         .user_agent(USER_AGENT)
         .connect_timeout(Duration::from_secs(config.connect_timeout.max(1)))
         .http2_adaptive_window(true)

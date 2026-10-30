@@ -49,6 +49,13 @@ pub(crate) struct ImportedPage {
 pub(crate) struct ImportedChapter {
     pub(crate) title: String,
     pub(crate) pages: Vec<ImportedPage>,
+    pub(crate) source: Option<ChapterSource>,
+}
+
+pub(crate) struct ChapterSource {
+    pub(crate) url: String,
+    pub(crate) title: String,
+    pub(crate) number: f64,
 }
 
 fn decode(path: &Path, source: EncodedPage) -> Result<ImportedPage> {
@@ -111,6 +118,7 @@ pub(super) fn import_folder(root: &Path) -> Result<Vec<ImportedChapter>> {
         chapters.push(ImportedChapter {
             title,
             pages: import_group(root, root_files)?,
+            source: None,
         });
     }
     for folder in folders {
@@ -122,6 +130,7 @@ pub(super) fn import_folder(root: &Path) -> Result<Vec<ImportedChapter>> {
         chapters.push(ImportedChapter {
             title,
             pages: import_group(&folder, files)?,
+            source: None,
         });
     }
     if chapters.is_empty() {
@@ -183,7 +192,7 @@ fn is_page(path: &Path) -> bool {
         .is_some_and(|extension| extension.parse::<Format>().is_ok())
 }
 
-fn import_presorted(paths: Vec<PathBuf>) -> Result<Vec<ImportedPage>> {
+pub(super) fn import_presorted(paths: Vec<PathBuf>) -> Result<Vec<ImportedPage>> {
     let mut groups = paths
         .into_par_iter()
         .map(|path| -> Result<Vec<ImportedPage>> {

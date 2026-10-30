@@ -1,8 +1,8 @@
 'use client'
 
 import { Channel } from '@tauri-apps/api/core'
-import { Bot, CircleStop, LogOut, Send, Sparkles } from 'lucide-react'
-import { useEffect, useMemo, useState } from 'react'
+import { Bot, CircleStop, LogOut, RefreshCw, Send, Sparkles } from 'lucide-react'
+import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { call } from '@/lib/backend'
@@ -10,6 +10,8 @@ import { pageKey, pagesKey, projectKey, refresh } from '@/lib/queries'
 import {
   commands,
   type AgentStatus,
+  type Backend,
+  type CliConfig,
   type Config,
   type Event,
   type LoginEvent,
@@ -18,14 +20,9 @@ import {
 } from '@koharu/bridge/protocol'
 import { Badge } from '@koharu/ui/components/badge'
 import { Button } from '@koharu/ui/components/button'
+import { Input } from '@koharu/ui/components/input'
+import { NativeSelect, NativeSelectOption } from '@koharu/ui/components/native-select'
 import { ScrollArea } from '@koharu/ui/components/scroll-area'
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@koharu/ui/components/select'
 import { Textarea } from '@koharu/ui/components/textarea'
 
 interface ConversationMessage {
@@ -38,246 +35,466 @@ interface ConversationMessage {
 export function AgentPanel() {
   const { t } = useTranslation()
   const [status, setStatus] = useState<AgentStatus | null>(null)
+  const [error, setError] = useState('')
+  const [checking, setChecking] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [pending, setPending] = useState(false)
+  const [draft, setDraft] = useState<CliConfig>({
+    binary: null,
+    node: null,
+    reasoning: null,
+    model: null,
+  })
   const [loginEvent, setLoginEvent] = useState<LoginEvent | null>(null)
   const [loggingIn, setLoggingIn] = useState(false)
   const [messages, setMessages] = useState<ConversationMessage[]>([])
   const [prompt, setPrompt] = useState('')
   const [running, setRunning] = useState<RunId | null>(null)
   const [activity, setActivity] = useState<string | null>(null)
+  const alive = useRef(true)
+  const checks = useRef(0)
+  const conversation = useRef(0)
+  const requestPending = useRef(false)
 
   useEffect(() => {
-    void call(commands.getAgentStatus)
-      .then(setStatus)
-      .catch(() => undefined)
+    alive.current = true
+    void checkConnection()
+    return () => {
+      alive.current = false
+      checks.current++
+    }
   }, [])
 
-  const selectedModel = useMemo(
-    () =>
-      status?.models.find((model) => model.id === status.config.model) ?? status?.models[0] ?? null,
-    [status],
-  )
+  useEffect(() => {
+    const backend = status?.config.backend
+    if (status && backend && backend !== 'codex')
+      setDraft(status.config[backend] ?? { binary: null, node: null, reasoning: null, model: null })
+  }, [status?.config])
 
-  if (!status) {
-    return (
-      <div className='grid min-h-0 flex-1 place-items-center p-6 text-[11px] text-muted-foreground'>
-        {t('agent.loading')}
-      </div>
-    )
+  const busy = running !== null || pending || saving || checking || loggingIn
+  const backend = status?.config.backend ?? 'codex'
+  const codex = {
+    model: status?.config.codex?.model ?? null,
+    reasoning: status?.config.codex?.reasoning ?? 'medium',
   }
+  const cli = backend === 'codex' ? null : status?.config[backend]
+  const model = backend === 'codex' ? codex.model : cli?.model
+  const selectedModel = model
+    ? status?.models.find((candidate) => candidate.id === model)
+    : backend === 'codex'
+      ? status?.models[0]
+      : undefined
 
-  if (!status.account) {
-    const code = loginEvent?.type === 'device_code' ? loginEvent.user_code : null
+  if (!status)
     return (
-      <div className='flex min-h-0 flex-1 flex-col items-center justify-center p-6 text-center'>
-        <div className='grid size-11 place-items-center rounded-2xl bg-primary/10 text-primary'>
-          <Sparkles className='size-5' />
-        </div>
-        <h3 className='mt-4 text-sm font-semibold'>{t('agent.signInTitle')}</h3>
-        <p className='mt-1 max-w-64 text-[11px] leading-5 text-muted-foreground'>
-          {t('agent.signInDescription')}
+      <div className='grid min-h-0 flex-1 content-center justify-items-center gap-3 p-4 text-xs'>
+        <p
+          role={error ? 'alert' : 'status'}
+          className={error ? 'break-words text-destructive' : 'text-muted-foreground'}
+        >
+          {error || t('agent.loading')}
         </p>
-        {code ? (
-          <div className='mt-4 w-full max-w-64 rounded-xl border bg-muted/40 p-3'>
-            <p className='text-[10px] text-muted-foreground'>{t('agent.deviceCode')}</p>
-            <p className='mt-1 font-mono text-lg font-semibold tracking-[0.18em] select-text'>
-              {code}
-            </p>
-            <p className='mt-1 text-[10px] leading-4 text-muted-foreground'>
-              {t('agent.deviceCodeHint')}
-            </p>
-          </div>
-        ) : null}
-        <Button className='mt-4 w-full max-w-64' disabled={loggingIn} onClick={() => void login()}>
-          {loggingIn ? t('agent.signingIn') : t('agent.signIn')}
-        </Button>
+        {error && (
+          <Button size='sm' disabled={checking} onClick={() => void checkConnection()}>
+            {t('agent.checkConnection')}
+          </Button>
+        )}
       </div>
     )
-  }
 
   return (
     <div className='flex min-h-0 flex-1 flex-col'>
       <div className='grid shrink-0 gap-2 border-b px-3 py-2.5'>
-        <div className='flex min-w-0 items-center gap-2'>
-          <div className='min-w-0 flex-1'>
-            <p className='truncate text-[11px] font-medium'>{status.account.email ?? 'Codex'}</p>
-            <p className='truncate text-[9px] text-muted-foreground'>
-              {status.account.plan ?? t('agent.account')}
-            </p>
-          </div>
+        <div className='flex items-end gap-2'>
+          <label className='grid min-w-0 flex-1 gap-1 text-[10px]' htmlFor='editor-agent-backend'>
+            {t('agent.backend')}
+            <NativeSelect
+              className='w-full min-w-0'
+              size='sm'
+              id='editor-agent-backend'
+              value={backend}
+              disabled={busy}
+              onChange={(event) =>
+                void saveConfig({ ...status.config, backend: event.target.value as Backend })
+              }
+            >
+              <NativeSelectOption value='codex'>Codex</NativeSelectOption>
+              <NativeSelectOption value='pi'>Pi</NativeSelectOption>
+              <NativeSelectOption value='agy'>AGY</NativeSelectOption>
+            </NativeSelect>
+          </label>
           <Button
-            variant='ghost'
+            variant='outline'
             size='icon-sm'
-            aria-label={t('agent.signOut')}
-            disabled={running !== null}
-            onClick={() => void logout()}
+            aria-label={t('agent.checkConnection')}
+            title={t('agent.checkConnection')}
+            disabled={busy}
+            onClick={() => void checkConnection()}
           >
-            <LogOut />
+            <RefreshCw className={checking ? 'animate-spin' : undefined} />
           </Button>
         </div>
-        <div className='grid grid-cols-[minmax(0,1fr)_7rem] gap-1.5'>
-          <Select
-            value={status.config.model ?? 'automatic'}
-            onValueChange={(model) => {
-              const selected =
-                status.models.find((candidate) => candidate.id === model) ?? status.models[0]
-              const reasoning =
-                selected &&
-                selected.reasoning.length > 0 &&
-                !selected.reasoning.includes(status.config.reasoning)
-                  ? selected.reasoning[0]
-                  : status.config.reasoning
-              void saveConfig({
-                model: model === 'automatic' ? null : model,
-                reasoning,
-              })
-            }}
-          >
-            <SelectTrigger size='sm' className='w-full min-w-0' aria-label={t('agent.model')}>
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent align='start'>
-              <SelectItem value='automatic'>{t('agent.automatic')}</SelectItem>
-              {status.models.map((model) => (
-                <SelectItem key={model.id} value={model.id}>
-                  {model.name}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          <Select
-            value={status.config.reasoning}
-            onValueChange={(reasoning) =>
-              void saveConfig({ ...status.config, reasoning: reasoning as Reasoning })
-            }
-          >
-            <SelectTrigger size='sm' className='w-full min-w-0' aria-label={t('agent.reasoning')}>
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent align='end'>
-              {(selectedModel?.reasoning ?? [status.config.reasoning]).map((reasoning) => (
-                <SelectItem key={reasoning} value={reasoning}>
-                  {t(`agent.reasoningLevels.${reasoning}`)}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
-      </div>
-
-      <ScrollArea className='min-h-0 flex-1'>
-        {messages.length ? (
-          <div className='grid gap-3 p-3'>
-            {messages.map((message) => (
-              <div
-                key={message.id}
-                data-role={message.role}
-                className='flex data-[role=user]:justify-end'
-              >
-                <div
-                  data-role={message.role}
-                  data-error={message.error || undefined}
-                  className='max-w-[90%] rounded-xl bg-muted px-3 py-2 text-[11px] leading-5 whitespace-pre-wrap select-text data-[error=true]:bg-destructive/10 data-[error=true]:text-destructive data-[role=user]:bg-primary data-[role=user]:text-primary-foreground'
-                >
-                  {message.text || (message.role === 'assistant' ? t('agent.working') : '')}
-                </div>
-              </div>
-            ))}
-            {activity ? (
-              <div className='flex items-center gap-1.5 text-[10px] text-muted-foreground'>
-                <span className='size-1.5 rounded-full bg-primary' />
-                {activity}
-              </div>
-            ) : null}
-          </div>
-        ) : (
-          <div className='grid min-h-64 place-items-center p-6 text-center'>
-            <div>
-              <Bot className='mx-auto size-6 text-primary' />
-              <h3 className='mt-3 text-xs font-semibold'>{t('agent.emptyTitle')}</h3>
-              <p className='mt-1 max-w-56 text-[10px] leading-4 text-muted-foreground'>
-                {t('agent.emptyDescription')}
+        <p className='text-[10px] leading-4 text-muted-foreground'>{t('agent.backendHint')}</p>
+        {backend === 'codex' && status.account && (
+          <div className='flex min-w-0 items-center gap-2'>
+            <div className='min-w-0 flex-1'>
+              <p className='truncate text-[11px] font-medium'>{status.account.email ?? 'Codex'}</p>
+              <p className='truncate text-[9px] text-muted-foreground'>
+                {status.account.plan ?? t('agent.account')}
               </p>
             </div>
+            <Button
+              variant='ghost'
+              size='icon-sm'
+              aria-label={t('agent.signOut')}
+              disabled={busy}
+              onClick={() => void logout()}
+            >
+              <LogOut />
+            </Button>
           </div>
         )}
-      </ScrollArea>
-
-      <div className='shrink-0 border-t p-2.5'>
-        <div className='rounded-xl border bg-background p-1.5 focus-within:border-ring'>
-          <Textarea
-            id='agent-message'
-            value={prompt}
-            disabled={running !== null}
-            aria-label={t('agent.message')}
-            placeholder={t('agent.placeholder')}
-            className='max-h-36 min-h-16 resize-none border-0 bg-transparent px-1.5 py-1 text-[11px] leading-5 shadow-none focus-visible:ring-0'
-            onChange={(event) => setPrompt(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === 'Enter' && !event.shiftKey) {
+        {backend !== 'codex' && (
+          <details className='text-[10px]'>
+            <summary className='cursor-pointer py-1'>{t('agent.advancedSetup')}</summary>
+            <form
+              className='mt-2 grid gap-2'
+              onSubmit={(event) => {
                 event.preventDefault()
-                void send()
-              }
-            }}
-          />
-          <div className='flex items-center justify-between gap-2 pt-1'>
-            <Badge
-              variant='outline'
-              className='h-5 max-w-44 truncate px-1.5 text-[9px] font-normal'
+                void saveConfig({ ...status.config, [backend]: draft })
+              }}
             >
-              {selectedModel?.name ?? t('agent.automatic')}
-            </Badge>
-            {running ? (
-              <Button
-                variant='outline'
-                size='icon-sm'
-                aria-label={t('agent.cancel')}
-                onClick={() => void call(commands.cancelAgent, running).catch(() => undefined)}
-              >
-                <CircleStop />
+              <label className='grid gap-1'>
+                {t('agent.cliPath')}
+                <Input
+                  value={draft.binary ?? ''}
+                  disabled={busy}
+                  placeholder={t('agent.detectAutomatically')}
+                  onChange={(event) =>
+                    setDraft({ ...draft, binary: event.target.value.trim() || null })
+                  }
+                  className='text-xs'
+                />
+              </label>
+              <label className='grid gap-1'>
+                {t('agent.nodePath')}
+                <Input
+                  value={draft.node ?? ''}
+                  disabled={busy}
+                  placeholder={t('agent.detectAutomatically')}
+                  onChange={(event) =>
+                    setDraft({ ...draft, node: event.target.value.trim() || null })
+                  }
+                  className='text-xs'
+                />
+              </label>
+              <label className='grid gap-1'>
+                {t('agent.model')}
+                <Input
+                  value={draft.model ?? ''}
+                  disabled={busy}
+                  placeholder={t('agent.automatic')}
+                  onChange={(event) =>
+                    setDraft({ ...draft, model: event.target.value.trim() || null })
+                  }
+                  className='text-xs'
+                />
+              </label>
+              <label className='grid gap-1'>
+                {t('agent.reasoning')}
+                <NativeSelect
+                  className='w-full min-w-0'
+                  size='sm'
+                  value={draft.reasoning ?? ''}
+                  disabled={busy}
+                  onChange={(event) =>
+                    setDraft({
+                      ...draft,
+                      reasoning: event.target.value ? (event.target.value as Reasoning) : null,
+                    })
+                  }
+                >
+                  <NativeSelectOption value=''>{t('agent.automatic')}</NativeSelectOption>
+                  {(
+                    [
+                      'low',
+                      'medium',
+                      'high',
+                      'xhigh',
+                      ...(backend === 'agy' ? ['max'] : []),
+                    ] as Reasoning[]
+                  ).map((level) => (
+                    <NativeSelectOption key={level} value={level}>
+                      {t(`agent.reasoningLevels.${level}`)}
+                    </NativeSelectOption>
+                  ))}
+                </NativeSelect>
+              </label>
+              <Button type='submit' variant='outline' size='sm' disabled={busy}>
+                {t('agent.saveSetup')}
               </Button>
-            ) : (
-              <Button
-                size='icon-sm'
-                aria-label={t('agent.send')}
-                disabled={!prompt.trim()}
-                onClick={() => void send()}
+            </form>
+          </details>
+        )}
+        {status.models.length > 0 && (
+          <div
+            className={backend === 'codex' ? 'grid grid-cols-[minmax(0,1fr)_7rem] gap-1.5' : 'grid'}
+          >
+            <NativeSelect
+              className='w-full min-w-0'
+              size='sm'
+              value={model ?? ''}
+              aria-label={t('agent.model')}
+              disabled={busy}
+              onChange={(event) => {
+                const value = event.target.value || null
+                if (backend === 'codex') {
+                  const selected =
+                    status.models.find((candidate) => candidate.id === value) ?? status.models[0]
+                  const reasoning =
+                    selected?.reasoning.length && !selected.reasoning.includes(codex.reasoning)
+                      ? selected.reasoning[0]
+                      : codex.reasoning
+                  void saveConfig({ ...status.config, codex: { model: value, reasoning } })
+                } else
+                  void saveConfig({
+                    ...status.config,
+                    [backend]: { ...status.config[backend], model: value },
+                  })
+              }}
+            >
+              <NativeSelectOption value=''>{t('agent.automatic')}</NativeSelectOption>
+              {model && !status.models.some((candidate) => candidate.id === model) && (
+                <NativeSelectOption value={model}>{model}</NativeSelectOption>
+              )}
+              {status.models.map((model) => (
+                <NativeSelectOption key={model.id} value={model.id}>
+                  {model.name}
+                </NativeSelectOption>
+              ))}
+            </NativeSelect>
+            {backend === 'codex' && (
+              <NativeSelect
+                className='w-full min-w-0'
+                size='sm'
+                value={codex.reasoning}
+                aria-label={t('agent.reasoning')}
+                disabled={busy}
+                onChange={(event) =>
+                  void saveConfig({
+                    ...status.config,
+                    codex: { ...codex, reasoning: event.target.value as Reasoning },
+                  })
+                }
               >
-                <Send />
-              </Button>
+                {(selectedModel?.reasoning.length
+                  ? selectedModel.reasoning
+                  : [codex.reasoning]
+                ).map((reasoning) => (
+                  <NativeSelectOption key={reasoning} value={reasoning}>
+                    {t(`agent.reasoningLevels.${reasoning}`)}
+                  </NativeSelectOption>
+                ))}
+              </NativeSelect>
             )}
           </div>
-        </div>
+        )}
+        {checking && (
+          <p role='status' className='text-[10px] text-muted-foreground'>
+            {t('agent.checking')}
+          </p>
+        )}
+        {(error || status.error) && (
+          <p role='alert' className='text-[11px] leading-4 break-words text-destructive'>
+            {error || status.error}
+          </p>
+        )}
+        {backend !== 'codex' && (
+          <p className='text-[10px] leading-4 text-muted-foreground'>{t('agent.cliSignInHint')}</p>
+        )}
       </div>
+      {backend === 'codex' && !status.account ? (
+        <div className='flex min-h-0 flex-1 flex-col items-center justify-center gap-3 p-5 text-center'>
+          <Sparkles className='size-6 text-primary' />
+          <h3 className='text-sm font-semibold'>{t('agent.signInTitle')}</h3>
+          <p className='text-[11px] leading-5 text-muted-foreground'>
+            {t('agent.signInDescription')}
+          </p>
+          {loginEvent?.type === 'device_code' && (
+            <div className='w-full rounded-xl border bg-muted/40 p-3'>
+              <p className='text-[10px]'>{t('agent.deviceCode')}</p>
+              <p className='font-mono text-lg font-semibold tracking-widest select-text'>
+                {loginEvent.user_code}
+              </p>
+              <p className='mt-1 text-[10px] text-muted-foreground'>{t('agent.deviceCodeHint')}</p>
+            </div>
+          )}
+          <Button disabled={busy} onClick={() => void login()}>
+            {loggingIn ? t('agent.signingIn') : t('agent.signIn')}
+          </Button>
+        </div>
+      ) : (
+        <>
+          <ScrollArea className='min-h-0 flex-1'>
+            {messages.length ? (
+              <div className='grid gap-3 p-3'>
+                {messages.map((message) => (
+                  <div
+                    key={message.id}
+                    data-role={message.role}
+                    className='flex data-[role=user]:justify-end'
+                  >
+                    <div
+                      data-role={message.role}
+                      data-error={message.error || undefined}
+                      className='max-w-[90%] rounded-xl bg-muted px-3 py-2 text-[11px] leading-5 whitespace-pre-wrap select-text data-[error=true]:bg-destructive/10 data-[error=true]:text-destructive data-[role=user]:bg-primary data-[role=user]:text-primary-foreground'
+                    >
+                      {message.text || (message.role === 'assistant' ? t('agent.working') : '')}
+                    </div>
+                  </div>
+                ))}
+                {activity ? (
+                  <div className='flex items-center gap-1.5 text-[10px] text-muted-foreground'>
+                    <span className='size-1.5 rounded-full bg-primary' />
+                    {activity}
+                  </div>
+                ) : null}
+              </div>
+            ) : (
+              <div className='grid min-h-64 place-items-center p-6 text-center'>
+                <div>
+                  <Bot className='mx-auto size-6 text-primary' />
+                  <h3 className='mt-3 text-xs font-semibold'>{t('agent.emptyTitle')}</h3>
+                  <p className='mt-1 max-w-56 text-[10px] leading-4 text-muted-foreground'>
+                    {t('agent.emptyDescription')}
+                  </p>
+                </div>
+              </div>
+            )}
+          </ScrollArea>
+
+          <div className='shrink-0 border-t p-2.5'>
+            <div className='rounded-xl border bg-background p-1.5 focus-within:border-ring'>
+              <Textarea
+                id='agent-message'
+                value={prompt}
+                disabled={busy || !status.ready}
+                aria-label={t('agent.message')}
+                placeholder={t('agent.placeholder')}
+                className='max-h-36 min-h-16 resize-none border-0 bg-transparent px-1.5 py-1 text-[11px] leading-5 shadow-none focus-visible:ring-0'
+                onChange={(event) => setPrompt(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' && !event.shiftKey) {
+                    event.preventDefault()
+                    void send()
+                  }
+                }}
+              />
+              <div className='flex items-center justify-between gap-2 pt-1'>
+                <Badge
+                  variant='outline'
+                  className='h-5 max-w-44 truncate px-1.5 text-[9px] font-normal'
+                >
+                  {selectedModel?.name ?? model ?? t('agent.automatic')}
+                </Badge>
+                {running ? (
+                  <Button
+                    variant='outline'
+                    size='icon-sm'
+                    aria-label={t('agent.cancel')}
+                    onClick={() => void call(commands.cancelAgent, running).catch(() => undefined)}
+                  >
+                    <CircleStop />
+                  </Button>
+                ) : (
+                  <Button
+                    size='icon-sm'
+                    aria-label={t('agent.send')}
+                    disabled={busy || !status.ready || !prompt.trim()}
+                    onClick={() => void send()}
+                  >
+                    <Send />
+                  </Button>
+                )}
+              </div>
+            </div>
+          </div>
+        </>
+      )}
     </div>
   )
 
+  async function checkConnection() {
+    const check = ++checks.current
+    setChecking(true)
+    setError('')
+    try {
+      const value = await call(commands.getAgentStatus)
+      if (alive.current && check === checks.current) {
+        setStatus(value)
+        setRunning(value.running)
+      }
+    } catch (cause) {
+      if (alive.current && check === checks.current)
+        setError(cause instanceof Error ? cause.message : String(cause))
+    } finally {
+      if (alive.current && check === checks.current) setChecking(false)
+    }
+  }
+
+  async function saveConfig(config: Config) {
+    if (busy) return
+    setSaving(true)
+    setError('')
+    try {
+      const saved = await call(commands.saveAgentConfig, config)
+      if (!alive.current) return
+      conversation.current++
+      setMessages([])
+      setActivity(null)
+      setStatus((current) => (current ? { ...current, config: saved } : current))
+      await checkConnection()
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause))
+    } finally {
+      if (alive.current) setSaving(false)
+    }
+  }
+
   async function login() {
     setLoggingIn(true)
-    setLoginEvent({ type: 'progress', message: t('agent.signingIn') })
+    setError('')
     const channel = new Channel<LoginEvent>()
-    channel.onmessage = setLoginEvent
+    channel.onmessage = (event) => {
+      if (alive.current) setLoginEvent(event)
+    }
     try {
       setStatus(await call(commands.loginAgent, channel))
       setLoginEvent(null)
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause))
     } finally {
       setLoggingIn(false)
     }
   }
 
   async function logout() {
-    setStatus(await call(commands.logoutAgent))
-    setMessages([])
-    setActivity(null)
-  }
-
-  async function saveConfig(config: Config) {
-    const saved = await call(commands.saveAgentConfig, config)
-    setStatus((current) => (current ? { ...current, config: saved } : current))
+    try {
+      setStatus(await call(commands.logoutAgent))
+      conversation.current++
+      setMessages([])
+      setActivity(null)
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause))
+    }
   }
 
   async function send() {
     const message = prompt.trim()
-    if (!message || running) return
+    if (!message || requestPending.current || !status?.ready) return
+    requestPending.current = true
+    setPending(true)
+    const generation = conversation.current
     const id = crypto.randomUUID()
     const assistant = crypto.randomUUID()
     let settled = false
@@ -291,6 +508,7 @@ export function AgentPanel() {
 
     const channel = new Channel<Event>()
     channel.onmessage = (event) => {
+      if (!alive.current || generation !== conversation.current) return
       switch (event.type) {
         case 'started':
           setRunning(event.run)
@@ -310,19 +528,25 @@ export function AgentPanel() {
           break
         case 'completed':
           settled = true
-          updateAssistant(() => event.message)
+          requestPending.current = false
+          setPending(false)
+          updateAssistant(() => event.message || t('activity.finished'))
           setRunning(null)
           setActivity(null)
           void refresh(projectKey, pagesKey, pageKey)
           break
         case 'failed':
           settled = true
+          requestPending.current = false
+          setPending(false)
           updateAssistant(() => event.message, true)
           setRunning(null)
           setActivity(null)
           break
         case 'cancelled':
           settled = true
+          requestPending.current = false
+          setPending(false)
           updateAssistant((text) => text || t('agent.cancelled'))
           setRunning(null)
           setActivity(null)
@@ -331,10 +555,13 @@ export function AgentPanel() {
     }
     try {
       const run = await call(commands.runAgent, message, channel)
-      if (!settled) setRunning(run)
+      if (!settled && alive.current && generation === conversation.current) setRunning(run)
     } catch (error) {
+      if (!alive.current || generation !== conversation.current) return
+      requestPending.current = false
+      setPending(false)
       settled = true
-      updateAssistant(() => (error instanceof Error ? error.message : t('agent.failed')), true)
+      updateAssistant(() => (error instanceof Error ? error.message : String(error)), true)
       setRunning(null)
       setActivity(null)
     }

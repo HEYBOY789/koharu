@@ -9,7 +9,7 @@ use reqwest::{Client, StatusCode};
 use serde::Serialize;
 use specta::Type;
 
-use crate::{Control, Reasoning};
+use crate::{AgentModel, Control};
 
 pub use auth::Account;
 use auth::Auth;
@@ -17,13 +17,6 @@ pub(crate) use protocol::{Request, function_output, message, project_context};
 pub(crate) use stream::{Delta, Turn};
 
 const RESPONSES_URL: &str = "https://chatgpt.com/backend-api/codex/responses";
-
-#[derive(Clone, Debug, Serialize, Type)]
-pub struct CodexModel {
-    pub id: String,
-    pub name: String,
-    pub reasoning: Vec<Reasoning>,
-}
 
 #[derive(Clone, Debug, Serialize, Type)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -69,7 +62,7 @@ impl Codex {
     }
 
     #[tracing::instrument(skip_all)]
-    pub async fn models(&self) -> Result<Vec<CodexModel>> {
+    pub async fn models(&self) -> Result<Vec<AgentModel>> {
         catalog::models(&self.client, &self.auth).await
     }
 

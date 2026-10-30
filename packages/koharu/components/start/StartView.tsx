@@ -31,6 +31,18 @@ export function StartView() {
   const [name, setName] = useState('')
   const [busy, setBusy] = useState<string | null>('list')
   const [projectToDelete, setProjectToDelete] = useState<string | null>(null)
+  const availableJobs = useKoharuStore((state) =>
+    Object.values(state.jobs)
+      .filter(
+        (job) =>
+          ['finished', 'failed', 'stopped'].includes(job.state) ||
+          job.phase === 'summarize' ||
+          job.phase === 'translate',
+      )
+      .map((job) => job.id)
+      .sort()
+      .join(','),
+  )
 
   const reload = useCallback(async () => {
     setBusy('list')
@@ -43,7 +55,7 @@ export function StartView() {
 
   useEffect(() => {
     void reload().catch(() => undefined)
-  }, [reload])
+  }, [reload, availableJobs])
 
   const createProject = async (event: FormEvent) => {
     event.preventDefault()

@@ -4,7 +4,11 @@ description: '使用 ChatGPT 登录并配置内置项目助手。'
 icon: 'robot'
 ---
 
-Koharu Agent 是编辑器内的 Codex 客户端，使用 ChatGPT 设备代码登录，不需要为 Agent 输入 OpenAI API 密钥。
+Koharu Agent 可以在编辑器中选择 Codex、Pi 或 AGY。Pi 和 AGY 需要先在各自 CLI 中登录，再在 Agent 面板检查连接，无需登录 Codex。高级设置可指定 CLI 路径、需要时使用的 Node 可执行文件、模型和推理级别。
+
+各运行方式共用项目编辑工具和 Undo 历史。更换运行方式或配置会开始新的对话，处理期间不能更改配置。CLI 进程会保留当前对话，关闭项目后结束。
+
+以下为 Codex 的设置：使用 ChatGPT 设备代码登录，不需要为 Agent 输入 OpenAI API 密钥。
 
 <Steps>
   <Step title='打开 Agent 面板'>打开项目，选择右侧 **Agent**。</Step>

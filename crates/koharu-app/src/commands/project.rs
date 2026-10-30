@@ -14,7 +14,6 @@ use koharu_scene::{
 };
 use serde::Serialize;
 use specta::Type;
-use tokio::sync::Mutex;
 
 use super::{
     canvas::Point,
@@ -175,8 +174,12 @@ pub struct Typography {
     pub writing_mode: Option<koharu_scene::WritingMode>,
 }
 
+mod workspace;
+pub(crate) use workspace::{JobProject, ProjectWorkspace};
+
+#[derive(Default)]
 pub(crate) struct CurrentProject {
-    pub(crate) project: Mutex<Option<Project>>,
+    pub(crate) project: ProjectWorkspace,
 }
 
 #[derive(Clone)]
@@ -256,6 +259,9 @@ impl ProjectLibrary {
 }
 
 pub(crate) struct Project {
+    // A copied project folder can share its durable document ID. Job ownership
+    // identifies the actual open session instead of trusting that copied ID.
+    pub(crate) instance_id: uuid::Uuid,
     pub(crate) session: Session,
     pub(crate) name: String,
     pub(crate) path: PathBuf,
@@ -314,6 +320,7 @@ impl Project {
     fn new(session: Session, name: String, path: PathBuf) -> Self {
         let active_page = session.snapshot().pages().next().map(|page| page.id());
         Self {
+            instance_id: uuid::Uuid::new_v4(),
             session,
             name,
             path,
@@ -508,17 +515,23 @@ impl Project {
 
     pub(crate) async fn set_chapter_summarize(
         &mut self,
-        chapter: ChapterId,
+        chapter: Option<ChapterId>,
         summarize: bool,
-    ) -> Result<Commit> {
+    ) -> Result<Option<Commit>> {
         let snapshot = self.snapshot();
         let mut chapters = snapshot.chapters()?;
-        chapters
-            .chapter_mut(chapter)
-            .context("chapter does not exist")?
-            .summarize = summarize;
+        if let Some(chapter) = chapter {
+            chapters
+                .chapter_mut(chapter)
+                .context("chapter does not exist")?
+                .summarize = summarize;
+        } else {
+            for chapter in &mut chapters.entries {
+                chapter.summarize = summarize;
+            }
+        }
         let patch = snapshot.patch(|edit| edit.set_project(&chapters))?;
-        self.commit(patch).await
+        self.commit_rebased(patch).await
     }
 
     pub(crate) async fn set_chapter_summary(
@@ -682,6 +695,30 @@ impl Project {
     ) -> Result<(Commit, Option<EntityId>)> {
         let snapshot = self.snapshot();
         let mut chapters = snapshot.chapters()?;
+        let source_import = groups.iter().any(|group| group.source.is_some());
+        let mut provenance = snapshot.project_component::<koharu_scene::ImportedSource>()?;
+        if source_import && provenance.is_none() {
+            bail!("source metadata must be attached before importing source chapters");
+        }
+        let mut source_urls = HashSet::new();
+        for group in &groups {
+            if let Some(origin) = &group.source {
+                anyhow::ensure!(
+                    source_urls.insert(&origin.url),
+                    "duplicate source chapter in import"
+                );
+                if let Some(source) = &provenance {
+                    anyhow::ensure!(
+                        !source.chapters.iter().any(|entry| entry.url == origin.url
+                            && chapters
+                                .entries
+                                .iter()
+                                .any(|chapter| chapter.id == entry.chapter)),
+                        "source chapter already imported"
+                    );
+                }
+            }
+        }
         let source = AssetRole::new("source")?;
         let mut first = None;
         let patch = snapshot.patch(|edit| {
@@ -693,9 +730,24 @@ impl Project {
                     first.get_or_insert(page);
                     chapter.pages.push(page);
                 }
+                let chapter_id = chapter.id;
                 chapters.entries.push(chapter);
+                if let (Some(origin), Some(source)) = (group.source, provenance.as_mut()) {
+                    source.chapters.retain(|chapter| chapter.url != origin.url);
+                    source.chapters.push(koharu_scene::ImportedSourceChapter {
+                        chapter: chapter_id,
+                        url: origin.url,
+                        title: origin.title,
+                        number: origin.number,
+                    });
+                }
             }
             edit.set_project(&chapters)?;
+            if source_import {
+                if let Some(source) = &provenance {
+                    edit.set_project(source)?;
+                }
+            }
             Ok(())
         })?;
         self.commit(patch).await.map(|commit| (commit, first))
@@ -1711,6 +1763,62 @@ mod tests {
     use koharu_scene::{Generation, ProducerId, WritingMode};
 
     use super::*;
+
+    #[tokio::test]
+    async fn chapter_summary_defaults_apply_to_existing_chapters_in_one_undo_step() -> Result<()> {
+        let session = Session::memory().await?;
+        let mut project = Project::new(session, "Book".into(), PathBuf::new());
+        let (_, first) = project.create_chapter("Chapter 1".into(), false).await?;
+        let (_, second) = project.create_chapter("Chapter 2".into(), true).await?;
+        project.create_chapter("Chapter 3".into(), false).await?;
+        project
+            .set_chapter_summary(first, Some("Existing summary".into()))
+            .await?;
+        project
+            .set_chapter_setting(second, Some("Existing translation instructions".into()))
+            .await?;
+        let before = project.snapshot().chapters()?;
+        let commit = project
+            .set_chapter_summarize(None, true)
+            .await?
+            .context("bulk change")?;
+        project.record_commit(&commit);
+        let enabled = project.snapshot().chapters()?;
+        assert!(enabled.entries.iter().all(|chapter| chapter.summarize));
+        assert_eq!(
+            enabled.chapter(first).context("first")?.summary,
+            before.chapter(first).context("first")?.summary
+        );
+        assert_eq!(
+            enabled.chapter(second).context("second")?.setting,
+            before.chapter(second).context("second")?.setting
+        );
+        assert!(project.set_chapter_summarize(None, true).await?.is_none());
+        project.undo().await?;
+        assert_eq!(project.snapshot().chapters()?, before);
+        let revision = project.snapshot().revision();
+        assert!(
+            project
+                .set_chapter_summarize(Some(ChapterId::new()), true)
+                .await
+                .is_err()
+        );
+        assert_eq!(project.snapshot().revision(), revision);
+        project.set_chapter_summarize(Some(first), true).await?;
+        let single = project.snapshot().chapters()?;
+        assert!(single.chapter(first).context("first")?.summarize);
+        assert!(!single.entries[2].summarize);
+        project.set_chapter_summarize(None, false).await?;
+        assert!(
+            project
+                .snapshot()
+                .chapters()?
+                .entries
+                .iter()
+                .all(|chapter| !chapter.summarize)
+        );
+        Ok(())
+    }
 
     #[test]
     fn only_user_authored_direction_is_projected_as_an_override() {

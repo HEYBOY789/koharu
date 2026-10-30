@@ -2,8 +2,13 @@ use anyhow::{Context as _, Result};
 use specta_typescript::{Typescript, semantic::Configuration};
 
 fn main() -> Result<()> {
-    let output =
-        std::path::Path::new(env!("CARGO_WORKSPACE_DIR")).join("packages/bridge/src/protocol.ts");
+    let output = std::env::args_os()
+        .nth(1)
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| {
+            std::path::Path::new(env!("CARGO_WORKSPACE_DIR"))
+                .join("packages/bridge/src/protocol.ts")
+        });
     koharu_app::bindings()
         .semantic_types(Configuration::empty().enable_lossless_floats())
         .export(

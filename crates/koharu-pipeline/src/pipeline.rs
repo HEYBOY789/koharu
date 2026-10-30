@@ -18,6 +18,37 @@ pub struct Pipeline {
 }
 
 impl Pipeline {
+    #[cfg(test)]
+    pub(crate) fn test_translation(processor: Box<dyn crate::stages::StageProcessor>) -> Self {
+        let device = koharu_ml::Device::cpu();
+        let resources = ResourceMonitor::new(&device);
+        let translator = koharu_translator::Translator::from_config(
+            device.clone(),
+            Config::memory(Default::default()),
+        )
+        .unwrap();
+        let mut runner = StageRunner::new(
+            &PipelineConfig::default(),
+            translator,
+            &device,
+            resources.clone(),
+        )
+        .unwrap();
+        runner.replace_translation(processor);
+        runner.set_retry_delays(vec![std::time::Duration::from_millis(1); 3]);
+        Self {
+            current: Arc::new(ArcSwap::from_pointee(runner)),
+            resources,
+            execution: Arc::new(tokio::sync::Mutex::new(())),
+        }
+    }
+    pub fn pending_pages(
+        &self,
+        scene: &Snapshot,
+        pages: &[koharu_scene::EntityId],
+    ) -> Result<Vec<koharu_scene::EntityId>> {
+        self.current.load().pending_pages(scene, pages)
+    }
     pub fn load(device: koharu_ml::Device) -> Result<Self> {
         Self::from_config(
             PipelineConfig::load()?,

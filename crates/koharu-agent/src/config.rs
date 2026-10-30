@@ -2,10 +2,45 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use specta::Type;
 
+#[derive(Clone, Debug, Serialize, Type)]
+pub struct AgentModel {
+    pub id: String,
+    pub name: String,
+    pub reasoning: Vec<Reasoning>,
+}
+
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize, Type)]
+#[serde(default)]
 pub struct Config {
+    pub backend: Backend,
+    pub codex: ModelConfig,
+    pub pi: CliConfig,
+    pub agy: CliConfig,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize, Type)]
+#[serde(rename_all = "snake_case")]
+pub enum Backend {
+    #[default]
+    Codex,
+    Pi,
+    Agy,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize, Type)]
+#[serde(default)]
+pub struct ModelConfig {
     pub model: Option<String>,
     pub reasoning: Reasoning,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize, Type)]
+#[serde(default)]
+pub struct CliConfig {
+    pub binary: Option<String>,
+    pub node: Option<String>,
+    pub model: Option<String>,
+    pub reasoning: Option<Reasoning>,
 }
 
 impl Config {

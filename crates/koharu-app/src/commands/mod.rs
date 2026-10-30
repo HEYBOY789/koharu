@@ -5,10 +5,13 @@ pub(crate) mod editing;
 pub(crate) mod fonts;
 pub(crate) mod import;
 pub(crate) mod lifecycle;
+pub(crate) mod mangadex;
 pub(crate) mod output;
 pub(crate) mod preferences;
 pub(crate) mod processing;
 pub(crate) mod project;
+pub(crate) mod publication;
+pub(crate) mod source_import;
 pub(crate) mod summarizer;
 
 use parking_lot::Mutex;
@@ -59,6 +62,10 @@ pub fn bindings() -> tauri_specta::Builder<tauri_runtime_cef::CefRuntime> {
 
     Builder::new()
         .commands(collect_commands![
+            mangadex::search_mangadex,
+            mangadex::get_mangadex_options,
+            mangadex::get_mangadex_chapters,
+            mangadex::get_mangadex_metadata,
             agent::get_agent_status,
             agent::login_agent,
             agent::logout_agent,
@@ -113,6 +120,12 @@ pub fn bindings() -> tauri_specta::Builder<tauri_runtime_cef::CefRuntime> {
             output::export,
             output::export_wiki,
             output::get_thumbnail,
+            publication::get_publication_settings,
+            source_import::get_source_import_settings,
+            source_import::import_source_url,
+            publication::inspect_publication,
+            publication::pick_publication_file,
+            publication::prepare_publication,
             fonts::get_fonts,
             fonts::get_font_preview,
             preferences::save_preferences,

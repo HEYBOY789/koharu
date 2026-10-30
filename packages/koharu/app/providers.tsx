@@ -53,10 +53,12 @@ export function Providers({ children }: { children: ReactNode }) {
             const previous = completed.get(job.id) ?? 0
             completed.set(job.id, job.completed)
             receiveJob(job)
-            if (job.completed > previous || job.state !== 'running') {
+            const active = queryClient.getQueryData<ProjectInfo | null>(projectKey)
+            const ownProject = job.project !== null && job.project === active?.name
+            if (ownProject && (job.completed > previous || job.state !== 'running')) {
               void refresh(projectKey, pagesKey, pageKey, chaptersKey).catch(() => undefined)
             }
-            if (job.state !== 'running') {
+            if (ownProject && job.state !== 'running') {
               void queryClient.invalidateQueries({ queryKey: ['chapter'] }).catch(() => undefined)
             }
           }),
@@ -64,14 +66,18 @@ export function Providers({ children }: { children: ReactNode }) {
           channel<ModelResources>(receiveResources),
           channel<ProjectInfo | null>((project) => {
             const previous = queryClient.getQueryData<ProjectInfo | null>(projectKey)
-            queryClient.setQueryData(projectKey, project)
             if (previous?.name !== project?.name) {
+              for (const key of [pagesKey, pageKey, chaptersKey, ['chapter'], ['prepared-page']]) {
+                void queryClient.cancelQueries({ queryKey: key })
+                queryClient.removeQueries({ queryKey: key })
+              }
               const store = useKoharuStore.getState()
               store.selectPages(project?.active_page ? [project.active_page] : [])
               store.selectLayers([])
             }
+            queryClient.setQueryData(projectKey, project)
             if (project) {
-              void refresh(pagesKey, pageKey).catch(() => undefined)
+              void refresh(pagesKey, pageKey, chaptersKey).catch(() => undefined)
             } else {
               queryClient.setQueryData(pagesKey, [])
               queryClient.setQueryData(pageKey, null)

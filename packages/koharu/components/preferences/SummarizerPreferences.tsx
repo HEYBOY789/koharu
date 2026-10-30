@@ -10,7 +10,18 @@ import {
   PreferenceSection,
 } from '@/components/preferences/PreferenceFields'
 import { call } from '@/lib/backend'
-import { queryClient, summarizerConfigKey, useSummarizerConfig } from '@/lib/queries'
+import {
+  chaptersKey,
+  projectKey,
+  queryClient,
+  refresh,
+  summarizerConfigKey,
+  useChapters,
+  useProject,
+  useSummarizerConfig,
+  useProjectBusy,
+} from '@/lib/queries'
+import { useKoharuStore } from '@/lib/store'
 import {
   commands,
   type SummarizerBackend,
@@ -53,6 +64,12 @@ async function probeBackend(config: SummarizerConfig): Promise<SummarizerProbe> 
 export function SummarizerPreferences() {
   const { t } = useTranslation()
   const config = useSummarizerConfig().data
+  const project = useProject().data
+  const chapters = useChapters(Boolean(project)).data ?? []
+  const busy = useProjectBusy()
+  const [applying, setApplying] = useState(false)
+  const [applied, setApplied] = useState(false)
+  const [applyError, setApplyError] = useState('')
   const [draft, setDraft] = useState<SummarizerConfig | null>(config ?? null)
   const [probe, setProbe] = useState<SummarizerProbe | null>(null)
   const [probing, setProbing] = useState(false)
@@ -76,6 +93,7 @@ export function SummarizerPreferences() {
   const update = (value: Partial<SummarizerConfig>) => {
     setDraft((current) => (current ? { ...current, ...value } : current))
     setSaved(false)
+    if (value.summarize_default !== undefined) setApplied(false)
   }
 
   useEffect(() => {
@@ -122,6 +140,22 @@ export function SummarizerPreferences() {
     void probeBackend(draft)
       .then(setProbe)
       .finally(() => setProbing(false))
+  }
+
+  async function applyToProject() {
+    if (!draft || !project || busy || applying) return
+    setApplying(true)
+    setApplied(false)
+    setApplyError('')
+    try {
+      await call(commands.setChapterSummarize, null, Boolean(draft.summarize_default))
+      await refresh(chaptersKey, ['chapter'], projectKey)
+      setApplied(true)
+    } catch (cause) {
+      setApplyError(String(cause))
+    } finally {
+      setApplying(false)
+    }
   }
 
   return (
@@ -254,16 +288,43 @@ export function SummarizerPreferences() {
           title={t('settings.summarizer.summarizeDefault')}
           description={t('settings.summarizer.summarizeDefaultDescription')}
         >
-          <Button
-            variant={draft.summarize_default ? 'secondary' : 'outline'}
-            size='sm'
-            className='h-8 w-28 text-[10px]'
-            onClick={() => update({ summarize_default: !draft.summarize_default })}
-          >
-            {draft.summarize_default
-              ? t('settings.summarizer.enabled')
-              : t('settings.summarizer.disabled')}
-          </Button>
+          <div className='flex flex-col items-end gap-2'>
+            <Button
+              variant={draft.summarize_default ? 'secondary' : 'outline'}
+              size='sm'
+              className='h-8 w-28 text-[10px]'
+              onClick={() => update({ summarize_default: !draft.summarize_default })}
+              disabled={applying}
+            >
+              {draft.summarize_default
+                ? t('settings.summarizer.enabled')
+                : t('settings.summarizer.disabled')}
+            </Button>
+            {project && chapters.length > 0 && (
+              <>
+                <Button
+                  variant='outline'
+                  size='sm'
+                  className='h-auto max-w-72 text-right text-[10px] whitespace-normal'
+                  disabled={busy || applying}
+                  onClick={() => void applyToProject()}
+                >
+                  {applying ? <LoaderCircle className='size-3 animate-spin' /> : null}
+                  {t('settings.summarizer.applyToProject')}
+                </Button>
+                {applied && (
+                  <p role='status' className='text-[10px] text-muted-foreground'>
+                    {t('settings.summarizer.appliedToProject', { count: chapters.length })}
+                  </p>
+                )}
+                {applyError && (
+                  <p role='alert' className='max-w-72 text-[10px] break-words text-destructive'>
+                    {applyError}
+                  </p>
+                )}
+              </>
+            )}
+          </div>
         </PreferenceRow>
       </PreferenceSection>
 

@@ -1,4 +1,8 @@
-use std::{future::Future, pin::Pin, sync::OnceLock};
+use std::{
+    future::Future,
+    pin::Pin,
+    sync::{Arc, OnceLock},
+};
 
 use anyhow::{Context as _, Result, anyhow, bail};
 use async_trait::async_trait;
@@ -26,11 +30,40 @@ use crate::commands::{
 #[derive(Clone)]
 pub(super) struct KoharuHost {
     handle: AppHandle<CefRuntime>,
+    binding: Option<Binding>,
+}
+
+#[derive(Clone)]
+struct Binding {
+    instance: uuid::Uuid,
+    control: Control,
+}
+
+impl Binding {
+    fn check(&self, project: &Project) -> Result<()> {
+        if self.control.is_cancelled() {
+            bail!("Agent request was cancelled");
+        }
+        if project.instance_id != self.instance {
+            bail!("Agent project has changed; start a new request");
+        }
+        Ok(())
+    }
 }
 
 impl KoharuHost {
     pub(super) fn new(handle: AppHandle<CefRuntime>) -> Self {
-        Self { handle }
+        Self {
+            handle,
+            binding: None,
+        }
+    }
+
+    fn check_project(&self, project: &Project) -> Result<()> {
+        self.binding
+            .as_ref()
+            .context("Agent host is not bound to a project")?
+            .check(project)
     }
 
     async fn project_context(&self) -> Result<Value> {
@@ -38,6 +71,7 @@ impl KoharuHost {
             let current = self.handle.state::<CurrentProject>();
             let current = current.project.lock().await;
             let project = current.as_ref().context("no project is open")?;
+            self.check_project(project)?;
             let snapshot = project.snapshot();
             let pages = Project::pages(&snapshot)?
                 .into_iter()
@@ -94,6 +128,7 @@ impl KoharuHost {
             let current = self.handle.state::<CurrentProject>();
             let mut current = current.project.lock().await;
             let project = current.as_mut().context("no project is open")?;
+            self.check_project(project)?;
             let (commit, value) = mutation(project).await?;
             project.record_commit(&commit);
             project.reconcile_page();
@@ -119,23 +154,19 @@ impl KoharuHost {
     async fn run_pipeline(&self, arguments: RunPipeline, control: &Control) -> Result<Invocation> {
         let scope = arguments.scope()?;
         let operation = arguments.operation.into();
-        let snapshot = self
-            .handle
-            .state::<CurrentProject>()
-            .project
-            .lock()
-            .await
-            .as_ref()
-            .context("no project is open")?
-            .snapshot();
+        let snapshot = {
+            let current = self.handle.state::<CurrentProject>();
+            let current = current.project.lock().await;
+            let project = current.as_ref().context("no project is open")?;
+            self.check_project(project)?;
+            project.snapshot()
+        };
         let job = JobId::new();
         let stop = StopToken::default();
+        let _permit = self.handle.state::<Processing>().try_admit()?;
         {
             let processing = self.handle.state::<Processing>();
             let mut stops = processing.stops.lock();
-            if !stops.is_empty() {
-                bail!("another pipeline process is already running");
-            }
             stops.insert(job, stop.clone());
         }
 
@@ -149,6 +180,7 @@ impl KoharuHost {
         });
         let mut committer = AgentCommitter { host: self.clone() };
         let request = koharu_pipeline::Request {
+            resume: false,
             operation,
             scope,
             stop,
@@ -178,6 +210,22 @@ impl KoharuHost {
 
 #[async_trait]
 impl Host for KoharuHost {
+    async fn bind(&self, control: Control) -> Result<Arc<dyn Host>> {
+        if control.is_cancelled() {
+            bail!("Agent request was cancelled");
+        }
+        let current = self.handle.state::<CurrentProject>();
+        let current = current.project.lock().await;
+        let project = current.as_ref().context("no project is open")?;
+        Ok(Arc::new(Self {
+            handle: self.handle.clone(),
+            binding: Some(Binding {
+                instance: project.instance_id,
+                control,
+            }),
+        }))
+    }
+
     async fn context(&self) -> Result<Value> {
         self.project_context().await
     }
@@ -231,6 +279,9 @@ impl Host for KoharuHost {
     }
 
     async fn invoke(&self, call: ToolCall, control: &Control) -> Result<Invocation> {
+        if control.is_cancelled() {
+            bail!("Agent request was cancelled");
+        }
         match call.name.as_str() {
             "inspect_project" => {
                 let _: InspectProject = arguments(&call)?;
@@ -243,6 +294,7 @@ impl Host for KoharuHost {
                     let current = self.handle.state::<CurrentProject>();
                     let current = current.project.lock().await;
                     let project = current.as_ref().context("no project is open")?;
+                    self.check_project(project)?;
                     let snapshot = project.snapshot();
                     let label = snapshot.page(page)?.page()?.label;
                     (label, snapshot)
@@ -461,6 +513,7 @@ impl Committer for AgentCommitter {
             let current = self.host.handle.state::<CurrentProject>();
             let mut current = current.project.lock().await;
             let project = current.as_mut().context("no project is open")?;
+            self.host.check_project(project)?;
             let Some(commit) = project.commit_rebased(output.patch).await? else {
                 return Ok(project.snapshot());
             };
@@ -493,6 +546,74 @@ fn entity(value: &str) -> Result<EntityId> {
 
 fn entities(values: &[String]) -> Result<Vec<EntityId>> {
     values.iter().map(|value| entity(value)).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn agent_binding_preserves_undo_and_rejects_cancelled_or_reopened_projects() -> Result<()>
+    {
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join("fixture.khrproj");
+        let mut project = Project::create("fixture".into(), path.clone()).await?;
+        let control = Control::default();
+        let binding = Binding {
+            instance: project.instance_id,
+            control: control.clone(),
+        };
+        let mut page = None;
+        let patch = project.snapshot().patch(|edit| {
+            page = Some(edit.add_page(
+                koharu_scene::PageDraft::new("p1", 100.0, 100.0),
+                koharu_scene::At::End,
+            )?);
+            Ok(())
+        })?;
+        project.session.commit(patch).await?;
+        let page = page.context("page")?;
+        let (commit, element) = project
+            .add_text_box(
+                page,
+                Frame {
+                    x: 10.0,
+                    y: 10.0,
+                    width: 80.0,
+                    height: 50.0,
+                    angle_degrees: 0.0,
+                },
+            )
+            .await?;
+        project.record_commit(&commit);
+        drop(commit);
+        let before = serde_json::to_value(Project::page(&project.snapshot(), page)?)?;
+        binding.check(&project)?;
+        let commit = project
+            .set_translation(element, Some("Edited through agent tools".into()))
+            .await?;
+        project.record_commit(&commit);
+        drop(commit);
+        assert_ne!(
+            serde_json::to_value(Project::page(&project.snapshot(), page)?)?,
+            before
+        );
+        project.undo().await?;
+        assert_eq!(
+            serde_json::to_value(Project::page(&project.snapshot(), page)?)?,
+            before
+        );
+        control.cancel();
+        assert!(binding.check(&project).is_err());
+        let old = Binding {
+            instance: project.instance_id,
+            control: Control::default(),
+        };
+        drop(project);
+        let reopened = Project::open("fixture".into(), path).await?;
+        assert!(old.check(&reopened).is_err());
+        Ok(())
+    }
 }
 
 #[derive(Deserialize, JsonSchema)]

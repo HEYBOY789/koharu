@@ -225,6 +225,7 @@ export function CanvasWorkspace() {
     const element = surface.current
     if (!element || !pageId || pageWidth === undefined || pageHeight === undefined) return
     const bounds = element.getBoundingClientRect()
+    if (bounds.width <= 0 || bounds.height <= 0) return
     const dpr = window.devicePixelRatio
     const next = containCamera(bounds.width * dpr, bounds.height * dpr, pageWidth, pageHeight)
     useKoharuStore.setState({ camera: { ...next, fitted: true } })
@@ -234,6 +235,7 @@ export function CanvasWorkspace() {
     const element = surface.current
     if (!element || !canvas) return
     const bounds = element.getBoundingClientRect()
+    if (bounds.width <= 0 || bounds.height <= 0) return
     canvas.resize(bounds.width, bounds.height, window.devicePixelRatio, workspaceColor())
     if (useKoharuStore.getState().camera.fitted) fitCanvas()
   }, [canvas, fitCanvas])
@@ -330,12 +332,13 @@ export function CanvasWorkspace() {
       (target instanceof HTMLElement && target.isContentEditable)
 
     const down = (event: KeyboardEvent) => {
+      const state = useKoharuStore.getState()
+      if (state.workspaceTab !== 'projects' || state.settingsOpen) return
       if (event.key === 'Alt') {
         event.preventDefault()
         return
       }
       if (editable(event.target)) return
-      const state = useKoharuStore.getState()
       if (event.code === 'Space') {
         spaceHeld.current = true
         event.preventDefault()
@@ -506,30 +509,30 @@ export function CanvasWorkspace() {
       const operation =
         current.kind === 'paint'
           ? enqueue(() =>
-            call(commands.commitPaint, current.revision, current.layer, current.points, {
-              diameter: current.diameter,
-              color: current.color!,
-            }),
-          ).then((result) => {
-            selectLayers([result.layer])
-            return refresh(projectKey, pagesKey, pageKey)
-          })
-          : current.kind === 'erase'
-            ? enqueue(() =>
-              call(
-                commands.commitErase,
-                current.revision,
-                current.layer!,
-                current.points,
-                current.diameter,
-              ),
+              call(commands.commitPaint, current.revision, current.layer, current.points, {
+                diameter: current.diameter,
+                color: current.color!,
+              }),
             ).then((result) => {
               selectLayers([result.layer])
               return refresh(projectKey, pagesKey, pageKey)
             })
+          : current.kind === 'erase'
+            ? enqueue(() =>
+                call(
+                  commands.commitErase,
+                  current.revision,
+                  current.layer!,
+                  current.points,
+                  current.diameter,
+                ),
+              ).then((result) => {
+                selectLayers([result.layer])
+                return refresh(projectKey, pagesKey, pageKey)
+              })
             : enqueue(() =>
-              call(commands.commitInpaint, current.revision, current.points, current.diameter),
-            )
+                call(commands.commitInpaint, current.revision, current.points, current.diameter),
+              )
       commitPending.current = true
       void operation
         .catch(() => canvas?.cancelStroke())
@@ -919,7 +922,7 @@ class FrameCommand<Value> {
   constructor(
     private readonly execute: (value: Value) => void | Promise<unknown>,
     private readonly merge: (current: Value, next: Value) => Value = (_current, next) => next,
-  ) { }
+  ) {}
 
   schedule(value: Value): void {
     this.pending = this.pending === undefined ? value : this.merge(this.pending, value)

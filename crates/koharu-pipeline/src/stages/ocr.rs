@@ -1,6 +1,6 @@
 use std::sync::{Arc, Mutex};
 
-use super::{StageInput, StageProcessor, finish, generation};
+use super::{StageInput, StageProcessor, checkpoint, generation};
 use crate::{ModelCell, OcrModel, scope::geometry_extents};
 use anyhow::{Context as _, Result, anyhow, bail};
 use async_trait::async_trait;
@@ -98,6 +98,8 @@ impl Model {
         };
         let page = input.page;
         let mut targets = Vec::new();
+        let refresh =
+            input.resume && crate::resume::changed(&input.scene, page, crate::Stage::Ocr, "")?;
         let source = input
             .images
             .get(&input.scene, page, "source")
@@ -124,9 +126,10 @@ impl Model {
             for relation in input.scene.relations_to_as::<RecognizedFrom>(region) {
                 let content = relation.value().source;
                 let previous = input.scene.component::<SourceText>(content)?;
-                if previous
-                    .as_ref()
-                    .is_some_and(|value| matches!(value.text.origin, Origin::User))
+                if (input.resume && !refresh && previous.is_some())
+                    || previous
+                        .as_ref()
+                        .is_some_and(|value| matches!(value.text.origin, Origin::User))
                 {
                     continue;
                 }
@@ -203,7 +206,7 @@ impl Model {
                 },
             )?;
         }
-        finish(edit)
+        checkpoint(&input, crate::Stage::Ocr, "", edit)
     }
 }
 

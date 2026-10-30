@@ -31,7 +31,7 @@ use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use specta::Type;
 
-use super::{StageInput, StageProcessor, finish, generation};
+use super::{StageInput, StageProcessor, checkpoint, generation};
 use crate::{DetectionModel, ModelCell};
 
 const MODEL_ID: &str = "mayocream/koharu-layout-rfdetr-seg-2xl-1152";
@@ -223,7 +223,7 @@ async fn build_patch(
     write_page(input, &mut edit, page, image, output, generation)
         .await
         .context("failed to write detection output")?;
-    finish(edit)
+    checkpoint(input, crate::Stage::Detection, "", edit)
 }
 
 fn remove_previous_regions(

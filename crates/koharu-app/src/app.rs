@@ -1,7 +1,6 @@
 use anyhow::{Context as _, Result};
 use tauri::{AppHandle, Manager as _, WindowEvent};
 use tauri_runtime_cef::{Cef, CefRuntime};
-use tokio::sync::Mutex;
 
 use crate::commands::{
     agent::AgentState,
@@ -111,11 +110,10 @@ pub fn run(context: tauri::Context<CefRuntime>) -> Result<()> {
                     .join("store"),
             )?;
 
-            application.manage(CurrentProject {
-                project: Mutex::new(None),
-            });
+            application.manage(CurrentProject::default());
             application.manage(ProjectLibrary::new()?);
             application.manage(Processing::default());
+            application.manage(crate::commands::mangadex::MangaDex::persistent()?);
             application.manage(CanvasChannel::default());
             application.manage(JobChannel::default());
             application.manage(DownloadChannel::default());

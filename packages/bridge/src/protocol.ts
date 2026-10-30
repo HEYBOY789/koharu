@@ -6,136 +6,156 @@ import { invoke as __TAURI_INVOKE, Channel } from "@tauri-apps/api/core";
 
 /** Commands */
 export const commands = {
-	getAgentStatus: () => __TAURI_INVOKE<AgentStatus>("get_agent_status"),
-	loginAgent: (onEvent: Channel<LoginEvent>) => __TAURI_INVOKE<AgentStatus>("login_agent", { onEvent }),
-	logoutAgent: () => __TAURI_INVOKE<AgentStatus>("logout_agent"),
-	saveAgentConfig: (config: Config) => __TAURI_INVOKE<Config>("save_agent_config", { config }),
-	runAgent: (prompt: string, onEvent: Channel<Event>) => __TAURI_INVOKE<RunId>("run_agent", { prompt, onEvent }),
-	cancelAgent: (run: RunId) => __TAURI_INVOKE<null>("cancel_agent", { run }),
-	subscribe: (onCanvas: Channel<CanvasState>, onJob: Channel<Job>, onDownload: Channel<Download>, onResources: Channel<ModelResources>, onProject: Channel<{
-	name: string,
-	revision: Revision,
-	active_page: EntityId | null,
-	can_undo: boolean,
-	can_redo: boolean,
+        searchMangadex: (input: MangaDexSearch) => __TAURI_INVOKE<MangaDexPage>("search_mangadex", { input }),
+        getMangadexOptions: (kind: MangaDexOptionsKind, name: string, cache: MangaDexCacheMode) => __TAURI_INVOKE<MangaDexOptions>("get_mangadex_options", { kind, name, cache }),
+        getMangadexChapters: (input: MangaDexChapterRequest) => __TAURI_INVOKE<MangaDexComparison>("get_mangadex_chapters", { input }),
+        getMangadexMetadata: (input: MangaDexMetadataRequest[], cache: MangaDexCacheMode) => __TAURI_INVOKE<MangaDexMetadataPage>("get_mangadex_metadata", { input, cache }).then((v) => (({...v,manga:v.manga.map(i=>({...i,rating:i.rating==null?i.rating:i.rating}))}) as typeof v)),
+        getAgentStatus: () => __TAURI_INVOKE<AgentStatus>("get_agent_status"),
+        loginAgent: (onEvent: Channel<LoginEvent>) => __TAURI_INVOKE<AgentStatus>("login_agent", { onEvent }),
+        logoutAgent: () => __TAURI_INVOKE<AgentStatus>("logout_agent"),
+        saveAgentConfig: (config: Config) => __TAURI_INVOKE<Config>("save_agent_config", { config }),
+        runAgent: (prompt: string, onEvent: Channel<Event>) => __TAURI_INVOKE<RunId>("run_agent", { prompt, onEvent }),
+        cancelAgent: (run: RunId) => __TAURI_INVOKE<null>("cancel_agent", { run }),
+        subscribe: (onCanvas: Channel<CanvasState>, onJob: Channel<Job>, onDownload: Channel<Download>, onResources: Channel<ModelResources>, onProject: Channel<{
+        name: string,
+        revision: Revision,
+        active_page: EntityId | null,
+        can_undo: boolean,
+        can_redo: boolean,
 } | null>) => __TAURI_INVOKE<StartupState>("subscribe", { onCanvas: mapChannel(onCanvas, (v) => ({...v,revision:v.revision==null?v.revision:v.revision})), onJob, onDownload, onResources: mapChannel(onResources, (v) => ({...v,devices:v.devices.map(i=>({...i,memory_budget:i.memory_budget==null?i.memory_budget:i.memory_budget,memory_used:i.memory_used==null?i.memory_used:i.memory_used,utilization:i.utilization==null?i.utilization:i.utilization}))})), onProject }).then((v) => (({...v,preferences:({...v.preferences,pipeline:({...v.preferences.pipeline,translation:({...v.preferences.pipeline.translation,generation:({...v.preferences.pipeline.translation.generation,temperature:v.preferences.pipeline.translation.generation.temperature==null?v.preferences.pipeline.translation.generation.temperature:v.preferences.pipeline.translation.generation.temperature,top_p:v.preferences.pipeline.translation.generation.top_p==null?v.preferences.pipeline.translation.generation.top_p:v.preferences.pipeline.translation.generation.top_p,min_p:v.preferences.pipeline.translation.generation.min_p==null?v.preferences.pipeline.translation.generation.min_p:v.preferences.pipeline.translation.generation.min_p,repeat_penalty:v.preferences.pipeline.translation.generation.repeat_penalty==null?v.preferences.pipeline.translation.generation.repeat_penalty:v.preferences.pipeline.translation.generation.repeat_penalty,frequency_penalty:v.preferences.pipeline.translation.generation.frequency_penalty==null?v.preferences.pipeline.translation.generation.frequency_penalty:v.preferences.pipeline.translation.generation.frequency_penalty,presence_penalty:v.preferences.pipeline.translation.generation.presence_penalty==null?v.preferences.pipeline.translation.generation.presence_penalty:v.preferences.pipeline.translation.generation.presence_penalty})}),processor:({...v.preferences.pipeline.processor,"koharu-layout-rfdetr-seg-2xl":v.preferences.pipeline.processor["koharu-layout-rfdetr-seg-2xl"]==null?v.preferences.pipeline.processor["koharu-layout-rfdetr-seg-2xl"]:({...v.preferences.pipeline.processor["koharu-layout-rfdetr-seg-2xl"],text_threshold:v.preferences.pipeline.processor["koharu-layout-rfdetr-seg-2xl"].text_threshold==null?v.preferences.pipeline.processor["koharu-layout-rfdetr-seg-2xl"].text_threshold:v.preferences.pipeline.processor["koharu-layout-rfdetr-seg-2xl"].text_threshold,bubble_threshold:v.preferences.pipeline.processor["koharu-layout-rfdetr-seg-2xl"].bubble_threshold==null?v.preferences.pipeline.processor["koharu-layout-rfdetr-seg-2xl"].bubble_threshold:v.preferences.pipeline.processor["koharu-layout-rfdetr-seg-2xl"].bubble_threshold,panel_threshold:v.preferences.pipeline.processor["koharu-layout-rfdetr-seg-2xl"].panel_threshold==null?v.preferences.pipeline.processor["koharu-layout-rfdetr-seg-2xl"].panel_threshold:v.preferences.pipeline.processor["koharu-layout-rfdetr-seg-2xl"].panel_threshold})})})}),jobs:v.jobs.map(i=>i),canvas:({...v.canvas,revision:v.canvas.revision==null?v.canvas.revision:v.canvas.revision})}) as typeof v)),
-	getProject: () => __TAURI_INVOKE<{
-	name: string,
-	revision: Revision,
-	active_page: EntityId | null,
-	can_undo: boolean,
-	can_redo: boolean,
+        getProject: () => __TAURI_INVOKE<{
+        name: string,
+        revision: Revision,
+        active_page: EntityId | null,
+        can_undo: boolean,
+        can_redo: boolean,
 } | null>("get_project"),
-	getPages: () => __TAURI_INVOKE<PageSummary[]>("get_pages").then((v) => (v.map(i=>i) as typeof v)),
-	getPage: () => __TAURI_INVOKE<{
-	id: EntityId,
-	label: string,
-	chapter: ChapterId | null,
-	size: PageSize,
-	layers: Layer[],
-	regions: AnalysisRegion[],
+        getPages: () => __TAURI_INVOKE<PageSummary[]>("get_pages").then((v) => (v.map(i=>i) as typeof v)),
+        getPage: () => __TAURI_INVOKE<{
+        id: EntityId,
+        label: string,
+        chapter: ChapterId | null,
+        size: PageSize,
+        layers: Layer[],
+        regions: AnalysisRegion[],
 } | null>("get_page").then((v) => (v==null?v:({...v,layers:v.layers.map(i=>i),regions:v.regions.map(i=>({...i,geometry:({...i.geometry,points:i.geometry.points.map(i=>i)})}))}) as typeof v)),
-	listProjects: () => __TAURI_INVOKE<ProjectSummary[]>("list_projects"),
-	createProject: (name: string) => __TAURI_INVOKE<null>("create_project", { name }),
-	openProject: (name: string) => __TAURI_INVOKE<null>("open_project", { name }),
-	deleteProject: (name: string) => __TAURI_INVOKE<null>("delete_project", { name }),
-	closeProject: () => __TAURI_INVOKE<null>("close_project"),
-	import: (source: PageImportSource, chapter: string | null) => __TAURI_INVOKE<null>("import", { source, chapter }),
-	selectPage: (page: EntityId) => __TAURI_INVOKE<PageSelection>("select_page", { page }).then((v) => (({...v,page:({...v.page,layers:v.page.layers.map(i=>i),regions:v.page.regions.map(i=>({...i,geometry:({...i.geometry,points:i.geometry.points.map(i=>i)})}))})}) as typeof v)),
-	getChapters: () => __TAURI_INVOKE<ChapterInfo[]>("get_chapters"),
-	getChapter: (chapter: ChapterId) => __TAURI_INVOKE<ChapterDetail>("get_chapter", { chapter }),
-	createChapter: (title: string) => __TAURI_INVOKE<null>("create_chapter", { title }),
-	renameChapter: (chapter: ChapterId, title: string) => __TAURI_INVOKE<null>("rename_chapter", { chapter, title }),
-	moveChapter: (chapter: ChapterId, index: number) => __TAURI_INVOKE<null>("move_chapter", { chapter, index }),
-	assignPage: (page: EntityId, chapter: ChapterId) => __TAURI_INVOKE<null>("assign_page", { page, chapter }),
-	deleteChapter: (chapter: ChapterId) => __TAURI_INVOKE<null>("delete_chapter", { chapter }),
-	setChapterSummarize: (chapter: ChapterId, summarize: boolean) => __TAURI_INVOKE<null>("set_chapter_summarize", { chapter, summarize }),
-	setChapterSummary: (chapter: ChapterId, summary: string | null) => __TAURI_INVOKE<null>("set_chapter_summary", { chapter, summary }),
-	setChapterSetting: (chapter: ChapterId, setting: string | null) => __TAURI_INVOKE<null>("set_chapter_setting", { chapter, setting }),
-	setWiki: (file: string, text: string) => __TAURI_INVOKE<null>("set_wiki", { file, text }),
-	addWikiFile: (file: string) => __TAURI_INVOKE<null>("add_wiki_file", { file }),
-	deleteWikiFile: (file: string) => __TAURI_INVOKE<null>("delete_wiki_file", { file }),
-	/**
-	 *  Seeds the wiki from a folder of Markdown files so an existing series wiki
-	 *  does not have to be retyped. Files match by name; an empty file is skipped.
-	 */
-	importWiki: () => __TAURI_INVOKE<string[]>("import_wiki"),
-	summarizeChapter: (chapter: ChapterId) => __TAURI_INVOKE<JobId>("summarize_chapter", { chapter }),
-	translateChapter: (chapter: ChapterId) => __TAURI_INVOKE<JobId>("translate_chapter", { chapter }),
-	/**  `summarize = None` follows each chapter's toggle, `Some` forces the choice. */
-	runChapters: (chapters: ChapterId[], summarize: boolean | null, translate: boolean) => __TAURI_INVOKE<JobId>("run_chapters", { chapters, summarize, translate }),
-	getSummarizerConfig: () => __TAURI_INVOKE<SummarizerConfig>("get_summarizer_config"),
-	saveSummarizerConfig: (config: SummarizerConfig) => __TAURI_INVOKE<SummarizerConfig>("save_summarizer_config", { config }),
-	probeSummarizer: (config: SummarizerConfig) => __TAURI_INVOKE<SummarizerProbe>("probe_summarizer", { config }),
-	renamePage: (page: EntityId, label: string) => __TAURI_INVOKE<null>("rename_page", { page, label }),
-	deletePages: (pages: EntityId[]) => __TAURI_INVOKE<null>("delete_pages", { pages }),
-	movePage: (page: EntityId, index: number) => __TAURI_INVOKE<null>("move_page", { page, index }),
-	setSourceText: (layer: EntityId, text: string) => __TAURI_INVOKE<null>("set_source_text", { layer, text }),
-	setTranslation: (layer: EntityId, text: string | null) => __TAURI_INVOKE<null>("set_translation", { layer, text }),
-	setTypography: (updates: TypographyUpdate[]) => __TAURI_INVOKE<null>("set_typography", { updates: updates.map(i=>({...i,typography:({...i.typography,size:i.typography.size==null?i.typography.size:i.typography.size,stroke_width:i.typography.stroke_width==null?i.typography.stroke_width:i.typography.stroke_width})})) }),
-	setGeometry: (updates: GeometryUpdate[]) => __TAURI_INVOKE<null>("set_geometry", { updates: updates.map(i=>({...i,points:i.points==null?i.points:i.points.map(i=>i)})) }),
-	setVisibility: (layers: EntityId[], visible: boolean | null, opacity: number | null) => __TAURI_INVOKE<null>("set_visibility", { layers, visible, opacity: opacity==null?opacity:opacity }),
-	deleteLayers: (layers: EntityId[]) => __TAURI_INVOKE<null>("delete_layers", { layers }),
-	moveLayer: (layer: EntityId, parent: EntityId, index: number) => __TAURI_INVOKE<Page>("move_layer", { layer, parent, index }).then((v) => (({...v,layers:v.layers.map(i=>i),regions:v.regions.map(i=>({...i,geometry:({...i.geometry,points:i.geometry.points.map(i=>i)})}))}) as typeof v)),
-	undo: () => __TAURI_INVOKE<null>("undo"),
-	redo: () => __TAURI_INVOKE<null>("redo"),
-	process: (scope: Scope, operation: Operation) => __TAURI_INVOKE<JobId>("process", { scope, operation }),
-	stopJob: (job: JobId) => __TAURI_INVOKE<null>("stop_job", { job }),
-	export: (format: ExportFormat) => __TAURI_INVOKE<null>("export", { format }),
-	/**
-	 *  Writes the wiki as `wiki/<slug>.md` inside the picked folder, which is the
-	 *  layout the wiki importer reads back, so a backup restores as-is.
-	 */
-	exportWiki: () => __TAURI_INVOKE<null>("export_wiki"),
-	getThumbnail: (page: EntityId) => __TAURI_INVOKE<ThumbnailBytes>("get_thumbnail", { page }),
-	getFonts: () => __TAURI_INVOKE<FontFamily[]>("get_fonts"),
-	getFontPreview: (familyName: string) => __TAURI_INVOKE<FontPreviewBytes>("get_font_preview", { familyName }),
-	savePreferences: (pipeline: PipelineConfig, providers: ProviderPreferences, typesetting: TypesettingConfig) => __TAURI_INVOKE<Preferences>("save_preferences", { pipeline: ({...pipeline,translation:({...pipeline.translation,generation:({...pipeline.translation.generation,temperature:pipeline.translation.generation.temperature==null?pipeline.translation.generation.temperature:pipeline.translation.generation.temperature,top_p:pipeline.translation.generation.top_p==null?pipeline.translation.generation.top_p:pipeline.translation.generation.top_p,min_p:pipeline.translation.generation.min_p==null?pipeline.translation.generation.min_p:pipeline.translation.generation.min_p,repeat_penalty:pipeline.translation.generation.repeat_penalty==null?pipeline.translation.generation.repeat_penalty:pipeline.translation.generation.repeat_penalty,frequency_penalty:pipeline.translation.generation.frequency_penalty==null?pipeline.translation.generation.frequency_penalty:pipeline.translation.generation.frequency_penalty,presence_penalty:pipeline.translation.generation.presence_penalty==null?pipeline.translation.generation.presence_penalty:pipeline.translation.generation.presence_penalty})}),processor:({...pipeline.processor,"koharu-layout-rfdetr-seg-2xl":pipeline.processor["koharu-layout-rfdetr-seg-2xl"]==null?pipeline.processor["koharu-layout-rfdetr-seg-2xl"]:({...pipeline.processor["koharu-layout-rfdetr-seg-2xl"],text_threshold:pipeline.processor["koharu-layout-rfdetr-seg-2xl"].text_threshold==null?pipeline.processor["koharu-layout-rfdetr-seg-2xl"].text_threshold:pipeline.processor["koharu-layout-rfdetr-seg-2xl"].text_threshold,bubble_threshold:pipeline.processor["koharu-layout-rfdetr-seg-2xl"].bubble_threshold==null?pipeline.processor["koharu-layout-rfdetr-seg-2xl"].bubble_threshold:pipeline.processor["koharu-layout-rfdetr-seg-2xl"].bubble_threshold,panel_threshold:pipeline.processor["koharu-layout-rfdetr-seg-2xl"].panel_threshold==null?pipeline.processor["koharu-layout-rfdetr-seg-2xl"].panel_threshold:pipeline.processor["koharu-layout-rfdetr-seg-2xl"].panel_threshold})})}), providers, typesetting }).then((v) => (({...v,pipeline:({...v.pipeline,translation:({...v.pipeline.translation,generation:({...v.pipeline.translation.generation,temperature:v.pipeline.translation.generation.temperature==null?v.pipeline.translation.generation.temperature:v.pipeline.translation.generation.temperature,top_p:v.pipeline.translation.generation.top_p==null?v.pipeline.translation.generation.top_p:v.pipeline.translation.generation.top_p,min_p:v.pipeline.translation.generation.min_p==null?v.pipeline.translation.generation.min_p:v.pipeline.translation.generation.min_p,repeat_penalty:v.pipeline.translation.generation.repeat_penalty==null?v.pipeline.translation.generation.repeat_penalty:v.pipeline.translation.generation.repeat_penalty,frequency_penalty:v.pipeline.translation.generation.frequency_penalty==null?v.pipeline.translation.generation.frequency_penalty:v.pipeline.translation.generation.frequency_penalty,presence_penalty:v.pipeline.translation.generation.presence_penalty==null?v.pipeline.translation.generation.presence_penalty:v.pipeline.translation.generation.presence_penalty})}),processor:({...v.pipeline.processor,"koharu-layout-rfdetr-seg-2xl":v.pipeline.processor["koharu-layout-rfdetr-seg-2xl"]==null?v.pipeline.processor["koharu-layout-rfdetr-seg-2xl"]:({...v.pipeline.processor["koharu-layout-rfdetr-seg-2xl"],text_threshold:v.pipeline.processor["koharu-layout-rfdetr-seg-2xl"].text_threshold==null?v.pipeline.processor["koharu-layout-rfdetr-seg-2xl"].text_threshold:v.pipeline.processor["koharu-layout-rfdetr-seg-2xl"].text_threshold,bubble_threshold:v.pipeline.processor["koharu-layout-rfdetr-seg-2xl"].bubble_threshold==null?v.pipeline.processor["koharu-layout-rfdetr-seg-2xl"].bubble_threshold:v.pipeline.processor["koharu-layout-rfdetr-seg-2xl"].bubble_threshold,panel_threshold:v.pipeline.processor["koharu-layout-rfdetr-seg-2xl"].panel_threshold==null?v.pipeline.processor["koharu-layout-rfdetr-seg-2xl"].panel_threshold:v.pipeline.processor["koharu-layout-rfdetr-seg-2xl"].panel_threshold})})})}) as typeof v)),
-	getPreferences: () => __TAURI_INVOKE<Preferences>("get_preferences").then((v) => (({...v,pipeline:({...v.pipeline,translation:({...v.pipeline.translation,generation:({...v.pipeline.translation.generation,temperature:v.pipeline.translation.generation.temperature==null?v.pipeline.translation.generation.temperature:v.pipeline.translation.generation.temperature,top_p:v.pipeline.translation.generation.top_p==null?v.pipeline.translation.generation.top_p:v.pipeline.translation.generation.top_p,min_p:v.pipeline.translation.generation.min_p==null?v.pipeline.translation.generation.min_p:v.pipeline.translation.generation.min_p,repeat_penalty:v.pipeline.translation.generation.repeat_penalty==null?v.pipeline.translation.generation.repeat_penalty:v.pipeline.translation.generation.repeat_penalty,frequency_penalty:v.pipeline.translation.generation.frequency_penalty==null?v.pipeline.translation.generation.frequency_penalty:v.pipeline.translation.generation.frequency_penalty,presence_penalty:v.pipeline.translation.generation.presence_penalty==null?v.pipeline.translation.generation.presence_penalty:v.pipeline.translation.generation.presence_penalty})}),processor:({...v.pipeline.processor,"koharu-layout-rfdetr-seg-2xl":v.pipeline.processor["koharu-layout-rfdetr-seg-2xl"]==null?v.pipeline.processor["koharu-layout-rfdetr-seg-2xl"]:({...v.pipeline.processor["koharu-layout-rfdetr-seg-2xl"],text_threshold:v.pipeline.processor["koharu-layout-rfdetr-seg-2xl"].text_threshold==null?v.pipeline.processor["koharu-layout-rfdetr-seg-2xl"].text_threshold:v.pipeline.processor["koharu-layout-rfdetr-seg-2xl"].text_threshold,bubble_threshold:v.pipeline.processor["koharu-layout-rfdetr-seg-2xl"].bubble_threshold==null?v.pipeline.processor["koharu-layout-rfdetr-seg-2xl"].bubble_threshold:v.pipeline.processor["koharu-layout-rfdetr-seg-2xl"].bubble_threshold,panel_threshold:v.pipeline.processor["koharu-layout-rfdetr-seg-2xl"].panel_threshold==null?v.pipeline.processor["koharu-layout-rfdetr-seg-2xl"].panel_threshold:v.pipeline.processor["koharu-layout-rfdetr-seg-2xl"].panel_threshold})})})}) as typeof v)),
-	getTranslationModels: () => __TAURI_INVOKE<Model[]>("get_translation_models"),
-	getCanvasManifest: (generation: CanvasGeneration) => __TAURI_INVOKE<CanvasBytes>("get_canvas_manifest", { generation }),
-	getCanvasResource: (generation: CanvasGeneration, resource: string) => __TAURI_INVOKE<CanvasBytes>("get_canvas_resource", { generation, resource }),
-	prepareCanvasPage: (page: EntityId) => __TAURI_INVOKE<{
-	revision: Revision,
-	page: Page,
+        listProjects: () => __TAURI_INVOKE<ProjectSummary[]>("list_projects"),
+        createProject: (name: string) => __TAURI_INVOKE<null>("create_project", { name }),
+        openProject: (name: string) => __TAURI_INVOKE<null>("open_project", { name }),
+        deleteProject: (name: string) => __TAURI_INVOKE<null>("delete_project", { name }),
+        closeProject: () => __TAURI_INVOKE<null>("close_project"),
+        import: (source: PageImportSource, chapter: string | null) => __TAURI_INVOKE<null>("import", { source, chapter }),
+        selectPage: (page: EntityId) => __TAURI_INVOKE<PageSelection>("select_page", { page }).then((v) => (({...v,page:({...v.page,layers:v.page.layers.map(i=>i),regions:v.page.regions.map(i=>({...i,geometry:({...i.geometry,points:i.geometry.points.map(i=>i)})}))})}) as typeof v)),
+        getChapters: () => __TAURI_INVOKE<ChapterInfo[]>("get_chapters"),
+        getChapter: (chapter: ChapterId) => __TAURI_INVOKE<ChapterDetail>("get_chapter", { chapter }),
+        createChapter: (title: string) => __TAURI_INVOKE<null>("create_chapter", { title }),
+        renameChapter: (chapter: ChapterId, title: string) => __TAURI_INVOKE<null>("rename_chapter", { chapter, title }),
+        moveChapter: (chapter: ChapterId, index: number) => __TAURI_INVOKE<null>("move_chapter", { chapter, index }),
+        assignPage: (page: EntityId, chapter: ChapterId) => __TAURI_INVOKE<null>("assign_page", { page, chapter }),
+        deleteChapter: (chapter: ChapterId) => __TAURI_INVOKE<null>("delete_chapter", { chapter }),
+        setChapterSummarize: (chapter: string | null, summarize: boolean) => __TAURI_INVOKE<null>("set_chapter_summarize", { chapter, summarize }),
+        setChapterSummary: (chapter: ChapterId, summary: string | null) => __TAURI_INVOKE<null>("set_chapter_summary", { chapter, summary }),
+        setChapterSetting: (chapter: ChapterId, setting: string | null) => __TAURI_INVOKE<null>("set_chapter_setting", { chapter, setting }),
+        setWiki: (file: string, text: string) => __TAURI_INVOKE<null>("set_wiki", { file, text }),
+        addWikiFile: (file: string) => __TAURI_INVOKE<null>("add_wiki_file", { file }),
+        deleteWikiFile: (file: string) => __TAURI_INVOKE<null>("delete_wiki_file", { file }),
+        /**
+         *  Seeds the wiki from a folder of Markdown files so an existing series wiki
+         *  does not have to be retyped. Files match by name; an empty file is skipped.
+         */
+        importWiki: () => __TAURI_INVOKE<string[]>("import_wiki"),
+        summarizeChapter: (chapter: ChapterId) => __TAURI_INVOKE<JobId>("summarize_chapter", { chapter }),
+        translateChapter: (chapter: ChapterId) => __TAURI_INVOKE<JobId>("translate_chapter", { chapter }),
+        /**  `summarize = None` follows each chapter's toggle, `Some` forces the choice. */
+        runChapters: (chapters: ChapterId[], summarize: boolean | null, translate: boolean, resume: boolean) => __TAURI_INVOKE<JobId>("run_chapters", { chapters, summarize, translate, resume }),
+        getSummarizerConfig: () => __TAURI_INVOKE<SummarizerConfig>("get_summarizer_config"),
+        saveSummarizerConfig: (config: SummarizerConfig) => __TAURI_INVOKE<SummarizerConfig>("save_summarizer_config", { config }),
+        probeSummarizer: (config: SummarizerConfig) => __TAURI_INVOKE<SummarizerProbe>("probe_summarizer", { config }),
+        renamePage: (page: EntityId, label: string) => __TAURI_INVOKE<null>("rename_page", { page, label }),
+        deletePages: (pages: EntityId[]) => __TAURI_INVOKE<null>("delete_pages", { pages }),
+        movePage: (page: EntityId, index: number) => __TAURI_INVOKE<null>("move_page", { page, index }),
+        setSourceText: (layer: EntityId, text: string) => __TAURI_INVOKE<null>("set_source_text", { layer, text }),
+        setTranslation: (layer: EntityId, text: string | null) => __TAURI_INVOKE<null>("set_translation", { layer, text }),
+        setTypography: (updates: TypographyUpdate[]) => __TAURI_INVOKE<null>("set_typography", { updates: updates.map(i=>({...i,typography:({...i.typography,size:i.typography.size==null?i.typography.size:i.typography.size,stroke_width:i.typography.stroke_width==null?i.typography.stroke_width:i.typography.stroke_width})})) }),
+        setGeometry: (updates: GeometryUpdate[]) => __TAURI_INVOKE<null>("set_geometry", { updates: updates.map(i=>({...i,points:i.points==null?i.points:i.points.map(i=>i)})) }),
+        setVisibility: (layers: EntityId[], visible: boolean | null, opacity: number | null) => __TAURI_INVOKE<null>("set_visibility", { layers, visible, opacity: opacity==null?opacity:opacity }),
+        deleteLayers: (layers: EntityId[]) => __TAURI_INVOKE<null>("delete_layers", { layers }),
+        moveLayer: (layer: EntityId, parent: EntityId, index: number) => __TAURI_INVOKE<Page>("move_layer", { layer, parent, index }).then((v) => (({...v,layers:v.layers.map(i=>i),regions:v.regions.map(i=>({...i,geometry:({...i.geometry,points:i.geometry.points.map(i=>i)})}))}) as typeof v)),
+        undo: () => __TAURI_INVOKE<null>("undo"),
+        redo: () => __TAURI_INVOKE<null>("redo"),
+        process: (scope: Scope, operation: Operation) => __TAURI_INVOKE<JobId>("process", { scope, operation }),
+        stopJob: (job: JobId) => __TAURI_INVOKE<null>("stop_job", { job }),
+        export: (format: ExportFormat) => __TAURI_INVOKE<null>("export", { format }),
+        /**
+         *  Writes the wiki as `wiki/<slug>.md` inside the picked folder, which is the
+         *  layout the wiki importer reads back, so a backup restores as-is.
+         */
+        exportWiki: () => __TAURI_INVOKE<null>("export_wiki"),
+        getThumbnail: (page: EntityId) => __TAURI_INVOKE<ThumbnailBytes>("get_thumbnail", { page }),
+        getPublicationSettings: () => __TAURI_INVOKE<PublicationSettings>("get_publication_settings"),
+        getSourceImportSettings: () => __TAURI_INVOKE<PublicationConfig>("get_source_import_settings"),
+        importSourceUrl: (url: string, config: PublicationConfig, options: SourceImportOptions) => __TAURI_INVOKE<JobId>("import_source_url", { url, config, options }),
+        inspectPublication: (config: PublicationConfig, refresh: boolean) => __TAURI_INVOKE<PublicationReadiness>("inspect_publication", { config, refresh }),
+        pickPublicationFile: (kind: string) => __TAURI_INVOKE<string | null>("pick_publication_file", { kind }),
+        preparePublication: (metadata: PublicationMetadata, config: PublicationConfig) => __TAURI_INVOKE<string | null>("prepare_publication", { metadata, config }),
+        getFonts: () => __TAURI_INVOKE<FontFamily[]>("get_fonts"),
+        getFontPreview: (familyName: string) => __TAURI_INVOKE<FontPreviewBytes>("get_font_preview", { familyName }),
+        savePreferences: (pipeline: PipelineConfig, providers: ProviderPreferences, typesetting: TypesettingConfig) => __TAURI_INVOKE<Preferences>("save_preferences", { pipeline: ({...pipeline,translation:({...pipeline.translation,generation:({...pipeline.translation.generation,temperature:pipeline.translation.generation.temperature==null?pipeline.translation.generation.temperature:pipeline.translation.generation.temperature,top_p:pipeline.translation.generation.top_p==null?pipeline.translation.generation.top_p:pipeline.translation.generation.top_p,min_p:pipeline.translation.generation.min_p==null?pipeline.translation.generation.min_p:pipeline.translation.generation.min_p,repeat_penalty:pipeline.translation.generation.repeat_penalty==null?pipeline.translation.generation.repeat_penalty:pipeline.translation.generation.repeat_penalty,frequency_penalty:pipeline.translation.generation.frequency_penalty==null?pipeline.translation.generation.frequency_penalty:pipeline.translation.generation.frequency_penalty,presence_penalty:pipeline.translation.generation.presence_penalty==null?pipeline.translation.generation.presence_penalty:pipeline.translation.generation.presence_penalty})}),processor:({...pipeline.processor,"koharu-layout-rfdetr-seg-2xl":pipeline.processor["koharu-layout-rfdetr-seg-2xl"]==null?pipeline.processor["koharu-layout-rfdetr-seg-2xl"]:({...pipeline.processor["koharu-layout-rfdetr-seg-2xl"],text_threshold:pipeline.processor["koharu-layout-rfdetr-seg-2xl"].text_threshold==null?pipeline.processor["koharu-layout-rfdetr-seg-2xl"].text_threshold:pipeline.processor["koharu-layout-rfdetr-seg-2xl"].text_threshold,bubble_threshold:pipeline.processor["koharu-layout-rfdetr-seg-2xl"].bubble_threshold==null?pipeline.processor["koharu-layout-rfdetr-seg-2xl"].bubble_threshold:pipeline.processor["koharu-layout-rfdetr-seg-2xl"].bubble_threshold,panel_threshold:pipeline.processor["koharu-layout-rfdetr-seg-2xl"].panel_threshold==null?pipeline.processor["koharu-layout-rfdetr-seg-2xl"].panel_threshold:pipeline.processor["koharu-layout-rfdetr-seg-2xl"].panel_threshold})})}), providers, typesetting }).then((v) => (({...v,pipeline:({...v.pipeline,translation:({...v.pipeline.translation,generation:({...v.pipeline.translation.generation,temperature:v.pipeline.translation.generation.temperature==null?v.pipeline.translation.generation.temperature:v.pipeline.translation.generation.temperature,top_p:v.pipeline.translation.generation.top_p==null?v.pipeline.translation.generation.top_p:v.pipeline.translation.generation.top_p,min_p:v.pipeline.translation.generation.min_p==null?v.pipeline.translation.generation.min_p:v.pipeline.translation.generation.min_p,repeat_penalty:v.pipeline.translation.generation.repeat_penalty==null?v.pipeline.translation.generation.repeat_penalty:v.pipeline.translation.generation.repeat_penalty,frequency_penalty:v.pipeline.translation.generation.frequency_penalty==null?v.pipeline.translation.generation.frequency_penalty:v.pipeline.translation.generation.frequency_penalty,presence_penalty:v.pipeline.translation.generation.presence_penalty==null?v.pipeline.translation.generation.presence_penalty:v.pipeline.translation.generation.presence_penalty})}),processor:({...v.pipeline.processor,"koharu-layout-rfdetr-seg-2xl":v.pipeline.processor["koharu-layout-rfdetr-seg-2xl"]==null?v.pipeline.processor["koharu-layout-rfdetr-seg-2xl"]:({...v.pipeline.processor["koharu-layout-rfdetr-seg-2xl"],text_threshold:v.pipeline.processor["koharu-layout-rfdetr-seg-2xl"].text_threshold==null?v.pipeline.processor["koharu-layout-rfdetr-seg-2xl"].text_threshold:v.pipeline.processor["koharu-layout-rfdetr-seg-2xl"].text_threshold,bubble_threshold:v.pipeline.processor["koharu-layout-rfdetr-seg-2xl"].bubble_threshold==null?v.pipeline.processor["koharu-layout-rfdetr-seg-2xl"].bubble_threshold:v.pipeline.processor["koharu-layout-rfdetr-seg-2xl"].bubble_threshold,panel_threshold:v.pipeline.processor["koharu-layout-rfdetr-seg-2xl"].panel_threshold==null?v.pipeline.processor["koharu-layout-rfdetr-seg-2xl"].panel_threshold:v.pipeline.processor["koharu-layout-rfdetr-seg-2xl"].panel_threshold})})})}) as typeof v)),
+        getPreferences: () => __TAURI_INVOKE<Preferences>("get_preferences").then((v) => (({...v,pipeline:({...v.pipeline,translation:({...v.pipeline.translation,generation:({...v.pipeline.translation.generation,temperature:v.pipeline.translation.generation.temperature==null?v.pipeline.translation.generation.temperature:v.pipeline.translation.generation.temperature,top_p:v.pipeline.translation.generation.top_p==null?v.pipeline.translation.generation.top_p:v.pipeline.translation.generation.top_p,min_p:v.pipeline.translation.generation.min_p==null?v.pipeline.translation.generation.min_p:v.pipeline.translation.generation.min_p,repeat_penalty:v.pipeline.translation.generation.repeat_penalty==null?v.pipeline.translation.generation.repeat_penalty:v.pipeline.translation.generation.repeat_penalty,frequency_penalty:v.pipeline.translation.generation.frequency_penalty==null?v.pipeline.translation.generation.frequency_penalty:v.pipeline.translation.generation.frequency_penalty,presence_penalty:v.pipeline.translation.generation.presence_penalty==null?v.pipeline.translation.generation.presence_penalty:v.pipeline.translation.generation.presence_penalty})}),processor:({...v.pipeline.processor,"koharu-layout-rfdetr-seg-2xl":v.pipeline.processor["koharu-layout-rfdetr-seg-2xl"]==null?v.pipeline.processor["koharu-layout-rfdetr-seg-2xl"]:({...v.pipeline.processor["koharu-layout-rfdetr-seg-2xl"],text_threshold:v.pipeline.processor["koharu-layout-rfdetr-seg-2xl"].text_threshold==null?v.pipeline.processor["koharu-layout-rfdetr-seg-2xl"].text_threshold:v.pipeline.processor["koharu-layout-rfdetr-seg-2xl"].text_threshold,bubble_threshold:v.pipeline.processor["koharu-layout-rfdetr-seg-2xl"].bubble_threshold==null?v.pipeline.processor["koharu-layout-rfdetr-seg-2xl"].bubble_threshold:v.pipeline.processor["koharu-layout-rfdetr-seg-2xl"].bubble_threshold,panel_threshold:v.pipeline.processor["koharu-layout-rfdetr-seg-2xl"].panel_threshold==null?v.pipeline.processor["koharu-layout-rfdetr-seg-2xl"].panel_threshold:v.pipeline.processor["koharu-layout-rfdetr-seg-2xl"].panel_threshold})})})}) as typeof v)),
+        getTranslationModels: () => __TAURI_INVOKE<Model[]>("get_translation_models"),
+        getCanvasManifest: (generation: CanvasGeneration) => __TAURI_INVOKE<CanvasBytes>("get_canvas_manifest", { generation }),
+        getCanvasResource: (generation: CanvasGeneration, resource: string) => __TAURI_INVOKE<CanvasBytes>("get_canvas_resource", { generation, resource }),
+        prepareCanvasPage: (page: EntityId) => __TAURI_INVOKE<{
+        revision: Revision,
+        page: Page,
 } | null>("prepare_canvas_page", { page }).then((v) => (v==null?v:({...v,page:({...v.page,layers:v.page.layers.map(i=>i),regions:v.page.regions.map(i=>({...i,geometry:({...i.geometry,points:i.geometry.points.map(i=>i)})}))})}) as typeof v)),
-	getCanvasPageManifest: (page: EntityId, revision: Revision) => __TAURI_INVOKE<CanvasBytes>("get_canvas_page_manifest", { page, revision }),
-	getCanvasPageResource: (page: EntityId, revision: Revision, resource: string) => __TAURI_INVOKE<CanvasBytes>("get_canvas_page_resource", { page, revision, resource }),
-	addPointText: (point: Point) => __TAURI_INVOKE<LayerCommit>("add_point_text", { point }),
-	addTextBox: (frame: Frame) => __TAURI_INVOKE<LayerCommit>("add_text_box", { frame }),
-	commitPaint: (expectedRevision: Revision, layer: string | null, points: Point[], brush: PaintBrush) => __TAURI_INVOKE<LayerCommit>("commit_paint", { expectedRevision, layer, points: points.map(i=>i), brush }),
-	commitErase: (expectedRevision: Revision, layer: EntityId, points: Point[], diameter: number) => __TAURI_INVOKE<LayerCommit>("commit_erase", { expectedRevision, layer, points: points.map(i=>i), diameter }),
-	commitTransform: (expectedRevision: Revision, elements: TransformFrame[]) => __TAURI_INVOKE<number | null>("commit_transform", { expectedRevision, elements }).then((v) => (v==null?v:v as typeof v)),
-	commitInpaint: (expectedRevision: Revision, points: Point[], diameter: number) => __TAURI_INVOKE<string | null>("commit_inpaint", { expectedRevision, points: points.map(i=>i), diameter }),
+        getCanvasPageManifest: (page: EntityId, revision: Revision) => __TAURI_INVOKE<CanvasBytes>("get_canvas_page_manifest", { page, revision }),
+        getCanvasPageResource: (page: EntityId, revision: Revision, resource: string) => __TAURI_INVOKE<CanvasBytes>("get_canvas_page_resource", { page, revision, resource }),
+        addPointText: (point: Point) => __TAURI_INVOKE<LayerCommit>("add_point_text", { point }),
+        addTextBox: (frame: Frame) => __TAURI_INVOKE<LayerCommit>("add_text_box", { frame }),
+        commitPaint: (expectedRevision: Revision, layer: string | null, points: Point[], brush: PaintBrush) => __TAURI_INVOKE<LayerCommit>("commit_paint", { expectedRevision, layer, points: points.map(i=>i), brush }),
+        commitErase: (expectedRevision: Revision, layer: EntityId, points: Point[], diameter: number) => __TAURI_INVOKE<LayerCommit>("commit_erase", { expectedRevision, layer, points: points.map(i=>i), diameter }),
+        commitTransform: (expectedRevision: Revision, elements: TransformFrame[]) => __TAURI_INVOKE<number | null>("commit_transform", { expectedRevision, elements }).then((v) => (v==null?v:v as typeof v)),
+        commitInpaint: (expectedRevision: Revision, points: Point[], diameter: number) => __TAURI_INVOKE<string | null>("commit_inpaint", { expectedRevision, points: points.map(i=>i), diameter }),
 };
 
 /* Types */
 export type Account = {
-	id: string,
-	email: string | null,
-	plan: string | null,
+        id: string,
+        email: string | null,
+        plan: string | null,
+};
+
+export type AgentModel = {
+        id: string,
+        name: string,
+        reasoning: Reasoning[],
 };
 
 export type AgentStatus = {
-	account: Account | null,
-	models: CodexModel[],
-	config: Config,
-	running: RunId | null,
+        account: Account | null,
+        models: AgentModel[],
+        config: Config,
+        running: RunId | null,
+        ready: boolean,
+        error: string | null,
 };
 
 export type AnalysisRegion = {
-	id: EntityId,
-	parent: EntityId | null,
-	geometry: Geometry,
-	kind: string,
-	label: string | null,
+        id: EntityId,
+        parent: EntityId | null,
+        geometry: Geometry,
+        kind: string,
+        label: string | null,
 };
 
+export type Backend = "codex" | "pi" | "agy";
+
 export type Bounds = {
-	x: number,
-	y: number,
-	width: number,
-	height: number,
+        x: number,
+        y: number,
+        width: number,
+        height: number,
 };
 
 export type CaiyunConfig = Record<string, never>;
@@ -145,85 +165,88 @@ export type CanvasBytes = number[];
 export type CanvasGeneration = number;
 
 export type CanvasPagePreparation = {
-	revision: Revision,
-	page: Page,
+        revision: Revision,
+        page: Page,
 };
 
 export type CanvasState = {
-	page: EntityId | null,
-	revision: Revision | null,
-	generation: number,
-	size: [number, number],
-	element_frames: TransformFrame[],
+        page: EntityId | null,
+        revision: Revision | null,
+        generation: number,
+        size: [number, number],
+        element_frames: TransformFrame[],
 };
 
 export type ChapterDetail = {
-	id: ChapterId,
-	title: string,
-	pages: EntityId[],
-	summary: string | null,
-	setting: string | null,
-	wiki: Wiki,
-	summarize: boolean,
+        id: ChapterId,
+        title: string,
+        pages: EntityId[],
+        summary: string | null,
+        setting: string | null,
+        wiki: Wiki,
+        summarize: boolean,
 };
 
 export type ChapterId = string;
 
 export type ChapterInfo = {
-	id: ChapterId,
-	title: string,
-	pages: EntityId[],
-	has_summary: boolean,
-	has_setting: boolean,
-	summarize: boolean,
+        id: ChapterId,
+        title: string,
+        pages: EntityId[],
+        has_summary: boolean,
+        has_setting: boolean,
+        summarize: boolean,
 };
 
-export type ChapterPhase = "summarize" | "translate";
+export type ChapterPhase = "import" | "summarize" | "translate";
 
 export type ClaudeConfig = Record<string, never>;
 
-export type CodexModel = {
-	id: string,
-	name: string,
-	reasoning: Reasoning[],
+export type CliConfig = {
+        binary?: string | null,
+        node?: string | null,
+        model?: string | null,
+        reasoning?: Reasoning | null,
 };
 
 export type Config = {
-	model: string | null,
-	reasoning: Reasoning,
+        backend?: Backend,
+        codex?: ModelConfig,
+        pi?: CliConfig,
+        agy?: CliConfig,
 };
 
 export type CredentialInput = {
-	configured: boolean,
-	value: string | null,
-	clear: boolean,
+        configured: boolean,
+        value: string | null,
+        clear: boolean,
 };
 
 export type DeepLConfig = {
-	base_url?: string | null,
+        base_url?: string | null,
 };
 
 export type DeepSeekConfig = Record<string, never>;
 
 export type DetectionModel = {
-	model: "koharu-layout-rfdetr-seg-2xl",
+        model: "koharu-layout-rfdetr-seg-2xl",
 } & KoharuLayoutRFDetrSeg2XLConfig;
 
 export type DeviceResources = {
-	name: string,
-	selected: boolean,
-	memory_budget: number | null,
-	memory_used: number | null,
-	utilization: number | null,
+        name: string,
+        selected: boolean,
+        memory_budget: number | null,
+        memory_used: number | null,
+        utilization: number | null,
 };
 
 export type Download = {
-	id: number,
-	state: DownloadState,
-	name: string | null,
-	completed: number,
-	total: number,
-	error: string | null,
+        id: number,
+        state: DownloadState,
+        name: string | null,
+        completed: number,
+        total: number,
+        error: string | null,
 };
 
 export type DownloadState = "running" | "finished" | "failed";
@@ -237,37 +260,37 @@ export type Event = { type: "started"; run: RunId } | { type: "text_delta"; run:
 export type ExportFormat = "png" | "psd" | "cbz";
 
 export type Flux2KleinConfig = {
-	prompt?: string,
+        prompt?: string,
 };
 
 export type FontFace = {
-	postscript_name: string,
-	weight: number,
-	weight_range: FontRange | null,
-	style: FontStyle,
+        postscript_name: string,
+        weight: number,
+        weight_range: FontRange | null,
+        style: FontStyle,
 };
 
 export type FontFamily = {
-	name: string,
-	metadata: FontMetadata,
-	sources: FontSource[],
-	faces: FontFace[],
+        name: string,
+        metadata: FontMetadata,
+        sources: FontSource[],
+        faces: FontFace[],
 };
 
 export type FontMetadata = {
-	primary_script: string | null,
-	scripts: string[],
-	languages: string[],
-	category: string | null,
-	classifications: string[],
-	use_cases: string[],
+        primary_script: string | null,
+        scripts: string[],
+        languages: string[],
+        category: string | null,
+        classifications: string[],
+        use_cases: string[],
 };
 
 export type FontPreviewBytes = number[];
 
 export type FontRange = {
-	minimum: number,
-	maximum: number,
+        minimum: number,
+        maximum: number,
 };
 
 export type FontSource = "system" | "bundled";
@@ -275,35 +298,35 @@ export type FontSource = "system" | "bundled";
 export type FontStyle = "normal" | "italic" | "oblique";
 
 export type Frame = {
-	x: number,
-	y: number,
-	width: number,
-	height: number,
-	angle_degrees: number,
+        x: number,
+        y: number,
+        width: number,
+        height: number,
+        angle_degrees: number,
 };
 
 export type GeminiConfig = Record<string, never>;
 
 export type GenerationConfig = {
-	temperature?: number | null,
-	top_k?: number | null,
-	top_p?: number | null,
-	min_p?: number | null,
-	max_tokens?: number | null,
-	repeat_penalty?: number | null,
-	frequency_penalty?: number | null,
-	presence_penalty?: number | null,
-	reasoning?: boolean | null,
-	vision?: boolean | null,
+        temperature?: number | null,
+        top_k?: number | null,
+        top_p?: number | null,
+        min_p?: number | null,
+        max_tokens?: number | null,
+        repeat_penalty?: number | null,
+        frequency_penalty?: number | null,
+        presence_penalty?: number | null,
+        reasoning?: boolean | null,
+        vision?: boolean | null,
 };
 
 export type Geometry = {
-	points: Point[],
+        points: Point[],
 };
 
 export type GeometryUpdate = {
-	layer: EntityId,
-	points: Point[] | null,
+        layer: EntityId,
+        points: Point[] | null,
 };
 
 export type GoogleCloudConfig = Record<string, never>;
@@ -313,91 +336,214 @@ export type GrokConfig = Record<string, never>;
 export type GroupRole = "text";
 
 export type InpaintingModel = { model: "lama" } | { model: "aot-inpainting" } | {
-	model: "flux2-klein",
+        model: "flux2-klein",
 } & Flux2KleinConfig | {
-	model: "rorem-mixed",
+        model: "rorem-mixed",
 } & RoremMixedConfig;
 
 export type Job = {
-	id: JobId,
-	state: JobState,
-	completed: number,
-	total: number,
-	page: EntityId | null,
-	chapter: ChapterId | null,
-	chapter_title: string | null,
-	phase: ChapterPhase | null,
-	stage: Stage | null,
-	model: string | null,
-	detail: string | null,
-	error: string | null,
+        id: JobId,
+        project: string | null,
+        state: JobState,
+        completed: number,
+        total: number,
+        page: EntityId | null,
+        chapter: ChapterId | null,
+        chapter_title: string | null,
+        phase: ChapterPhase | null,
+        stage: Stage | null,
+        model: string | null,
+        detail: string | null,
+        retry: RetryStatus | null,
+        error: string | null,
 };
 
 export type JobId = string;
 
-export type JobState = "running" | "finished" | "failed" | "stopped";
+export type JobState = "queued" | "running" | "finished" | "failed" | "stopped";
 
 export type KoharuLayoutRFDetrSeg2XLConfig = {
-	text_threshold?: number | null,
-	bubble_threshold?: number | null,
-	panel_threshold?: number | null,
+        text_threshold?: number | null,
+        bubble_threshold?: number | null,
+        panel_threshold?: number | null,
 };
 
 export type LanguageChoice = {
-	tag: string,
-	name: string,
+        tag: string,
+        name: string,
 };
 
 export type Layer = { type: "group"; id: EntityId; parent: EntityId | null; visibility: LayerVisibility; name: string; role: GroupRole | null } | { type: "text"; id: EntityId; parent: EntityId | null; geometry: Geometry | null; angle_degrees: number | null; visibility: LayerVisibility; content: TextContent; typography: Typography | null; layout: TextLayoutKind; automatic_region: EntityId | null } | { type: "raster"; id: EntityId; parent: EntityId | null; visibility: LayerVisibility; image: string | null; name: string; kind: RasterLayerKind } | { type: "image"; id: EntityId; parent: EntityId | null; geometry: Geometry; visibility: LayerVisibility; image: string } | { type: "artwork"; id: EntityId; parent: EntityId | null; geometry: Geometry; visibility: LayerVisibility; image: string };
 
 export type LayerCommit = {
-	revision: Revision,
-	layer: EntityId,
+        revision: Revision,
+        layer: EntityId,
 };
 
 export type LayerVisibility = {
-	visible: boolean,
-	opacity: number,
+        visible: boolean,
+        opacity: number,
 };
 
 export type LmStudioConfig = {
-	base_url?: string | null,
+        base_url?: string | null,
 };
 
 export type LocalConfig = Record<string, never>;
 
 export type LoginEvent = { type: "progress"; message: string } | { type: "device_code"; verification_url: string; user_code: string };
 
+export type MangaDexCacheMode = "online" | "refresh" | "offline";
+
+export type MangaDexChapterRequest = {
+        id: string,
+        original_language: string,
+        reference: string,
+        target: string,
+        chapter_numbers_reset: boolean,
+        cache: MangaDexCacheMode,
+};
+
+export type MangaDexChapterSummary = {
+        language: string,
+        latest: string | null,
+        count: number,
+        unnumbered: number,
+};
+
+export type MangaDexComparison = {
+        reference_language: string,
+        target_language: string,
+        chapters: MangaDexChapterSummary[],
+        total_available: number | null,
+        latest_available: string | null,
+        missing: number,
+        status: MangaDexFilter | null,
+        checked_at: number,
+        network_requests: number,
+};
+
+export type MangaDexEntry = {
+        id: string,
+        title: string,
+        url: string,
+        author: string,
+        artist: string,
+        original_language: string,
+        year: number | null,
+        created_at: string | null,
+        latest_uploaded_chapter: string | null,
+        publication_status: string,
+        content_rating: string,
+        description: string,
+        tags: string[],
+        cover_url: string | null,
+        chapter_numbers_reset: boolean,
+        comparison: MangaDexComparison | null,
+};
+
+export type MangaDexFilter = "any" | "either" | "no_target" | "behind";
+
+export type MangaDexMetadata = {
+        id: string,
+        rating: number | null,
+        follows: number | null,
+        latest_upload_at: string | null,
+};
+
+export type MangaDexMetadataPage = {
+        manga: MangaDexMetadata[],
+        checked_at: number,
+        network_requests: number,
+};
+
+export type MangaDexMetadataRequest = {
+        id: string,
+        latest_uploaded_chapter: string | null,
+};
+
+export type MangaDexOption = {
+        id: string,
+        name: string,
+        group: string,
+};
+
+export type MangaDexOptions = {
+        options: MangaDexOption[],
+        checked_at: number,
+};
+
+export type MangaDexOptionsKind = "tags" | "people";
+
+export type MangaDexPage = {
+        manga: MangaDexEntry[],
+        scanned: number,
+        skipped: number,
+        total: number,
+        next_offset: number | null,
+        capped: boolean,
+        checked_at: number,
+        network_requests: number,
+};
+
+export type MangaDexSearch = {
+        title: string,
+        sort: string,
+        reference: string,
+        target: string,
+        filter: MangaDexFilter,
+        original_languages: string[],
+        translated_languages: string[],
+        content_ratings: string[],
+        demographics: string[],
+        statuses: string[],
+        authors: string[],
+        artists: string[],
+        included_tags: string[],
+        excluded_tags: string[],
+        include_all: boolean,
+        exclude_all: boolean,
+        year: number | null,
+        has_chapters: boolean,
+        offset: number,
+        cache: MangaDexCacheMode,
+};
+
 export type MiniMaxConfig = Record<string, never>;
 
 export type Model = {
-	provider: Provider,
-	model: string | null,
-	name: string,
-	quantizations: Quantization[],
-	vision: boolean,
-	reasoning: boolean,
+        provider: Provider,
+        model: string | null,
+        name: string,
+        quantizations: Quantization[],
+        vision: boolean,
+        reasoning: boolean,
+};
+
+export type ModelConfig = {
+        model?: string | null,
+        reasoning?: Reasoning,
 };
 
 export type ModelResources = {
-	process_memory: number,
-	system_memory: number,
-	process_cpu: number,
-	devices: DeviceResources[],
+        process_memory: number,
+        system_memory: number,
+        process_cpu: number,
+        devices: DeviceResources[],
 };
 
 export type ModelSelection = {
-	provider: Provider,
-	model?: string | null,
-	quantization?: string | null,
-	vision?: boolean,
-	reasoning?: boolean,
+        provider: Provider,
+        model?: string | null,
+        quantization?: string | null,
+        vision?: boolean,
+        reasoning?: boolean,
 };
 
 export type OcrModel = { model: "paddleocr-vl-1.6" } | { model: "manga-ocr" } | { model: "baberu-ocr" } | { model: "hayai-ocr" };
 
 export type OpenAiCompatibleConfig = {
-	base_url?: string | null,
+        base_url?: string | null,
 };
 
 export type OpenAiConfig = Record<string, never>;
@@ -407,80 +553,80 @@ export type OpenRouterConfig = Record<string, never>;
 export type Operation = { operation: "full" } | { operation: "through"; stage: Stage } | { operation: "only"; stage: Stage } | { operation: "stages"; stages: Stage[] };
 
 export type Page = {
-	id: EntityId,
-	label: string,
-	chapter: ChapterId | null,
-	size: PageSize,
-	layers: Layer[],
-	regions: AnalysisRegion[],
+        id: EntityId,
+        label: string,
+        chapter: ChapterId | null,
+        size: PageSize,
+        layers: Layer[],
+        regions: AnalysisRegion[],
 };
 
 export type PageImportSource = "files" | "folder";
 
 export type PageSelection = {
-	project: ProjectInfo,
-	page: Page,
+        project: ProjectInfo,
+        page: Page,
 };
 
 export type PageSize = {
-	width: number,
-	height: number,
+        width: number,
+        height: number,
 };
 
 export type PageSummary = {
-	id: EntityId,
-	label: string,
-	chapter: ChapterId | null,
-	size: PageSize,
-	source_asset: string | null,
-	layer_count: number,
+        id: EntityId,
+        label: string,
+        chapter: ChapterId | null,
+        size: PageSize,
+        source_asset: string | null,
+        layer_count: number,
 };
 
 export type PaintBrush = {
-	diameter: number,
-	color: [number, number, number, number],
+        diameter: number,
+        color: [number, number, number, number],
 };
 
 export type PipelineConfig = {
-	detection: DetectionModel,
-	ocr: OcrModel,
-	translation: TranslationConfig,
-	inpainting: InpaintingModel,
-	/**
-	 *  Settings for every model are kept independently of the active model.
-	 *  The active stage fields above only select which profile is used.
-	 */
-	processor: ProcessorConfig,
+        detection: DetectionModel,
+        ocr: OcrModel,
+        translation: TranslationConfig,
+        inpainting: InpaintingModel,
+        /**
+         *  Settings for every model are kept independently of the active model.
+         *  The active stage fields above only select which profile is used.
+         */
+        processor: ProcessorConfig,
 };
 
 export type Point = {
-	x: number,
-	y: number,
+        x: number,
+        y: number,
 };
 
 export type Preferences = {
-	pipeline: PipelineConfig,
-	providers: ProviderPreferences,
-	typesetting: TypesettingConfig,
-	languages: LanguageChoice[],
+        pipeline: PipelineConfig,
+        providers: ProviderPreferences,
+        typesetting: TypesettingConfig,
+        languages: LanguageChoice[],
 };
 
 export type ProcessorConfig = {
-	"koharu-layout-rfdetr-seg-2xl"?: KoharuLayoutRFDetrSeg2XLConfig | null,
-	"flux2-klein"?: Flux2KleinConfig | null,
-	"rorem-mixed"?: RoremMixedConfig | null,
+        "koharu-layout-rfdetr-seg-2xl"?: KoharuLayoutRFDetrSeg2XLConfig | null,
+        "flux2-klein"?: Flux2KleinConfig | null,
+        "rorem-mixed"?: RoremMixedConfig | null,
 };
 
 export type ProjectInfo = {
-	name: string,
-	revision: Revision,
-	active_page: EntityId | null,
-	can_undo: boolean,
-	can_redo: boolean,
+        name: string,
+        revision: Revision,
+        active_page: EntityId | null,
+        can_undo: boolean,
+        can_redo: boolean,
 };
 
 export type ProjectSummary = {
-	name: string,
+        name: string,
 };
 
 export type Provider = "local" | "openai" | "gemini" | "claude" | "grok" | "minimax" | "deepseek" | "openai-compatible" | "openrouter" | "lm-studio" | "deepl" | "google-cloud-translation" | "caiyun";
@@ -488,78 +634,139 @@ export type Provider = "local" | "openai" | "gemini" | "claude" | "grok" | "mini
 export type ProviderConfig = { provider: "local"; settings: LocalConfig } | { provider: "openai"; settings: OpenAiConfig } | { provider: "gemini"; settings: GeminiConfig } | { provider: "claude"; settings: ClaudeConfig } | { provider: "grok"; settings: GrokConfig } | { provider: "minimax"; settings: MiniMaxConfig } | { provider: "deepseek"; settings: DeepSeekConfig } | { provider: "openai-compatible"; settings: OpenAiCompatibleConfig } | { provider: "openrouter"; settings: OpenRouterConfig } | { provider: "lm-studio"; settings: LmStudioConfig } | { provider: "deepl"; settings: DeepLConfig } | { provider: "google-cloud-translation"; settings: GoogleCloudConfig } | { provider: "caiyun"; settings: CaiyunConfig };
 
 export type ProviderPreference = {
-	name: string,
-	config: ProviderConfig,
-	credential: CredentialInput | null,
+        name: string,
+        config: ProviderConfig,
+        credential: CredentialInput | null,
 };
 
 export type ProviderPreferences = {
-	entries: ProviderPreference[],
+        entries: ProviderPreference[],
+};
+
+export type PublicationCatalog = {
+        url: string,
+        siteUrl: string,
+        storyCount: number,
+        downloadedAt: string,
+};
+
+export type PublicationConfig = {
+        node?: string,
+        script?: string,
+        catalog_url?: string,
+        backend?: string,
+        binary?: string | null,
+        model?: string | null,
+        offline?: boolean,
+};
+
+export type PublicationGenre = {
+        name: string,
+        slug: string,
+};
+
+export type PublicationMetadata = {
+        title: string,
+        slug: string,
+        alternativeTitles: string,
+        author: string,
+        releaseYear: number | null,
+        country: string,
+        status: string,
+        genres: PublicationGenre[],
+};
+
+export type PublicationReadiness = {
+        node: string | null,
+        script: string | null,
+        binary: string | null,
+        missing: string[],
+        catalog: PublicationCatalog | null,
+        catalogError: string | null,
+};
+
+export type PublicationSettings = {
+        config: PublicationConfig,
+        metadata: PublicationMetadata,
 };
 
 export type Quantization = {
-	id: string,
-	name: string,
-	downloaded: boolean,
+        id: string,
+        name: string,
+        downloaded: boolean,
 };
 
 export type RasterLayerKind = "cleanup" | "paint";
 
 export type Reasoning = "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
 
+export type RetryStatus = {
+        attempt: number,
+        max_attempts: number,
+        delay_seconds: number,
+};
+
 export type Revision = number;
 
 export type RoremMixedConfig = {
-	prompt?: string,
-	negative_prompt?: string,
+        prompt?: string,
+        negative_prompt?: string,
 };
 
 export type RunId = string;
 
 export type Scope = { scope: "project" } | { scope: "pages"; value: EntityId[] } | { scope: "region"; value: {
-	page: EntityId,
-	bounds: Bounds,
+        page: EntityId,
+        bounds: Bounds,
 } } | { scope: "entities"; value: EntityId[] };
 
+export type SourceImportOptions = {
+        language: string | null,
+        download_url: string | null,
+        project_name: string | null,
+        summarize: boolean,
+        translate: boolean,
+};
+
 export type SourceText = {
-	text: string,
-	language: string | null,
+        text: string,
+        language: string | null,
 };
 
 export type Stage = "detection" | "ocr" | "translation" | "inpainting";
 
 export type StartupState = {
-	preferences: Preferences,
-	jobs: Job[],
-	canvas: CanvasState,
+        preferences: Preferences,
+        jobs: Job[],
+        canvas: CanvasState,
 };
 
 export type SummarizerBackend = "agy" | "pi";
 
 export type SummarizerConfig = {
-	backend?: SummarizerBackend,
-	binary?: string | null,
-	model?: string | null,
-	effort?: string | null,
-	skill?: string | null,
-	summarize_default?: boolean,
+        backend?: SummarizerBackend,
+        binary?: string | null,
+        model?: string | null,
+        effort?: string | null,
+        skill?: string | null,
+        summarize_default?: boolean,
 };
 
 export type SummarizerProbe = {
-	path: string | null,
-	version: string | null,
-	models: string[],
-	error: string | null,
+        path: string | null,
+        version: string | null,
+        models: string[],
+        error: string | null,
 };
 
 export type TextAlignment = "Start" | "Center" | "End" | "Justify";
 
 export type TextContent = {
-	id: EntityId,
-	source: SourceText | null,
-	translation: Translation | null,
-	role: string | null,
-	source_region: EntityId | null,
+        id: EntityId,
+        source: SourceText | null,
+        translation: Translation | null,
+        role: string | null,
+        source_region: EntityId | null,
 };
 
 export type TextLayoutKind = "point" | "paragraph";
@@ -567,42 +774,42 @@ export type TextLayoutKind = "point" | "paragraph";
 export type ThumbnailBytes = number[];
 
 export type TransformFrame = {
-	element: EntityId,
-	frame: Frame,
+        element: EntityId,
+        frame: Frame,
 };
 
 export type Translation = {
-	text: string,
-	language: string | null,
+        text: string,
+        language: string | null,
 };
 
 export type TranslationConfig = {
-	model: ModelSelection,
-	generation: GenerationConfig,
-	target_language: string,
-	instructions: string | null,
+        model: ModelSelection,
+        generation: GenerationConfig,
+        target_language: string,
+        instructions: string | null,
 };
 
 export type TypesettingConfig = {
-	font_families?: string[],
+        font_families?: string[],
 };
 
 export type Typography = {
-	preferred_font: string | null,
-	font_weight: number | null,
-	font_style: FontStyle | null,
-	size: number | null,
-	auto_fit: boolean,
-	color: [number, number, number, number] | null,
-	stroke_color: [number, number, number, number] | null,
-	stroke_width: number | null,
-	alignment: TextAlignment | null,
-	writing_mode: WritingMode | null,
+        preferred_font: string | null,
+        font_weight: number | null,
+        font_style: FontStyle | null,
+        size: number | null,
+        auto_fit: boolean,
+        color: [number, number, number, number] | null,
+        stroke_color: [number, number, number, number] | null,
+        stroke_width: number | null,
+        alignment: TextAlignment | null,
+        writing_mode: WritingMode | null,
 };
 
 export type TypographyUpdate = {
-	layer: EntityId,
-	typography: Typography,
+        layer: EntityId,
+        typography: Typography,
 };
 
 /**
@@ -610,12 +817,12 @@ export type TypographyUpdate = {
  *  without inventing a second document format.
  */
 export type Wiki = {
-	files: WikiFile[],
+        files: WikiFile[],
 };
 
 export type WikiFile = {
-	slug: string,
-	body: string,
+        slug: string,
+        body: string,
 };
 
 export type WritingMode = "Horizontal" | "Vertical";

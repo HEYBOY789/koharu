@@ -11,6 +11,7 @@ mod progress;
 mod report;
 mod request;
 mod resources;
+mod resume;
 mod scheduler;
 mod scope;
 mod stage;
@@ -22,7 +23,7 @@ pub use config::{
 };
 pub use error::{ErrorKind, PipelineError};
 pub use pipeline::Pipeline;
-pub use progress::{Progress, ProgressSink};
+pub use progress::{Progress, ProgressSink, RetryStatus};
 pub use report::{Committer, Report, RunStatus, StageOutput};
 pub use request::{InpaintingMask, Operation, Request, StopToken};
 pub use resources::{DeviceResources, ResourceSnapshot};

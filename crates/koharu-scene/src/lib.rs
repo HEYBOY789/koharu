@@ -24,6 +24,8 @@ pub use change::{
 };
 pub use component::{Component, ValidationContext};
 pub use components::{
+    DetectionCheckpoint, OcrCheckpoint, TranslationCheckpoint, InpaintingCheckpoint,
+    PublicationGenre, PublicationMetadata, ImportedSource, ImportedSourceChapter,
     Asset, AssetInput, AssetMetadata, AssetRole, Authored, Chapter, Chapters, DEFAULT_WIKI_SLUGS,
     DetectionAnalysis, DetectionLabel, EntityOrigin, FontStyle, Generation, Geometry, Group,
     LanguageTag, OcrAnalysis, Origin, Page, PageDraft, Point, Project, RasterLayer, RasterLayerKind,

@@ -13,7 +13,8 @@ use std::{sync::Arc, time::Duration};
 
 use koharu_ml::Device;
 
-use error::{Error, Result};
+pub use error::Error;
+use error::Result;
 use local::LocalTranslator;
 
 pub use backend::{TranslationContext, TranslationRequest};

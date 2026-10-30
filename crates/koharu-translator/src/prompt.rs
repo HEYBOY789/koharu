@@ -1,6 +1,6 @@
 use std::fmt::Write;
 
-use anyhow::Context;
+use anyhow::{Context, ensure};
 use indoc::indoc;
 use serde::{Deserialize, Deserializer, Serialize, de};
 use serde_json::{Value, json};
@@ -35,17 +35,27 @@ pub(crate) fn translations(
             snippet(text),
         )
     })?;
-    let mut translations = source_segments.to_vec();
-    let mut translated = vec![false; source_segments.len()];
+    let mut translations = vec![None; source_segments.len()];
 
     for translation in output.translations {
-        if translation.id < translations.len() && !translated[translation.id] {
-            translations[translation.id] = translation.text;
-            translated[translation.id] = true;
-        }
+        ensure!(
+            translation.id < translations.len(),
+            "{provider} returned an out-of-range translation ID {}",
+            translation.id
+        );
+        ensure!(
+            translations[translation.id].is_none(),
+            "{provider} returned a duplicate translation ID {}",
+            translation.id
+        );
+        translations[translation.id] = Some(translation.text);
     }
 
-    Ok(translations)
+    translations
+        .into_iter()
+        .enumerate()
+        .map(|(id, text)| text.with_context(|| format!("{provider} omitted translation ID {id}")))
+        .collect()
 }
 
 /// Keeps a model response readable in a log line without truncating so hard
@@ -297,13 +307,10 @@ mod tests {
     }
 
     #[test]
-    fn tolerates_duplicate_missing_and_out_of_range_ids() {
+    fn rejects_duplicate_missing_and_out_of_range_ids() {
         let source = ["one".to_owned(), "two".to_owned()];
         let short = r#"{"translations":[{"id":1,"text":"world"}]}"#;
-        assert_eq!(
-            translations("test", short, &source).unwrap(),
-            ["one", "world"]
-        );
+        assert!(translations("test", short, &source).is_err());
 
         let response = concat!(
             r#"{"translations":["#,
@@ -312,10 +319,9 @@ mod tests {
             r#"{"id":9,"text":"extra"}"#,
             "]}"
         );
-        assert_eq!(
-            translations("test", response, &source).unwrap(),
-            ["hello", "two"]
-        );
+        assert!(translations("test", response, &source).is_err());
+        let extra = r#"{"translations":[{"id":0,"text":"hello"},{"id":1,"text":"world"},{"id":9,"text":"extra"}]}"#;
+        assert!(translations("test", extra, &source).is_err());
     }
 
     #[test]

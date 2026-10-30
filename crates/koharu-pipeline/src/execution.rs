@@ -36,6 +36,7 @@ pub(crate) struct Execution<'a> {
     base: koharu_scene::Revision,
     started: Instant,
     inpainting_mask: Option<crate::InpaintingMask>,
+    resume: bool,
 }
 
 impl<'a> Execution<'a> {
@@ -73,6 +74,7 @@ impl<'a> Execution<'a> {
         );
 
         Ok(Self {
+            resume: request.resume,
             runner,
             resources,
             committer,
@@ -115,6 +117,9 @@ impl<'a> Execution<'a> {
             }
             if let Err(error) = self.apply_completion(completion).await {
                 self.failure = Some(error);
+                // A terminal failure must also cancel a sibling's retry wait.
+                // finalize retains the original failure rather than reporting Stop.
+                self.stop.stop();
             }
         }
 
@@ -144,7 +149,8 @@ impl<'a> Execution<'a> {
                     .as_ref()
                     .filter(|mask| stage == Stage::Inpainting && mask.page == page)
                     .cloned(),
-            ),
+            )
+            .with_resume(self.resume),
             self.stop.clone(),
             self.progress.clone(),
         ))

@@ -4,7 +4,11 @@ description: 'ChatGPT でサインインし、プロジェクト内のアシス�
 icon: 'robot'
 ---
 
-Koharu Agent はエディター内の Codex クライアントです。ChatGPT のデバイスコード認証を使い、Agent 用の OpenAI API キーは入力しません。
+Koharu Agent はエディターで Codex、Pi、AGY を選択できます。Pi と AGY は先に各 CLI でログインし、Agent パネルで接続を確認します。詳細設定で CLI のパス、必要な Node 実行ファイル、モデル、推論レベルを指定できます。Codex のログインは不要です。
+
+各実行環境は同じプロジェクト編集ツールと Undo 履歴を使います。実行環境や設定の変更で新しい会話が始まり、処理中は設定を変更できません。CLI の会話は継続して保持され、プロジェクトを閉じると終了します。
+
+以下は Codex の設定です。ChatGPT のデバイスコード認証を使い、Agent 用の OpenAI API キーは入力しません。
 
 <Steps>
   <Step title='Agent パネルを開く'>プロジェクトを開き、右側の **Agent** を選びます。</Step>

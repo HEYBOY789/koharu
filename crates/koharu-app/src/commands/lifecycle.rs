@@ -180,31 +180,54 @@ pub(crate) async fn subscribe(
     })
 }
 
-async fn replace_project(handle: &AppHandle<CefRuntime>, opened: Project) -> Result<()> {
-    let snapshot = opened.snapshot();
-    let page = opened.active_page();
-    let info = opened.info();
+pub(super) async fn replace_project(handle: &AppHandle<CefRuntime>, opened: Project) -> Result<()> {
+    prepare_project_switch(handle).await;
+    handle
+        .state::<CurrentProject>()
+        .project
+        .replace(opened)
+        .await;
+    show_current_project(handle).await
+}
 
+async fn prepare_project_switch(handle: &AppHandle<CefRuntime>) {
     handle.state::<AgentState>().reset().await;
     let processing = handle.state::<Processing>();
-    for stop in processing.stops.lock().values() {
-        stop.stop();
+    if !handle
+        .state::<CurrentProject>()
+        .project
+        .has_background_job()
+        .await
+    {
+        let jobs = processing.jobs.lock().clone();
+        for (id, stop) in processing.stops.lock().iter() {
+            if jobs.get(id).is_none_or(|job| {
+                job.state == super::processing::JobState::Running && job.project.is_none()
+            }) {
+                stop.stop();
+            }
+        }
     }
-    processing.stops.lock().clear();
-    processing.jobs.lock().clear();
+    processing.inpainting_mask.lock().take();
+}
 
-    let previous = {
-        let current = handle.state::<CurrentProject>();
-        let mut current = current.project.lock().await;
-        current.replace(opened)
-    };
-
+async fn show_current_project(handle: &AppHandle<CefRuntime>) -> Result<()> {
+    let projects = handle.state::<CurrentProject>();
+    let current = projects.project.lock().await;
     let desktop = handle.state::<Desktop>();
-    desktop.show_page(&snapshot, page).await?;
+    if let Some(project) = current.as_ref() {
+        desktop
+            .show_page(&project.snapshot(), project.active_page())
+            .await?;
+    } else {
+        desktop.clear().await;
+    }
     let canvas = desktop.canvas_state();
-    drop(previous);
     handle.state::<CanvasChannel>().channel.publish(canvas);
-    handle.state::<ProjectChannel>().channel.publish(Some(info));
+    handle
+        .state::<ProjectChannel>()
+        .channel
+        .publish(current.as_ref().map(Project::info));
     Ok(())
 }
 
@@ -274,9 +297,29 @@ pub(crate) async fn open_project(
     name: String,
     handle: AppHandle<CefRuntime>,
 ) -> std::result::Result<(), Error> {
+    if handle
+        .state::<Processing>()
+        .jobs
+        .lock()
+        .values()
+        .any(|job| {
+            job.state == super::processing::JobState::Running
+                && job.phase == Some(super::processing::ChapterPhase::Import)
+                && job.project.as_deref() == Some(name.as_str())
+        })
+    {
+        return Err(
+            anyhow::anyhow!("wait until this project's download/import has finished").into(),
+        );
+    }
     let library = handle.state::<ProjectLibrary>().inner().clone();
-    let opened = library.open(&name).await?;
-    replace_project(&handle, opened).await?;
+    prepare_project_switch(&handle).await;
+    handle
+        .state::<CurrentProject>()
+        .project
+        .open(&library, &name)
+        .await?;
+    show_current_project(&handle).await?;
     Ok(())
 }
 
@@ -293,43 +336,29 @@ pub(crate) async fn delete_project(
     name: String,
     handle: AppHandle<CefRuntime>,
 ) -> std::result::Result<(), Error> {
+    if handle.state::<Processing>().jobs.lock().values().any(|job|
+        matches!(job.state, super::processing::JobState::Running | super::processing::JobState::Queued)
+        && job.phase == Some(super::processing::ChapterPhase::Import)
+        && job.project.as_deref() == Some(name.as_str())) {
+        return Err(anyhow::anyhow!("stop this project's queued download/import before deleting it").into());
+    }
+    let library = handle.state::<ProjectLibrary>().inner().clone();
     let active = handle
         .state::<CurrentProject>()
         .project
-        .lock()
-        .await
-        .as_ref()
-        .is_some_and(|project| project.name == name);
+        .delete(&library, &name)
+        .await?;
     if active {
-        close_current_project(&handle).await?;
+        handle.state::<AgentState>().reset().await;
+        show_current_project(&handle).await?;
     }
-    let library = handle.state::<ProjectLibrary>().inner().clone();
-    tokio::task::spawn_blocking(move || library.delete(&name))
-        .await
-        .context("project deletion task failed")??;
     Ok(())
 }
 
 async fn close_current_project(handle: &AppHandle<CefRuntime>) -> Result<()> {
-    handle.state::<AgentState>().reset().await;
-    let processing = handle.state::<Processing>();
-    for stop in processing.stops.lock().values() {
-        stop.stop();
-    }
-    processing.stops.lock().clear();
-    processing.jobs.lock().clear();
-    let previous = {
-        let current = handle.state::<CurrentProject>();
-        let mut current = current.project.lock().await;
-        current.take()
-    };
-    let desktop = handle.state::<Desktop>();
-    desktop.clear().await;
-    let result = desktop.canvas_state();
-    drop(previous);
-    handle.state::<CanvasChannel>().channel.publish(result);
-    handle.state::<ProjectChannel>().channel.publish(None);
-    Ok(())
+    prepare_project_switch(handle).await;
+    handle.state::<CurrentProject>().project.close().await;
+    show_current_project(handle).await
 }
 
 #[tauri::command]
@@ -343,7 +372,13 @@ pub(crate) async fn import(
     processing: State<'_, Processing>,
     canvas_channel: State<'_, CanvasChannel>,
 ) -> std::result::Result<(), Error> {
-    if !processing.stops.lock().is_empty() {
+    let busy = project
+        .project
+        .lock()
+        .await
+        .as_ref()
+        .is_some_and(|project| processing.busy_for(&project.name));
+    if busy {
         return Err(anyhow::anyhow!("pages cannot be imported while processing is running").into());
     }
     let extensions = import::Format::iter()

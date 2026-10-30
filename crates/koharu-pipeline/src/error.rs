@@ -1,4 +1,4 @@
-use std::{error::Error as StdError, fmt};
+use std::{error::Error as StdError, fmt, time::Duration};
 
 use crate::Stage;
 
@@ -19,6 +19,16 @@ pub struct PipelineError {
 }
 
 impl PipelineError {
+    pub(crate) fn translation_retry_delay(&self, backoff: Duration) -> Option<Duration> {
+        if self.stage != Some(Stage::Translation) || self.kind != ErrorKind::Processing {
+            return None;
+        }
+        self.source
+            .chain()
+            .filter_map(|source| source.downcast_ref::<koharu_translator::Error>())
+            .find_map(|error| error.retry_delay(backoff))
+    }
+
     pub(crate) fn new(
         kind: ErrorKind,
         stage: Option<Stage>,

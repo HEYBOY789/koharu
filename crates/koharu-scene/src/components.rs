@@ -10,6 +10,8 @@ mod chapters;
 mod groups;
 mod layers;
 mod provenance;
+mod publication;
+mod imported_source;
 mod spatial;
 mod structure;
 mod text;
@@ -26,6 +28,10 @@ pub use layers::{
     WritingMode,
 };
 pub use provenance::{Authored, Generation, Origin};
+pub use publication::{PublicationGenre, PublicationMetadata};
+pub use imported_source::{ImportedSource, ImportedSourceChapter};
 pub use spatial::{Geometry, Point, Visibility};
 pub use structure::{EntityOrigin, Page, PageDraft, Project, Relation, RelationKind};
 pub use text::{LanguageTag, SourceText, TextContent, TextRole, Translation};
+mod checkpoints;
+pub use checkpoints::{DetectionCheckpoint, OcrCheckpoint, TranslationCheckpoint, InpaintingCheckpoint};

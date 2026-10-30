@@ -181,7 +181,7 @@ fn report(handle: &AppHandle<CefRuntime>, id: JobId, line: &str) {
     }
 }
 
-async fn stop_process(child: &mut tokio::process::Child, pid: Option<u32>) {
+pub(crate) async fn stop_process(child: &mut tokio::process::Child, pid: Option<u32>) {
     #[cfg(windows)]
     if let Some(pid) = pid {
         let _ = Command::new("taskkill")

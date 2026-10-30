@@ -7,6 +7,8 @@ import { useState, type ComponentProps } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { AboutDialog } from '@/components/app/AboutDialog'
+import { PublicationDialog } from '@/components/app/PublicationDialog'
+import { SourceImportDialog } from '@/components/app/SourceImportDialog'
 import { useMacOS, WindowControls } from '@/components/app/WindowChrome'
 import { call } from '@/lib/backend'
 import { selectableLayer } from '@/lib/geometry'
@@ -41,6 +43,9 @@ import { cn } from '@koharu/ui/lib/utils'
 export function TitleBar() {
   const { t } = useTranslation()
   const [aboutOpen, setAboutOpen] = useState(false)
+  const [publicationOpen, setPublicationOpen] = useState(false)
+  const [sourceImportOpen, setSourceImportOpen] = useState(false)
+  const setWorkspaceTab = useKoharuStore((state) => state.setWorkspaceTab)
   const macOS = useMacOS()
   const project = useProject().data
   const pagesQuery = usePages(Boolean(project))
@@ -100,6 +105,14 @@ export function TitleBar() {
           <MenubarMenu>
             <MenubarTrigger>{t('menu.file')}</MenubarTrigger>
             <MenubarContent>
+              <MenubarItem onClick={() => setWorkspaceTab('mangadex')}>
+                <BookOpen />
+                {t('mangadex.title')}
+              </MenubarItem>
+              <MenubarItem disabled={busy || importing} onClick={() => setSourceImportOpen(true)}>
+                <BookOpen />
+                {t('sourceImport.title')}
+              </MenubarItem>
               <MenubarSub>
                 <MenubarSubTrigger
                   disabled={!project || importing}
@@ -152,6 +165,11 @@ export function TitleBar() {
                   <BookOpen />
                 )}
                 {t('menu.exportWiki')}
+              </MenubarItem>
+              <MenubarSeparator />
+              <MenubarItem disabled={!project || busy} onClick={() => setPublicationOpen(true)}>
+                <BookOpen />
+                {t('publication.prepare')}
               </MenubarItem>
               <MenubarSeparator />
               <MenubarItem disabled={!project} onClick={closeProject}>
@@ -312,6 +330,8 @@ export function TitleBar() {
         {!macOS && <WindowControls />}
       </header>
       <AboutDialog open={aboutOpen} onOpenChange={setAboutOpen} />
+      <PublicationDialog open={publicationOpen} onOpenChange={setPublicationOpen} />
+      <SourceImportDialog open={sourceImportOpen} onOpenChange={setSourceImportOpen} />
     </>
   )
 }
