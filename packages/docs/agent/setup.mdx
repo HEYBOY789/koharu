@@ -38,7 +38,9 @@ Only one sign-in attempt can run at a time. Cancel it before starting another.
 
 ## What context is shared
 
-The Agent starts with the open project's semantic state. It renders and attaches a page image only when it invokes visual page inspection; it does not automatically attach every page.
+The Agent starts with a compact overview of the open project and its first batch of page IDs. It reads further page batches with `inspect_project`, semantic layers and regions with `inspect_page`, and available font families with `list_fonts`. These reads are paginated and limited to 64 KiB per response, so large projects do not push the user's request behind a full-project dump. The CLI receives the complete user request before the overview.
+
+The Agent renders and attaches a page image only when it invokes visual page inspection; it does not automatically attach every page.
 
 <Note>
   Agent sign-in and translation-provider credentials are separate. ChatGPT sign-in does not

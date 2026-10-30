@@ -184,6 +184,40 @@ fn streams_require_terminal_success_and_surface_model_errors() -> Result<()> {
 }
 
 #[tokio::test]
+async fn cli_sends_the_complete_user_request_before_project_data() -> Result<()> {
+    let source = tempfile::tempdir()?;
+    let script = source.path().join("request.mjs");
+    let prompt = "Chỉnh lỗi font và xuống dòng cho toàn bộ project. Giữ nguyên nội dung. TASK_END_6817";
+    tokio::fs::write(&script, format!(r#"
+        import {{ createInterface }} from 'node:readline';
+        createInterface({{ input: process.stdin }}).on('line', line => {{
+            const input = JSON.parse(line);
+            const text = input.message?.content ?? input.message;
+            const task = {task};
+            const success = text.startsWith('User request:\n' + task + '\n\n')
+                && text.indexOf('TASK_END_6817') < text.indexOf('<koharu_project_context>');
+            if (input.event === 'user') {{
+                console.log(JSON.stringify({{event:'result',result:{{status:'SUCCESS',response:success ? 'task preserved' : 'task hidden behind project data'}}}}));
+            }} else {{
+                console.log(JSON.stringify({{type:'message_end',message:{{role:'assistant',stopReason:'stop',content:[{{type:'text',text:success ? 'task preserved' : 'task hidden behind project data'}}]}}}}));
+                console.log('{{"type":"agent_settled"}}');
+            }}
+        }});
+    "#, task = serde_json::to_string(prompt)?)).await?;
+    let config = CliConfig {
+        binary: Some(script.display().to_string()),
+        ..CliConfig::default()
+    };
+    for backend in [Backend::Agy, Backend::Pi] {
+        let mut session = Session::default();
+        let result = run(&mut session, backend, &config, Arc::new(Fixture::default()), RunId::new(), prompt, &Control::default(), &mut |_| {}).await?;
+        session.close().await;
+        assert_eq!(result, "task preserved", "{backend:?}");
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn discovery_reads_both_help_streams_and_requires_a_successful_capability_check() -> Result<()> {
     let source = tempfile::tempdir()?;
     let script = source.path().join("discovery.mjs");

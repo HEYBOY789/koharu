@@ -17,6 +17,8 @@ use serde_json::{Value, json};
 use tauri::{AppHandle, Manager as _};
 use tauri_runtime_cef::CefRuntime;
 
+use super::context::{self, InspectPage, Window};
+
 use crate::commands::{
     ChannelExt as _,
     canvas::{CanvasChannel, Point},
@@ -66,51 +68,25 @@ impl KoharuHost {
             .check(project)
     }
 
-    async fn project_context(&self) -> Result<Value> {
-        let (project, pages) = {
-            let current = self.handle.state::<CurrentProject>();
-            let current = current.project.lock().await;
-            let project = current.as_ref().context("no project is open")?;
-            self.check_project(project)?;
-            let snapshot = project.snapshot();
-            let pages = Project::pages(&snapshot)?
-                .into_iter()
-                .map(|page| Project::page(&snapshot, page.id))
-                .collect::<Result<Vec<_>>>()?;
-            (project.info(), pages)
-        };
+    async fn project_context(&self, query: &Window) -> Result<Value> {
         let preferences = Preferences::load()?;
-        let fonts = self
-            .handle
-            .state::<Desktop>()
-            .renderer()
-            .available_fonts()
-            .await?;
-        let providers = preferences
-            .providers
-            .entries
-            .iter()
-            .map(|provider| {
-                json!({
-                    "name": provider.name,
-                    "config": provider.config,
-                    "credential_configured": provider
-                        .credential
-                        .as_ref()
-                        .is_some_and(|credential| credential.configured),
-                })
-            })
-            .collect::<Vec<_>>();
-        Ok(json!({
-            "project": project,
-            "pages": pages,
-            "configuration": {
-                "pipeline": preferences.pipeline,
-                "providers": providers,
-                "typesetting": preferences.typesetting,
-                "available_fonts": fonts.into_iter().map(|font| font.name).collect::<Vec<_>>(),
+        let configuration = json!({
+            "pipeline": {
+                "detection": preferences.pipeline.detection,
+                "ocr": preferences.pipeline.ocr,
+                "inpainting": preferences.pipeline.inpainting,
+                "translation": {
+                    "model": preferences.pipeline.translation.model,
+                    "target_language": preferences.pipeline.translation.target_language,
+                },
             },
-        }))
+            "typesetting": preferences.typesetting,
+        });
+        let current = self.handle.state::<CurrentProject>();
+        let current = current.project.lock().await;
+        let project = current.as_ref().context("no project is open")?;
+        self.check_project(project)?;
+        context::overview(project, configuration, query)
     }
 
     async fn mutate<T>(
@@ -227,7 +203,7 @@ impl Host for KoharuHost {
     }
 
     async fn context(&self) -> Result<Value> {
-        self.project_context().await
+        self.project_context(&Window::default()).await
     }
 
     fn tools(&self) -> Vec<Tool> {
@@ -235,9 +211,17 @@ impl Host for KoharuHost {
         TOOLS
             .get_or_init(|| {
                 vec![
-                    definition::<InspectProject>(
+                    definition::<Window>(
                         "inspect_project",
-                        "Read the latest complete semantic project state after edits. This does not include page images.",
+                        "Read the current project overview and a batch of page IDs. Follow pagination.next_offset until null to list every page. Layer content is read separately with inspect_page.",
+                    ),
+                    definition::<InspectPage>(
+                        "inspect_page",
+                        "Read one page's semantic layer and analysis-region entries, including text, font and geometry. Follow pagination.next_offset until null for all entries. No image rendering is performed.",
+                    ),
+                    definition::<Window>(
+                        "list_fonts",
+                        "List available font family names. Follow pagination.next_offset until null for all fonts.",
                     ),
                     definition::<ViewPage>(
                         "view_page",
@@ -254,7 +238,7 @@ impl Host for KoharuHost {
                     ),
                     definition::<SetTypography>(
                         "set_typography",
-                        "Replace an element's typography settings. Font is a family name from available_fonts.",
+                        "Replace an element's typography settings. Font is a family name returned by list_fonts.",
                     ),
                     definition::<SetGeometry>(
                         "set_geometry",
@@ -284,8 +268,27 @@ impl Host for KoharuHost {
         }
         match call.name.as_str() {
             "inspect_project" => {
-                let _: InspectProject = arguments(&call)?;
-                Invocation::read(self.project_context().await?)
+                let query: Window = arguments(&call)?;
+                Invocation::read(self.project_context(&query).await?)
+            }
+            "inspect_page" => {
+                let query: InspectPage = arguments(&call)?;
+                let page = entity(&query.page)?;
+                let current = self.handle.state::<CurrentProject>();
+                let current = current.project.lock().await;
+                let project = current.as_ref().context("no project is open")?;
+                self.check_project(project)?;
+                Invocation::read(context::page(&project.snapshot(), page, query.offset, query.limit)?)
+            }
+            "list_fonts" => {
+                let query: Window = arguments(&call)?;
+                {
+                    let current = self.handle.state::<CurrentProject>();
+                    let current = current.project.lock().await;
+                    self.check_project(current.as_ref().context("no project is open")?)?;
+                }
+                let fonts = self.handle.state::<Desktop>().renderer().available_fonts().await?;
+                Invocation::read(context::fonts(fonts.into_iter().map(|font| font.name).collect(), &query)?)
             }
             "view_page" => {
                 let arguments: ViewPage = arguments(&call)?;
@@ -615,9 +618,6 @@ mod tests {
         Ok(())
     }
 }
-
-#[derive(Deserialize, JsonSchema)]
-struct InspectProject {}
 
 #[derive(Deserialize, JsonSchema)]
 struct ViewPage {
