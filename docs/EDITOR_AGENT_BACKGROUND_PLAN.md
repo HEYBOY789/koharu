@@ -1,6 +1,6 @@
 # Editor Agent: tiến trình rõ ràng và chạy nền theo project
 
-Ngày: 31/10/2026. Trạng thái: plan triển khai, chưa thay đổi hành vi ứng dụng.
+Ngày: 31/10/2026. Trạng thái: source và exe Windows đã triển khai ở `24eb5f7d`; các kiểm tra tập trung đã qua. Nghiệm thu ảnh UI/native workflow đầy đủ còn giới hạn như ghi bên dưới.
 Baseline đã kiểm tra: `9b6d5a80`.
 
 ## Kết quả cần có
@@ -59,13 +59,21 @@ Giữ một writer xử lý nặng trên cùng project: yêu cầu khởi chạy
 ## Ca nghiệm thu bắt buộc
 
 - [ ] Tool/page/stage hiện rõ; trạng thái không chớp, không đẩy cuộn khi đang đọc lịch sử; label dài không tràn.
-- [ ] A đang sửa, chuyển sang B cho dịch, rồi mở C: A/B tiếp tục và C không bị đổi canvas/layer.
-- [ ] Mở lại A giữa run và sau khi xong: panel nhận snapshot/sự kiện đúng thứ tự, không mất/nhân đôi output; layer và Undo cùng session.
-- [ ] Stop A khi đang gọi tool và khi đang chờ admission: B tiếp tục, commit A đã xong còn giữ, lời gọi muộn bị từ chối.
-- [ ] Xong A nhưng B còn chạy không giải phóng nhầm project B; xóa project đang được giữ bị chặn đúng đích.
-- [ ] Cạnh tranh chỉnh sửa cùng project được xử lý theo revision/precondition, không áp kết quả từ snapshot cũ lên dữ liệu đã khác.
+- [x] A đang sửa, chuyển sang B cho dịch, rồi mở C: A/B tiếp tục và C không bị đổi canvas/layer.
+- [x] Mở lại A giữa run và sau khi xong: panel nhận snapshot/sự kiện đúng thứ tự, không mất/nhân đôi output; layer và Undo cùng session.
+- [x] Stop A khi đang gọi tool và khi đang chờ admission: B tiếp tục, commit A đã xong còn giữ, lời gọi muộn bị từ chối.
+- [x] Xong A nhưng B còn chạy không giải phóng nhầm project B; xóa project đang được giữ bị chặn đúng đích.
+- [x] Cạnh tranh chỉnh sửa cùng project được xử lý theo revision/precondition, không áp kết quả từ snapshot cũ lên dữ liệu đã khác.
 - [ ] Thoát app dọn đúng CLI/process group và quyền tool; không tuyên bố tiếp tục sau khi khởi động lại.
-- [ ] 11 locale đầy đủ; typed bridge sinh đúng từ nguồn; regression hiện có về Undo, context lớn, pipeline nền và hủy vẫn qua.
+- [x] 11 locale đầy đủ; typed bridge sinh đúng từ nguồn; regression hiện có về Undo, context lớn, pipeline nền và hủy vẫn qua.
 - [ ] Có ảnh trạng thái UI thực tế và bằng chứng phiên native dùng được. Nếu capture hoặc backend chưa dùng được trong môi trường kiểm tra, ghi rõ phần chưa xác minh; build xanh không thay cho nghiệm thu đó.
 
-Đoạn này là tiêu chí cần thực hiện, không phải báo cáo đã chạy. Dùng focused tests/kiểm tra native theo quy tắc repo; chạy bộ E2E tự động chỉ khi người dùng yêu cầu.
+Các mục đã đánh dấu được xác minh bằng focused fixtures native/UI, không phải một workflow E2E đầy đủ trên project người dùng. Bộ E2E tự động không được chạy.
+
+## Bằng chứng bàn giao — 31/10/2026
+
+- 35 kiểm tra phân biệt đã qua: 5 kiểm tra agent native (context/Undo/precondition/session), 7 workspace, 6 CLI/bridge, 16 UI/runtime và 1 AGY thật chạy chủ động. Case workspace kiểm tra A-agent/B-pipeline/C-editor, hủy một waiter không giải phóng permit B, kết thúc/giải phóng A không giải phóng project pipeline khác, và Undo thuộc đúng session. UI/runtime kiểm tra unmount/reopen, chống snapshot cũ ghi đè startup mới, khóa gửi yêu cầu agent thứ hai, Stop theo đúng run và DOM tiến trình ổn định khi nhiều delta đến.
+- Phiên AGY thật dùng dữ liệu mẫu riêng: đọc ảnh/sửa, hai lượt giữ cùng conversation; không dùng model để chỉnh project người dùng. Pi chưa cài cho người dùng; parser/RPC được kiểm tra bằng fixture, không tuyên bố Pi đã chạy với tài khoản thật.
+- TypeScript, 11 locale và frontend export đã qua. Bridge được sinh bằng generator chính thức; runner từ chối ghi file trực tiếp nên lấy toàn bộ output generator qua `CONOUT$` rồi chuyển nguyên artifact vào file, không chỉnh schema/generated types bằng tay. Windows debug custom-protocol build và exe `--version` đã qua.
+- Đã cài `F:\koharu-run\koharu.exe`, giữ bản trước ở `F:\koharu-run\koharu-before-editor-background-20261031.exe`. Native window khởi động, phản hồi và trả cây accessibility Projects; yêu cầu đóng cửa sổ kết thúc tiến trình bình thường. Capture báo `FrameArrived timed out`; công cụ click báo không có geometry nên chưa kiểm chứng ảnh/bố cục/chớp trong cửa sổ thực hoặc workflow A/B/C đầy đủ qua UI.
+- Linux và Pi với provider thật vẫn chưa chạy trên máy này. Lịch sử và Undo giữ trong session của lần chạy ứng dụng; không thêm tự phục hồi tác vụ sau khi tắt ứng dụng/máy.

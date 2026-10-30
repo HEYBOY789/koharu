@@ -296,6 +296,7 @@ mod tests {
         }
         workspace.agent_running(&agent, false).await.unwrap();
         assert!(workspace.target(&agent).await.is_ok());
+        assert!(workspace.target(&pipeline).await.is_ok());
         assert_eq!(workspace.lock().await.as_ref().unwrap().instance_id, c_id);
         workspace.finish(&pipeline).await;
         assert!(workspace.target(&agent).await.is_ok());
@@ -312,8 +313,14 @@ mod tests {
                 .all(|file| file.body != "agent edit")
         );
         drop(a);
+        let next = workspace
+            .retain_background(memory("Next pipeline").await, ProjectOwner::Pipeline)
+            .await
+            .unwrap();
         workspace.finish(&agent).await;
         assert!(workspace.target(&agent).await.is_err());
+        assert!(workspace.target(&next).await.is_ok());
+        workspace.finish(&next).await;
     }
 
     #[tokio::test]
