@@ -40,7 +40,7 @@
     "failed": "エージェントのリクエストに失敗しました。",
     "loading": "Codexを読み込み中…",
     "message": "Koharuエージェントにメッセージを送信",
-    "model": "Codexモデル",
+    "model": "モデル",
     "placeholder": "Koharuにこのプロジェクトの作業を依頼…",
     "properties": "プロパティ",
     "reasoning": "推論",

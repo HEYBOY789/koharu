@@ -40,7 +40,7 @@
     "failed": "에이전트 요청에 실패했습니다.",
     "loading": "Codex 불러오는 중…",
     "message": "Koharu 에이전트에게 메시지 보내기",
-    "model": "Codex 모델",
+    "model": "모델",
     "placeholder": "Koharu에게 이 프로젝트 작업 요청…",
     "properties": "속성",
     "reasoning": "추론",

@@ -40,7 +40,7 @@
     "failed": "代理要求失敗。",
     "loading": "正在載入 Codex…",
     "message": "傳送訊息給 Koharu 代理",
-    "model": "Codex 模型",
+    "model": "模型",
     "placeholder": "讓 Koharu 處理此專案…",
     "properties": "屬性",
     "reasoning": "推理",

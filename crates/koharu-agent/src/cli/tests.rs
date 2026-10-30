@@ -184,6 +184,57 @@ fn streams_require_terminal_success_and_surface_model_errors() -> Result<()> {
 }
 
 #[tokio::test]
+async fn discovery_reads_both_help_streams_and_requires_a_successful_capability_check() -> Result<()> {
+    let source = tempfile::tempdir()?;
+    let script = source.path().join("discovery.mjs");
+    let config = CliConfig {
+        binary: Some(script.display().to_string()),
+        ..CliConfig::default()
+    };
+    for (stdout, stderr, exit, supported) in [
+        ("--input-format --output-format --agent --settings", "", 0, true),
+        ("", "--input-format --output-format --agent --settings", 0, true),
+        ("--input-format --output-format", "--agent --settings", 0, true),
+        ("--input-format --output-format --agent --settings", "CLI startup failed", 2, false),
+        ("", "--input-format --output-format --agent", 0, false),
+    ] {
+        let stdout = serde_json::to_string(stdout)?;
+        let stderr = serde_json::to_string(stderr)?;
+        tokio::fs::write(&script, format!(r#"
+            if (process.argv.includes('--help')) {{
+                process.stdout.write({stdout});
+                process.stderr.write({stderr});
+                process.exitCode = {exit};
+            }} else if (process.argv.includes('models')) {{
+                console.log('fixture-model\tFixture model');
+            }} else {{ process.exitCode = 3; }}
+        "#)).await?;
+        let result = inspect(Backend::Agy, &config).await;
+        if supported {
+            let (_, models) = result?;
+            assert_eq!(models.len(), 1);
+            assert_eq!(models[0].id, "fixture-model");
+        } else {
+            assert!(result.is_err(), "accepted an unsuccessful or incomplete capability check");
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "Manual installed CLI discovery; makes no model calls"]
+async fn installed_agy_discovers_editor_models() -> Result<()> {
+    let config = CliConfig {
+        binary: std::env::var("KOHARU_EDITOR_PROBE_BINARY").ok(),
+        ..CliConfig::default()
+    };
+    let (executable, models) = inspect(Backend::Agy, &config).await?;
+    assert!(!models.is_empty());
+    println!("Discovered {} editor models using {executable}", models.len());
+    Ok(())
+}
+
+#[tokio::test]
 async fn cli_preserves_partial_records_while_host_events_arrive_and_can_be_cancelled() -> Result<()>
 {
     let source = tempfile::tempdir()?;

@@ -40,7 +40,7 @@
     "failed": "La requête de l’agent a échoué.",
     "loading": "Chargement de Codex…",
     "message": "Message à l’agent Koharu",
-    "model": "Modèle Codex",
+    "model": "Modèle",
     "placeholder": "Demandez à Koharu de travailler sur ce projet…",
     "properties": "Propriétés",
     "reasoning": "Raisonnement",

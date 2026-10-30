@@ -40,7 +40,7 @@
     "failed": "The agent request failed.",
     "loading": "Loading Codex...",
     "message": "Message Koharu Agent",
-    "model": "Codex model",
+    "model": "Model",
     "placeholder": "Ask Koharu to work on this project...",
     "properties": "Properties",
     "reasoning": "Reasoning",

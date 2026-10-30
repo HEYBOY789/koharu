@@ -40,7 +40,7 @@
     "failed": "Запрос агента завершился ошибкой.",
     "loading": "Загрузка Codex…",
     "message": "Сообщение агенту Koharu",
-    "model": "Модель Codex",
+    "model": "Модель",
     "placeholder": "Попросите Koharu поработать над проектом…",
     "properties": "Свойства",
     "reasoning": "Рассуждение",

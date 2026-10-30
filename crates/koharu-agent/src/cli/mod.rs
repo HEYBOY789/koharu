@@ -126,7 +126,19 @@ pub(crate) async fn inspect(
     let help = tokio::time::timeout(Duration::from_secs(10), help.output())
         .await
         .context("CLI capability check timed out")??;
-    let help = String::from_utf8_lossy(&help.stdout);
+    // Some CLIs, including AGY, print successful help to stderr.
+    let help_text = format!(
+        "{}\n{}",
+        String::from_utf8_lossy(&help.stdout),
+        String::from_utf8_lossy(&help.stderr),
+    );
+    if !help.status.success() {
+        bail!(
+            "CLI capability check failed ({}): {}",
+            help.status,
+            redact(&help_text)
+        );
+    }
     let required: &[&str] = if backend == Backend::Agy {
         &["--input-format", "--output-format", "--agent", "--settings"]
     } else {
@@ -137,7 +149,7 @@ pub(crate) async fn inspect(
             "--no-context-files",
         ]
     };
-    if !required.iter().all(|flag| help.contains(flag)) {
+    if !required.iter().all(|flag| help_text.contains(flag)) {
         bail!(
             "This CLI version does not support the editor protocol. Update the CLI and check again."
         );

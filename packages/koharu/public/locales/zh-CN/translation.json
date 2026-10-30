@@ -40,7 +40,7 @@
     "failed": "智能体请求失败。",
     "loading": "正在加载 Codex…",
     "message": "向 Koharu 智能体发送消息",
-    "model": "Codex 模型",
+    "model": "模型",
     "placeholder": "让 Koharu 处理此项目…",
     "properties": "属性",
     "reasoning": "推理",
