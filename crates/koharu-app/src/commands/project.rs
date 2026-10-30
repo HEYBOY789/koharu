@@ -175,7 +175,7 @@ pub struct Typography {
 }
 
 mod workspace;
-pub(crate) use workspace::{JobProject, ProjectWorkspace};
+pub(crate) use workspace::{ProjectLease, ProjectOwner, ProjectWorkspace};
 
 #[derive(Default)]
 pub(crate) struct CurrentProject {

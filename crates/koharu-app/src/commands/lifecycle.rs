@@ -26,6 +26,7 @@ pub struct StartupState {
     pub preferences: Preferences,
     pub jobs: Vec<Job>,
     pub canvas: CanvasState,
+    pub agent: super::agent::AgentSnapshot,
 }
 
 #[derive(Clone, Debug, Serialize, Type)]
@@ -156,6 +157,7 @@ pub(crate) async fn subscribe(
     on_download: Channel<Download>,
     on_resources: Channel<ModelResources>,
     on_project: Channel<Option<ProjectInfo>>,
+    on_agent: Channel<super::agent::AgentSnapshot>,
 ) -> std::result::Result<StartupState, Error> {
     handle.state::<Initialization>().wait().await?;
 
@@ -177,6 +179,7 @@ pub(crate) async fn subscribe(
             .cloned()
             .collect(),
         canvas,
+        agent: handle.state::<AgentState>().subscribe(on_agent),
     })
 }
 
@@ -191,24 +194,7 @@ pub(super) async fn replace_project(handle: &AppHandle<CefRuntime>, opened: Proj
 }
 
 async fn prepare_project_switch(handle: &AppHandle<CefRuntime>) {
-    handle.state::<AgentState>().reset().await;
-    let processing = handle.state::<Processing>();
-    if !handle
-        .state::<CurrentProject>()
-        .project
-        .has_background_job()
-        .await
-    {
-        let jobs = processing.jobs.lock().clone();
-        for (id, stop) in processing.stops.lock().iter() {
-            if jobs.get(id).is_none_or(|job| {
-                job.state == super::processing::JobState::Running && job.project.is_none()
-            }) {
-                stop.stop();
-            }
-        }
-    }
-    processing.inpainting_mask.lock().take();
+    handle.state::<Processing>().inpainting_mask.lock().take();
 }
 
 async fn show_current_project(handle: &AppHandle<CefRuntime>) -> Result<()> {

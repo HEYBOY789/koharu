@@ -70,7 +70,34 @@
     "saveSetup": "저장 및 확인",
     "checkConnection": "연결 확인",
     "checking": "CLI와 모델 확인 중…",
-    "cliSignInHint": "먼저 이 CLI에서 로그인한 다음 여기서 연결을 확인하세요."
+    "cliSignInHint": "먼저 이 CLI에서 로그인한 다음 여기서 연결을 확인하세요.",
+    "progress": {
+      "starting": "에이전트 준비 중…",
+      "responding": "응답 작성 중…",
+      "waiting": "처리 대기 중…",
+      "summary": "추론 요약",
+      "changes": "완료한 수정: {{count}}",
+      "background": "에이전트가 “{{name}}”에서 작업 중입니다.",
+      "newConversation": "새 대화"
+    },
+    "tools": {
+      "inspect_project": "프로젝트 페이지 읽는 중",
+      "inspect_page": "페이지 레이어 읽는 중",
+      "list_fonts": "사용 가능한 글꼴 확인 중",
+      "view_page": "페이지 이미지 확인 중",
+      "rename_page": "페이지 이름 변경 중",
+      "move_page": "페이지 순서 변경 중",
+      "delete_pages": "페이지 삭제 중",
+      "add_text_box": "텍스트 상자 추가 중",
+      "set_source_text": "원문 수정 중",
+      "set_translation": "번역 수정 중",
+      "set_typography": "문자 서식 조정 중",
+      "set_geometry": "레이아웃 조정 중",
+      "set_visibility": "표시 설정 변경 중",
+      "delete_elements": "레이어 삭제 중",
+      "move_element": "레이어 이동 중",
+      "run_pipeline": "파이프라인 실행 중"
+    }
   },
   "canvas": {
     "empty": "시작할 페이지를 선택하세요.",

@@ -66,6 +66,7 @@ beforeEach(() => {
 
 const startupState = (): StartupState => ({
   preferences,
+  agent: { sequence: 0, conversations: [], run: null },
   jobs: [],
   canvas: {
     page: null,
@@ -95,6 +96,47 @@ function ProjectProbe() {
 }
 
 describe('Tauri runtime', () => {
+  it('keeps newer agent events over a late startup snapshot and refreshes only the owning editor', async () => {
+    const pending = deferred<StartupState>()
+    const binding = vi.spyOn(commands, 'subscribe').mockReturnValue(pending.promise)
+    const getProject = vi.spyOn(commands, 'getProject').mockResolvedValue(project)
+    const view = render(createElement(Providers, null, createElement(ProjectProbe)))
+    await waitFor(() => expect(binding).toHaveBeenCalledTimes(1))
+    const agentChannel = binding.mock.calls[0][5]
+    const run = {
+      id: 'agent',
+      project: 'Other',
+      state: 'running' as const,
+      phase: 'tool' as const,
+      tool: 'set_typography',
+      page: '007',
+      element: null,
+      stage: null,
+      changes: 1,
+      error: null,
+    }
+    act(() => agentChannel.onmessage({ sequence: 4, conversations: [], run }))
+    pending.resolve(startupState())
+    expect(await screen.findByText('Book')).toBeInTheDocument()
+    expect(useKoharuStore.getState().agent.run?.project).toBe('Other')
+    const previous = getProject.mock.calls.length
+    act(() =>
+      agentChannel.onmessage({ sequence: 5, conversations: [], run: { ...run, changes: 2 } }),
+    )
+    expect(getProject.mock.calls.length).toBe(previous)
+    act(() =>
+      agentChannel.onmessage({
+        sequence: 6,
+        conversations: [],
+        run: { ...run, project: 'Book', changes: 3 },
+      }),
+    )
+    await waitFor(() => expect(getProject.mock.calls.length).toBeGreaterThan(previous))
+    act(() => agentChannel.onmessage({ sequence: 3, conversations: [], run }))
+    expect(useKoharuStore.getState().agent.run?.project).toBe('Book')
+    view.unmount()
+  })
+
   it('keeps the project unresolved until its backend query returns', async () => {
     const projectPending = deferred<ProjectInfo | null>()
     vi.spyOn(commands, 'getProject').mockReturnValue(projectPending.promise)

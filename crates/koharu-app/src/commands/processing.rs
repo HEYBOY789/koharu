@@ -13,7 +13,7 @@ use uuid::Uuid;
 use super::{
     ChannelExt as _, Error,
     canvas::CanvasChannel,
-    project::{CurrentProject, JobProject},
+    project::{CurrentProject, ProjectLease, ProjectOwner},
 };
 use koharu_desktop::Desktop;
 
@@ -122,11 +122,11 @@ pub(crate) struct JobChannel {
 
 pub(crate) struct PipelineCommitter {
     handle: AppHandle<CefRuntime>,
-    project: JobProject,
+    project: ProjectLease,
 }
 
 impl PipelineCommitter {
-    pub(crate) fn new(handle: AppHandle<CefRuntime>, project: JobProject) -> Self {
+    pub(crate) fn new(handle: AppHandle<CefRuntime>, project: ProjectLease) -> Self {
         Self { handle, project }
     }
 }
@@ -240,7 +240,7 @@ pub(crate) async fn process(
         let mut stops = processing.stops.lock();
         stops.insert(id, stop.clone());
     }
-    let target = match project.project.bind(origin).await {
+    let target = match project.project.retain(origin, ProjectOwner::Pipeline).await {
         Ok(target) => target,
         Err(error) => {
             processing.stops.lock().remove(&id);

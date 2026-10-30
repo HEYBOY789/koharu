@@ -78,7 +78,7 @@ impl Invocation {
 #[async_trait]
 pub trait Host: Send + Sync + 'static {
     /// Bind every tool invocation to this run's project and cancellation lease.
-    async fn bind(&self, control: Control) -> Result<std::sync::Arc<dyn Host>>;
+    async fn bind(&self, run: crate::RunId, control: Control) -> Result<std::sync::Arc<dyn Host>>;
 
     /// Return a compact overview; detailed project content is fetched through tools.
     async fn context(&self) -> Result<Value>;

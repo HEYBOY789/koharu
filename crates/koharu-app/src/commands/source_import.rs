@@ -1,3 +1,4 @@
+use crate::commands::project::ProjectOwner;
 use super::{
     ChannelExt as _, Error, chapter,
     import::{self, ChapterSource, ImportedChapter},
@@ -362,7 +363,7 @@ async fn download_and_import(
         let target = handle
             .state::<CurrentProject>()
             .project
-            .bind_background(project)
+            .retain_background(project, ProjectOwner::Pipeline)
             .await?;
         let outcome = async {
             let config = summarizer::SummarizerConfig::load()?.read()?.clone();

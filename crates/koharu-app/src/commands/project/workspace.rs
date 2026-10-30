@@ -1,3 +1,5 @@
+use std::collections::{HashMap, HashSet};
+
 use anyhow::{Context as _, Result, ensure};
 use koharu_scene::Snapshot;
 use tokio::sync::{MappedMutexGuard, Mutex, MutexGuard};
@@ -5,14 +7,21 @@ use uuid::Uuid;
 
 use super::{Project, ProjectLibrary};
 
-#[derive(Clone)]
-pub(crate) struct JobProject {
-    pub(crate) id: Uuid,
-    pub(crate) name: String,
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ProjectOwner {
+    Pipeline,
+    Agent,
 }
 
-/// The editor and the single pipeline job may own different open sessions.
-/// All access shares one lock so switching cannot race a visible canvas commit.
+#[derive(Clone)]
+pub(crate) struct ProjectLease {
+    pub(crate) id: Uuid,
+    pub(crate) name: String,
+    token: Uuid,
+    owner: ProjectOwner,
+}
+
+/// All consumers share one session and lock, including projects not shown in the editor.
 #[derive(Default)]
 pub(crate) struct ProjectWorkspace {
     state: Mutex<Workspace>,
@@ -21,8 +30,47 @@ pub(crate) struct ProjectWorkspace {
 #[derive(Default)]
 struct Workspace {
     active: Option<Project>,
-    background: Option<Project>,
-    running: Option<Uuid>,
+    retained: HashMap<Uuid, Project>,
+    leases: HashMap<Uuid, (Uuid, ProjectOwner)>,
+    busy_agents: HashSet<Uuid>,
+}
+
+impl Workspace {
+    fn retain(&mut self, id: Uuid, name: String, owner: ProjectOwner) -> Result<ProjectLease> {
+        ensure!(
+            !self.leases.iter().any(|(token, (project, existing))| {
+                (*existing == owner)
+                    || (*project == id
+                        && (*existing == ProjectOwner::Pipeline
+                            || self.busy_agents.contains(token)))
+            }),
+            "a task already owns this project or processing lane; stop it before starting another"
+        );
+        let token = Uuid::new_v4();
+        self.leases.insert(token, (id, owner));
+        if owner == ProjectOwner::Agent {
+            self.busy_agents.insert(token);
+        }
+        Ok(ProjectLease {
+            id,
+            name,
+            token,
+            owner,
+        })
+    }
+
+    fn select(&mut self, opened: Option<Project>) {
+        if let Some(previous) = self.active.take() {
+            if self
+                .leases
+                .values()
+                .any(|(id, _)| *id == previous.instance_id)
+            {
+                self.retained.insert(previous.instance_id, previous);
+            }
+        }
+        self.active = opened;
+    }
 }
 
 impl ProjectWorkspace {
@@ -30,52 +78,45 @@ impl ProjectWorkspace {
         MutexGuard::map(self.state.lock().await, |state| &mut state.active)
     }
 
-    pub(crate) async fn bind(&self, expected: Uuid) -> Result<JobProject> {
+    pub(crate) async fn retain(&self, expected: Uuid, owner: ProjectOwner) -> Result<ProjectLease> {
         let mut state = self.state.lock().await;
-        ensure!(
-            state.running.is_none(),
-            "another process is already running"
-        );
         let project = state.active.as_ref().context("no project is open")?;
         ensure!(
             project.instance_id == expected,
             "the project changed before processing started; start again from the intended project"
         );
-        let target = JobProject {
-            id: expected,
-            name: project.name.clone(),
-        };
-        state.running = Some(expected);
-        Ok(target)
+        let name = project.name.clone();
+        state.retain(expected, name, owner)
     }
 
-    pub(crate) async fn bind_background(&self, project: Project) -> Result<JobProject> {
+    pub(crate) async fn retain_background(
+        &self,
+        project: Project,
+        owner: ProjectOwner,
+    ) -> Result<ProjectLease> {
         let mut state = self.state.lock().await;
-        ensure!(
-            state.running.is_none() && state.background.is_none(),
-            "another project is already running"
-        );
         ensure!(
             !state
                 .active
-                .as_ref()
-                .is_some_and(|active| active.path == project.path),
-            "close the imported project before running it in the background"
+                .iter()
+                .chain(state.retained.values())
+                .any(|other| other.path == project.path),
+            "the project already has an open session"
         );
-        let target = JobProject {
-            id: project.instance_id,
-            name: project.name.clone(),
-        };
-        state.running = Some(target.id);
-        state.background = Some(project);
+        let target = state.retain(project.instance_id, project.name.clone(), owner)?;
+        state.retained.insert(project.instance_id, project);
         Ok(target)
     }
 
     pub(crate) async fn target(
         &self,
-        target: &JobProject,
+        target: &ProjectLease,
     ) -> Result<(MappedMutexGuard<'_, Project>, bool)> {
         let state = self.state.lock().await;
+        ensure!(
+            state.leases.get(&target.token) == Some(&(target.id, target.owner)),
+            "the task's project lease was released"
+        );
         let visible = state
             .active
             .as_ref()
@@ -84,30 +125,48 @@ impl ProjectWorkspace {
             if visible {
                 state.active.as_mut()
             } else {
-                state
-                    .background
-                    .as_mut()
-                    .filter(|project| project.instance_id == target.id)
+                state.retained.get_mut(&target.id)
             }
         })
-        .map_err(|_| anyhow::anyhow!("the job's project is no longer retained"))?;
+        .map_err(|_| anyhow::anyhow!("the task's project is no longer retained"))?;
         Ok((guard, visible))
     }
 
-    pub(crate) async fn snapshot(&self, target: &JobProject) -> Result<Snapshot> {
+    pub(crate) async fn snapshot(&self, target: &ProjectLease) -> Result<Snapshot> {
         Ok(self.target(target).await?.0.snapshot())
     }
 
-    pub(crate) async fn finish(&self, target: &JobProject) {
+    pub(crate) async fn finish(&self, target: &ProjectLease) {
         let mut state = self.state.lock().await;
-        if state.running == Some(target.id) {
-            state.running = None;
-            state.background = None;
+        if state.leases.get(&target.token) == Some(&(target.id, target.owner)) {
+            state.leases.remove(&target.token);
+            state.busy_agents.remove(&target.token);
+            if !state.leases.values().any(|(id, _)| *id == target.id) {
+                state.retained.remove(&target.id);
+            }
         }
     }
 
-    pub(crate) async fn has_background_job(&self) -> bool {
-        self.state.lock().await.running.is_some()
+    pub(crate) async fn agent_running(&self, target: &ProjectLease, running: bool) -> Result<()> {
+        let mut state = self.state.lock().await;
+        ensure!(
+            target.owner == ProjectOwner::Agent
+                && state.leases.get(&target.token) == Some(&(target.id, target.owner)),
+            "agent session lease was released"
+        );
+        if running {
+            ensure!(
+                !state
+                    .leases
+                    .values()
+                    .any(|(id, owner)| *id == target.id && *owner == ProjectOwner::Pipeline),
+                "this project's pipeline is still running"
+            );
+            state.busy_agents.insert(target.token);
+        } else {
+            state.busy_agents.remove(&target.token);
+        }
+        Ok(())
     }
 
     pub(crate) async fn replace(&self, opened: Project) {
@@ -127,17 +186,11 @@ impl ProjectWorkspace {
         {
             return Ok(());
         }
-        let opened = if state
-            .background
-            .as_ref()
-            .map(|project| project.path.canonicalize())
-            .transpose()?
-            == Some(path)
-        {
-            state
-                .background
-                .take()
-                .expect("retained project was checked")
+        let retained = state.retained.iter().find_map(|(id, project)| {
+            (project.path.canonicalize().ok().as_ref() == Some(&path)).then_some(*id)
+        });
+        let opened = if let Some(id) = retained {
+            state.retained.remove(&id).expect("retained project exists")
         } else {
             library.open(name).await?
         };
@@ -153,11 +206,15 @@ impl ProjectWorkspace {
         let (_, path) = library.resolve(name)?;
         let path = path.canonicalize()?;
         let mut state = self.state.lock().await;
-        for project in state.active.iter().chain(state.background.iter()) {
-            if state.running == Some(project.instance_id) {
+        for project in state.active.iter().chain(state.retained.values()) {
+            if state
+                .leases
+                .values()
+                .any(|(id, _)| *id == project.instance_id)
+            {
                 ensure!(
                     project.path.canonicalize()? != path,
-                    "stop the running job before deleting its project"
+                    "stop the task and close its agent session before deleting its project"
                 );
             }
         }
@@ -187,11 +244,84 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn agent_and_pipeline_keep_independent_sessions_while_a_third_project_is_visible() {
+        let workspace = ProjectWorkspace::default();
+        let a = memory("Agent A").await;
+        let a_id = a.instance_id;
+        workspace.replace(a).await;
+        let agent = workspace.retain(a_id, ProjectOwner::Agent).await.unwrap();
+        assert!(
+            workspace
+                .retain(a_id, ProjectOwner::Pipeline)
+                .await
+                .is_err()
+        );
+        let b = memory("Pipeline B").await;
+        let b_id = b.instance_id;
+        workspace.replace(b).await;
+        let pipeline = workspace
+            .retain(b_id, ProjectOwner::Pipeline)
+            .await
+            .unwrap();
+        let c = memory("Editor C").await;
+        let c_id = c.instance_id;
+        workspace.replace(c).await;
+        assert!(!workspace.target(&agent).await.unwrap().1);
+        assert!(!workspace.target(&pipeline).await.unwrap().1);
+        let processing = crate::commands::processing::Processing::default();
+        let pipeline_permit = processing.try_admit().unwrap();
+        let stop = koharu_pipeline::StopToken::default();
+        let waiting = processing.wait(&stop);
+        tokio::pin!(waiting);
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(20), &mut waiting)
+                .await
+                .is_err()
+        );
+        stop.stop();
+        assert!(waiting.await.is_none());
+        assert!(
+            processing.try_admit().is_err(),
+            "stopping a waiter must not release B's permit"
+        );
+        assert!(workspace.target(&pipeline).await.is_ok());
+        drop(pipeline_permit);
+        {
+            let (mut a, _) = workspace.target(&agent).await.unwrap();
+            let commit = a
+                .set_wiki("characters".into(), "agent edit".into())
+                .await
+                .unwrap();
+            a.record_commit(&commit);
+        }
+        workspace.agent_running(&agent, false).await.unwrap();
+        assert!(workspace.target(&agent).await.is_ok());
+        assert_eq!(workspace.lock().await.as_ref().unwrap().instance_id, c_id);
+        workspace.finish(&pipeline).await;
+        assert!(workspace.target(&agent).await.is_ok());
+        assert!(workspace.target(&pipeline).await.is_err());
+        // A retained idle conversation does not consume the pipeline admission lane.
+        let (mut a, _) = workspace.target(&agent).await.unwrap();
+        a.undo().await.unwrap();
+        assert!(
+            a.snapshot()
+                .wiki()
+                .unwrap()
+                .files
+                .iter()
+                .all(|file| file.body != "agent edit")
+        );
+        drop(a);
+        workspace.finish(&agent).await;
+        assert!(workspace.target(&agent).await.is_err());
+    }
+
+    #[tokio::test]
     async fn imported_project_runs_in_background_without_replacing_the_editor() {
         let workspace = ProjectWorkspace::default();
         workspace.replace(memory("Editing").await).await;
         let imported = workspace
-            .bind_background(memory("Imported").await)
+            .retain_background(memory("Imported").await, ProjectOwner::Pipeline)
             .await
             .unwrap();
         assert_eq!(workspace.lock().await.as_ref().unwrap().name, "Editing");
@@ -202,7 +332,7 @@ mod tests {
         );
         assert!(
             workspace
-                .bind_background(memory("Another").await)
+                .retain_background(memory("Another").await, ProjectOwner::Pipeline)
                 .await
                 .is_err()
         );
@@ -210,7 +340,7 @@ mod tests {
         assert_eq!(workspace.lock().await.as_ref().unwrap().name, "Editing");
         assert!(
             workspace
-                .bind_background(memory("Next").await)
+                .retain_background(memory("Next").await, ProjectOwner::Pipeline)
                 .await
                 .is_ok()
         );
@@ -238,7 +368,7 @@ mod tests {
         book.commit(patch).await.unwrap();
         let id = book.instance_id;
         workspace.replace(book).await;
-        let target = workspace.bind(id).await.unwrap();
+        let target = workspace.retain(id, ProjectOwner::Pipeline).await.unwrap();
         workspace.close().await;
         assert!(workspace.lock().await.is_none());
         workspace.replace(memory("A").await).await;
@@ -353,10 +483,15 @@ mod tests {
         let book = library.create("B").await.unwrap();
         let id = book.instance_id;
         workspace.replace(book).await;
-        let target = workspace.bind(id).await.unwrap();
+        let target = workspace.retain(id, ProjectOwner::Pipeline).await.unwrap();
         workspace.replace(library.create("A").await.unwrap()).await;
         let active_id = workspace.lock().await.as_ref().unwrap().instance_id;
-        assert!(workspace.bind(active_id).await.is_err());
+        assert!(
+            workspace
+                .retain(active_id, ProjectOwner::Pipeline)
+                .await
+                .is_err()
+        );
         assert!(workspace.delete(&library, "B").await.is_err());
         #[cfg(windows)]
         assert!(workspace.delete(&library, "b").await.is_err());
@@ -374,7 +509,6 @@ mod tests {
         assert!(workspace.target(&target).await.unwrap().1);
         workspace.open(&library, "A").await.unwrap();
         workspace.finish(&target).await;
-        assert!(!workspace.has_background_job().await);
         assert!(workspace.target(&target).await.is_err());
         let book = library.open("B").await.unwrap();
         assert_eq!(
@@ -398,7 +532,12 @@ mod tests {
         let origin = book.instance_id;
         workspace.replace(book).await;
         workspace.replace(memory("A").await).await;
-        assert!(workspace.bind(origin).await.is_err());
+        assert!(
+            workspace
+                .retain(origin, ProjectOwner::Pipeline)
+                .await
+                .is_err()
+        );
         let mut active = workspace.lock().await;
         let active = active.as_mut().unwrap();
         let revision = active.revision();
@@ -422,7 +561,7 @@ mod tests {
         let book = memory("B").await;
         let id = book.instance_id;
         workspace.replace(book).await;
-        let target = workspace.bind(id).await.unwrap();
+        let target = workspace.retain(id, ProjectOwner::Pipeline).await.unwrap();
         let next = memory("A").await;
         let (guard, visible) = workspace.target(&target).await.unwrap();
         assert!(visible);
@@ -460,7 +599,10 @@ mod tests {
         assert_ne!(copied.instance_id, instance);
         let workspace = ProjectWorkspace::default();
         workspace.replace(book).await;
-        let target = workspace.bind(instance).await.unwrap();
+        let target = workspace
+            .retain(instance, ProjectOwner::Pipeline)
+            .await
+            .unwrap();
         let revision = copied.revision();
         workspace.replace(copied).await;
         {
@@ -480,17 +622,5 @@ mod tests {
         assert!(workspace.target(&target).await.unwrap().1);
         assert_eq!(workspace.lock().await.as_ref().unwrap().name, "B");
         workspace.finish(&target).await;
-    }
-}
-
-impl Workspace {
-    fn select(&mut self, opened: Option<Project>) {
-        if let Some(previous) = self.active.take() {
-            if self.running == Some(previous.instance_id) {
-                debug_assert!(self.background.is_none());
-                self.background = Some(previous);
-            }
-        }
-        self.active = opened;
     }
 }

@@ -10,7 +10,7 @@ struct Fixture(Arc<AtomicUsize>);
 
 #[async_trait]
 impl Host for Fixture {
-    async fn bind(&self, _: Control) -> Result<Arc<dyn Host>> {
+    async fn bind(&self, _: RunId, _: Control) -> Result<Arc<dyn Host>> {
         Ok(Arc::new(self.clone()))
     }
     async fn context(&self) -> Result<Value> {
@@ -180,6 +180,19 @@ fn streams_require_terminal_success_and_surface_model_errors() -> Result<()> {
         .to_string()
         .contains("missing credentials")
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn public_progress_streams_report_thinking_without_inventing_agy_content() -> Result<()> {
+    let run = RunId::new();
+    let mut events = Vec::new();
+    let mut stream = Stream::default();
+    // AGY's documented ACTIVE agent_response is a phase signal, not reasoning text.
+    stream.accept(Backend::Agy, json!({"event":"step_update","step_update":{"step_type":"agent_response","state":"ACTIVE"}}), run, &mut |event| events.push(event))?;
+    assert!(matches!(&events[0], Event::ReasoningDelta { delta, .. } if delta.is_empty()));
+    stream.accept(Backend::Pi, json!({"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","delta":"Public summary"}}), run, &mut |event| events.push(event))?;
+    assert!(matches!(&events[1], Event::ReasoningDelta { delta, .. } if delta == "Public summary"));
     Ok(())
 }
 

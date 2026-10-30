@@ -72,6 +72,8 @@ pub fn bindings() -> tauri_specta::Builder<tauri_runtime_cef::CefRuntime> {
             agent::save_agent_config,
             agent::run_agent,
             agent::cancel_agent,
+            agent::clear_agent_session,
+            agent::dismiss_agent_activity,
             lifecycle::subscribe,
             lifecycle::get_project,
             lifecycle::get_pages,

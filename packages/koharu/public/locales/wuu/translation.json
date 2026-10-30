@@ -70,7 +70,34 @@
     "saveSetup": "保存并检查",
     "checkConnection": "检查连接",
     "checking": "检查CLI搭模型中…",
-    "cliSignInHint": "先用对应CLI登录，再到此地检查连接。"
+    "cliSignInHint": "先用对应CLI登录，再到此地检查连接。",
+    "progress": {
+      "starting": "准备智能体…",
+      "responding": "编写回复…",
+      "waiting": "等待处理空闲…",
+      "summary": "思考摘要",
+      "changes": "已完成修改：{{count}}",
+      "background": "智能体正在处理“{{name}}”。",
+      "newConversation": "新会话"
+    },
+    "tools": {
+      "inspect_project": "读取项目页面",
+      "inspect_page": "读取页面图层",
+      "list_fonts": "检查可用字体",
+      "view_page": "查看页面图像",
+      "rename_page": "重命名页面",
+      "move_page": "调整页面顺序",
+      "delete_pages": "删除页面",
+      "add_text_box": "添加文本框",
+      "set_source_text": "编辑原文",
+      "set_translation": "编辑译文",
+      "set_typography": "调整文字排版",
+      "set_geometry": "调整布局",
+      "set_visibility": "更新可见性",
+      "delete_elements": "删除图层",
+      "move_element": "移动图层",
+      "run_pipeline": "运行处理流程"
+    }
   },
   "canvas": {
     "empty": "先选一页，就好开始。",

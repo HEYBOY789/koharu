@@ -16,7 +16,7 @@ use super::{
         ChapterPhase, Job, JobChannel, JobId, JobState, PipelineCommitter, Processing,
         progress_sink,
     },
-    project::{CurrentProject, JobProject},
+    project::{CurrentProject, ProjectLease, ProjectOwner},
     summarizer::{self, SummarizerConfig},
 };
 use koharu_desktop::Desktop;
@@ -381,7 +381,7 @@ async fn start(
         let mut stops = processing.stops.lock();
         stops.insert(id, stop.clone());
     }
-    let target = match handle.state::<CurrentProject>().project.bind(origin).await {
+    let target = match handle.state::<CurrentProject>().project.retain(origin, ProjectOwner::Pipeline).await {
         Ok(target) => target,
         Err(error) => {
             handle.state::<Processing>().stops.lock().remove(&id);
@@ -466,7 +466,7 @@ async fn start(
 pub(super) async fn run_bound(
     task: AppHandle<CefRuntime>,
     id: JobId,
-    target: JobProject,
+    target: ProjectLease,
     chapters: Vec<ChapterId>,
     summarize: Option<bool>,
     translate: bool,
@@ -613,7 +613,7 @@ fn summary_ready(snapshot: &koharu_scene::Snapshot, chapter: ChapterId) -> Resul
 /// Returns `false` when cancellation was requested.
 async fn summarize_one(
     handle: &AppHandle<CefRuntime>,
-    target: &JobProject,
+    target: &ProjectLease,
     id: JobId,
     chapter: ChapterId,
     config: &SummarizerConfig,

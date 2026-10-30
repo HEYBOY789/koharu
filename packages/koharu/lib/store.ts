@@ -4,6 +4,7 @@ import { create } from 'zustand'
 
 import type {
   CanvasState,
+  AgentSnapshot,
   Download,
   EntityId,
   Job,
@@ -44,6 +45,7 @@ interface KoharuStore {
   preferences: Preferences | null
   translationModels: Model[]
   resources: ModelResources | null
+  agent: AgentSnapshot
   jobs: Record<string, Job>
   downloads: Record<string, Download>
   camera: { zoom: number; translation: [number, number]; fitted: boolean }
@@ -96,6 +98,7 @@ export const useKoharuStore = create<KoharuStore>()((set) => ({
   preferences: null,
   translationModels: [],
   resources: null,
+  agent: { sequence: 0, conversations: [], run: null },
   jobs: {},
   downloads: {},
   camera: { zoom: 1, translation: [0, 0], fitted: true },
@@ -146,12 +149,17 @@ export const useKoharuStore = create<KoharuStore>()((set) => ({
 }))
 
 export function receiveStartupState(state: StartupState): void {
+  if (state.agent) receiveAgent(state.agent)
   useKoharuStore.setState({
     initialized: true,
     preferences: state.preferences,
     jobs: byId(state.jobs),
     ...canvasSnapshot(state.canvas),
   })
+}
+
+export function receiveAgent(agent: AgentSnapshot): void {
+  useKoharuStore.setState((state) => (agent.sequence > state.agent.sequence ? { agent } : {}))
 }
 
 export function receiveCanvas(canvas: CanvasState): void {

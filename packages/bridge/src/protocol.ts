@@ -14,15 +14,17 @@ export const commands = {
         loginAgent: (onEvent: Channel<LoginEvent>) => __TAURI_INVOKE<AgentStatus>("login_agent", { onEvent }),
         logoutAgent: () => __TAURI_INVOKE<AgentStatus>("logout_agent"),
         saveAgentConfig: (config: Config) => __TAURI_INVOKE<Config>("save_agent_config", { config }),
-        runAgent: (prompt: string, onEvent: Channel<Event>) => __TAURI_INVOKE<RunId>("run_agent", { prompt, onEvent }),
+        runAgent: (prompt: string, expectedProject: string) => __TAURI_INVOKE<RunId>("run_agent", { prompt, expectedProject }),
         cancelAgent: (run: RunId) => __TAURI_INVOKE<null>("cancel_agent", { run }),
+        clearAgentSession: () => __TAURI_INVOKE<null>("clear_agent_session"),
+        dismissAgentActivity: () => __TAURI_INVOKE<void>("dismiss_agent_activity"),
         subscribe: (onCanvas: Channel<CanvasState>, onJob: Channel<Job>, onDownload: Channel<Download>, onResources: Channel<ModelResources>, onProject: Channel<{
         name: string,
         revision: Revision,
         active_page: EntityId | null,
         can_undo: boolean,
         can_redo: boolean,
-} | null>) => __TAURI_INVOKE<StartupState>("subscribe", { onCanvas: mapChannel(onCanvas, (v) => ({...v,revision:v.revision==null?v.revision:v.revision})), onJob, onDownload, onResources: mapChannel(onResources, (v) => ({...v,devices:v.devices.map(i=>({...i,memory_budget:i.memory_budget==null?i.memory_budget:i.memory_budget,memory_used:i.memory_used==null?i.memory_used:i.memory_used,utilization:i.utilization==null?i.utilization:i.utilization}))})), onProject }).then((v) => (({...v,preferences:({...v.preferences,pipeline:({...v.preferences.pipeline,translation:({...v.preferences.pipeline.translation,generation:({...v.preferences.pipeline.translation.generation,temperature:v.preferences.pipeline.translation.generation.temperature==null?v.preferences.pipeline.translation.generation.temperature:v.preferences.pipeline.translation.generation.temperature,top_p:v.preferences.pipeline.translation.generation.top_p==null?v.preferences.pipeline.translation.generation.top_p:v.preferences.pipeline.translation.generation.top_p,min_p:v.preferences.pipeline.translation.generation.min_p==null?v.preferences.pipeline.translation.generation.min_p:v.preferences.pipeline.translation.generation.min_p,repeat_penalty:v.preferences.pipeline.translation.generation.repeat_penalty==null?v.preferences.pipeline.translation.generation.repeat_penalty:v.preferences.pipeline.translation.generation.repeat_penalty,frequency_penalty:v.preferences.pipeline.translation.generation.frequency_penalty==null?v.preferences.pipeline.translation.generation.frequency_penalty:v.preferences.pipeline.translation.generation.frequency_penalty,presence_penalty:v.preferences.pipeline.translation.generation.presence_penalty==null?v.preferences.pipeline.translation.generation.presence_penalty:v.preferences.pipeline.translation.generation.presence_penalty})}),processor:({...v.preferences.pipeline.processor,"koharu-layout-rfdetr-seg-2xl":v.preferences.pipeline.processor["koharu-layout-rfdetr-seg-2xl"]==null?v.preferences.pipeline.processor["koharu-layout-rfdetr-seg-2xl"]:({...v.preferences.pipeline.processor["koharu-layout-rfdetr-seg-2xl"],text_threshold:v.preferences.pipeline.processor["koharu-layout-rfdetr-seg-2xl"].text_threshold==null?v.preferences.pipeline.processor["koharu-layout-rfdetr-seg-2xl"].text_threshold:v.preferences.pipeline.processor["koharu-layout-rfdetr-seg-2xl"].text_threshold,bubble_threshold:v.preferences.pipeline.processor["koharu-layout-rfdetr-seg-2xl"].bubble_threshold==null?v.preferences.pipeline.processor["koharu-layout-rfdetr-seg-2xl"].bubble_threshold:v.preferences.pipeline.processor["koharu-layout-rfdetr-seg-2xl"].bubble_threshold,panel_threshold:v.preferences.pipeline.processor["koharu-layout-rfdetr-seg-2xl"].panel_threshold==null?v.preferences.pipeline.processor["koharu-layout-rfdetr-seg-2xl"].panel_threshold:v.preferences.pipeline.processor["koharu-layout-rfdetr-seg-2xl"].panel_threshold})})})}),jobs:v.jobs.map(i=>i),canvas:({...v.canvas,revision:v.canvas.revision==null?v.canvas.revision:v.canvas.revision})}) as typeof v)),
+} | null>, onAgent: Channel<AgentSnapshot>) => __TAURI_INVOKE<StartupState>("subscribe", { onCanvas: mapChannel(onCanvas, (v) => ({...v,revision:v.revision==null?v.revision:v.revision})), onJob, onDownload, onResources: mapChannel(onResources, (v) => ({...v,devices:v.devices.map(i=>({...i,memory_budget:i.memory_budget==null?i.memory_budget:i.memory_budget,memory_used:i.memory_used==null?i.memory_used:i.memory_used,utilization:i.utilization==null?i.utilization:i.utilization}))})), onProject, onAgent }).then((v) => (({...v,preferences:({...v.preferences,pipeline:({...v.preferences.pipeline,translation:({...v.preferences.pipeline.translation,generation:({...v.preferences.pipeline.translation.generation,temperature:v.preferences.pipeline.translation.generation.temperature==null?v.preferences.pipeline.translation.generation.temperature:v.preferences.pipeline.translation.generation.temperature,top_p:v.preferences.pipeline.translation.generation.top_p==null?v.preferences.pipeline.translation.generation.top_p:v.preferences.pipeline.translation.generation.top_p,min_p:v.preferences.pipeline.translation.generation.min_p==null?v.preferences.pipeline.translation.generation.min_p:v.preferences.pipeline.translation.generation.min_p,repeat_penalty:v.preferences.pipeline.translation.generation.repeat_penalty==null?v.preferences.pipeline.translation.generation.repeat_penalty:v.preferences.pipeline.translation.generation.repeat_penalty,frequency_penalty:v.preferences.pipeline.translation.generation.frequency_penalty==null?v.preferences.pipeline.translation.generation.frequency_penalty:v.preferences.pipeline.translation.generation.frequency_penalty,presence_penalty:v.preferences.pipeline.translation.generation.presence_penalty==null?v.preferences.pipeline.translation.generation.presence_penalty:v.preferences.pipeline.translation.generation.presence_penalty})}),processor:({...v.preferences.pipeline.processor,"koharu-layout-rfdetr-seg-2xl":v.preferences.pipeline.processor["koharu-layout-rfdetr-seg-2xl"]==null?v.preferences.pipeline.processor["koharu-layout-rfdetr-seg-2xl"]:({...v.preferences.pipeline.processor["koharu-layout-rfdetr-seg-2xl"],text_threshold:v.preferences.pipeline.processor["koharu-layout-rfdetr-seg-2xl"].text_threshold==null?v.preferences.pipeline.processor["koharu-layout-rfdetr-seg-2xl"].text_threshold:v.preferences.pipeline.processor["koharu-layout-rfdetr-seg-2xl"].text_threshold,bubble_threshold:v.preferences.pipeline.processor["koharu-layout-rfdetr-seg-2xl"].bubble_threshold==null?v.preferences.pipeline.processor["koharu-layout-rfdetr-seg-2xl"].bubble_threshold:v.preferences.pipeline.processor["koharu-layout-rfdetr-seg-2xl"].bubble_threshold,panel_threshold:v.preferences.pipeline.processor["koharu-layout-rfdetr-seg-2xl"].panel_threshold==null?v.preferences.pipeline.processor["koharu-layout-rfdetr-seg-2xl"].panel_threshold:v.preferences.pipeline.processor["koharu-layout-rfdetr-seg-2xl"].panel_threshold})})})}),jobs:v.jobs.map(i=>i),canvas:({...v.canvas,revision:v.canvas.revision==null?v.canvas.revision:v.canvas.revision})}) as typeof v)),
         getProject: () => __TAURI_INVOKE<{
         name: string,
         revision: Revision,
@@ -126,10 +128,47 @@ export type Account = {
         plan: string | null,
 };
 
+export type AgentConversation = {
+        project: string,
+        messages: AgentMessage[],
+};
+
+export type AgentMessage = {
+        id: string,
+        role: Role,
+        text: string,
+        reasoning: string,
+        error: boolean,
+        state: AgentRunState | null,
+};
+
 export type AgentModel = {
         id: string,
         name: string,
         reasoning: Reasoning[],
+};
+
+export type AgentPhase = "starting" | "thinking" | "tool" | "waiting" | "pipeline" | "responding";
+
+export type AgentRun = {
+        id: RunId,
+        project: string,
+        state: AgentRunState,
+        phase: AgentPhase,
+        tool: string | null,
+        page: string | null,
+        element: string | null,
+        stage: Stage | null,
+        changes: number,
+        error: string | null,
+};
+
+export type AgentRunState = "running" | "finished" | "failed" | "stopped";
+
+export type AgentSnapshot = {
+        sequence: number,
+        conversations: AgentConversation[],
+        run: AgentRun | null,
 };
 
 export type AgentStatus = {
@@ -254,8 +293,6 @@ export type DownloadState = "running" | "finished" | "failed";
 export type EntityId = string;
 
 export type Error = string;
-
-export type Event = { type: "started"; run: RunId } | { type: "text_delta"; run: RunId; delta: string } | { type: "reasoning_delta"; run: RunId; delta: string } | { type: "tool_started"; run: RunId; call_id: string; name: string } | { type: "tool_finished"; run: RunId; call_id: string; name: string; changed: boolean; output: string } | { type: "completed"; run: RunId; message: string } | { type: "failed"; run: RunId; message: string } | { type: "cancelled"; run: RunId };
 
 export type ExportFormat = "png" | "psd" | "cbz";
 
@@ -708,6 +745,8 @@ export type RetryStatus = {
 
 export type Revision = number;
 
+export type Role = "user" | "assistant";
+
 export type RoremMixedConfig = {
         prompt?: string,
         negative_prompt?: string,
@@ -739,6 +778,7 @@ export type StartupState = {
         preferences: Preferences,
         jobs: Job[],
         canvas: CanvasState,
+        agent: AgentSnapshot,
 };
 
 export type SummarizerBackend = "agy" | "pi";

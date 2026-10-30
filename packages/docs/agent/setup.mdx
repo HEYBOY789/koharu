@@ -12,7 +12,7 @@ Install the CLI and sign in with it first. Pi requires version 1.4 or newer in t
 
 **Advanced setup** accepts the CLI executable or JavaScript entry point, Node executable when needed, a model ID and an optional reasoning level. Empty paths use automatic detection; Automatic model/reasoning uses the CLI's defaults. Pi can use `dist/cli.js` from its installed package. AGY uses `agy.exe` on Windows.
 
-Koharu keeps one CLI process for the conversation, provides its project tools through a private connection, and revokes tool access between requests. Closing/changing the project or configuration closes the CLI session. Stop retains completed undoable edits and terminates the CLI request; after a CLI failure or cancellation the next request starts a fresh CLI session with the current project context.
+Koharu keeps one CLI process for the conversation, provides its project tools through a private connection, and revokes tool access between requests. Closing the editor or switching projects keeps a running request attached to its original project. Stop retains completed undoable edits and terminates the request; after a CLI failure or cancellation the next request starts a fresh CLI session with the current project context.
 
 The CLI runs in a private temporary workspace. Koharu does not change global MCP configuration, install a global extension, or copy CLI credentials. Pi uses an explicitly loaded extension with built-in file/shell tools disabled. AGY uses a workspace plugin and an agent with no built-in tool components; its MCP tools are injected by the CLI.
 
@@ -36,6 +36,14 @@ Codex uses ChatGPT device-code sign-in; you do not enter an OpenAI API key for t
 
 Only one sign-in attempt can run at a time. Cancel it before starting another.
 
+## Background work and progress
+
+One Editor Agent request can run at a time. Start it on project A, then open project B to translate or edit: the Agent continues on A. Activity shows its project, current tool/page, completed edits and Stop. Open A again to see the conversation and committed layer changes. An idle conversation retains its project session and Undo history until that session is replaced or cleared.
+
+Agent edits do not refresh another project's canvas. If a user changes relevant project data after the Agent inspected it, a stale edit is rejected and the Agent must read the current state again. An external pipeline cannot start on the same project while its Agent is editing. Agent-requested OCR/translation/inpainting waits for the existing processing admission lane and can be stopped while waiting.
+
+Progress comes from real tool and pipeline events. Public reasoning output from a backend is shown in a collapsible section when supplied. AGY's documented stream exposes ACTIVE response steps as a phase signal, not reasoning text; Koharu does not manufacture a reasoning transcript from that signal. See the [AGY headless stream reference](https://antigravity.google/docs/cli/headless/). Closing a panel disconnects only its view; it does not cancel native work.
+
 ## What context is shared
 
 The Agent starts with a compact overview of the open project and its first batch of page IDs. It reads further page batches with `inspect_project`, semantic layers and regions with `inspect_page`, and available font families with `list_fonts`. These reads are paginated and limited to 64 KiB per response, so large projects do not push the user's request behind a full-project dump. The CLI receives the complete user request before the overview.
@@ -49,7 +57,7 @@ The Agent renders and attaches a page image only when it invokes visual page ins
 
 ## Sign out
 
-**Sign out** cancels active work, clears the current Agent session, and removes the Codex account authorization used by Koharu. Opening or closing a project also clears the conversation. Agent configuration is saved separately from translator settings.
+**Sign out** cancels active work, clears the current Agent session, and removes the Codex account authorization used by Koharu. **New conversation** clears an idle session and releases its retained project. Agent configuration is saved separately from translator settings. Conversation snapshots are bounded in memory for the current application lifetime; closing the application stops work rather than resuming it after restart.
 
 <Card title='Work with a project' icon='comment' href='/agent/projects'>
   Give the Agent a precise scope, review its edits, and use project history.

@@ -70,7 +70,34 @@
     "saveSetup": "Enregistrer et vérifier",
     "checkConnection": "Vérifier la connexion",
     "checking": "Vérification du CLI et des modèles…",
-    "cliSignInHint": "Connectez-vous dans ce CLI, puis vérifiez la connexion ici."
+    "cliSignInHint": "Connectez-vous dans ce CLI, puis vérifiez la connexion ici.",
+    "progress": {
+      "starting": "Préparation de l’agent…",
+      "responding": "Rédaction de la réponse…",
+      "waiting": "En attente du traitement…",
+      "summary": "Résumé du raisonnement",
+      "changes": "Modifications terminées : {{count}}",
+      "background": "L’agent travaille sur « {{name}} ».",
+      "newConversation": "Nouvelle conversation"
+    },
+    "tools": {
+      "inspect_project": "Lecture des pages du projet",
+      "inspect_page": "Lecture des calques de la page",
+      "list_fonts": "Recherche des polices disponibles",
+      "view_page": "Inspection de l’image de la page",
+      "rename_page": "Renommage de la page",
+      "move_page": "Réorganisation de la page",
+      "delete_pages": "Suppression de pages",
+      "add_text_box": "Ajout d’un bloc de texte",
+      "set_source_text": "Modification du texte source",
+      "set_translation": "Modification de la traduction",
+      "set_typography": "Réglage de la typographie",
+      "set_geometry": "Réglage de la disposition",
+      "set_visibility": "Mise à jour de la visibilité",
+      "delete_elements": "Suppression de calques",
+      "move_element": "Déplacement du calque",
+      "run_pipeline": "Exécution du traitement"
+    }
   },
   "canvas": {
     "empty": "Sélectionnez une page pour commencer.",

@@ -9,6 +9,44 @@ import { commands, type Job } from '@koharu/bridge/protocol'
 
 afterEach(cleanup)
 
+it('shows an agent on A alongside a pipeline on B and stops only the selected run', async () => {
+  const stopAgent = vi.spyOn(commands, 'cancelAgent').mockResolvedValue(null)
+  const stopPipeline = vi.spyOn(commands, 'stopJob').mockResolvedValue(null)
+  setup()
+  act(() =>
+    useKoharuStore.setState({
+      agent: {
+        sequence: 1,
+        conversations: [],
+        run: {
+          id: 'agent-a',
+          project: 'Agent A',
+          state: 'running',
+          phase: 'tool',
+          tool: 'set_typography',
+          page: '007',
+          element: null,
+          stage: null,
+          changes: 3,
+          error: null,
+        },
+      },
+    }),
+  )
+  fireEvent.click(screen.getByRole('button', { name: 'Activity details' }))
+  expect(screen.getByText('Agent A · Agent')).toBeVisible()
+  expect(
+    within(screen.getByRole('region', { name: 'Activity details' })).getByText('007', {
+      exact: false,
+    }),
+  ).toBeVisible()
+  const stops = screen.getAllByRole('button', { name: 'Stop' })
+  fireEvent.click(stops[0])
+  expect(stopAgent).toHaveBeenCalledWith('agent-a')
+  expect(stopPipeline).not.toHaveBeenCalled()
+  expect(useKoharuStore.getState().jobs[job.id].state).toBe('running')
+})
+
 const job: Job = {
   id: 'background-job',
   project: 'B',

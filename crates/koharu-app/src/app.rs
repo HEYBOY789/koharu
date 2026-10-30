@@ -213,16 +213,27 @@ pub fn run(context: tauri::Context<CefRuntime>) -> Result<()> {
             Ok(())
         })
         .on_window_event(|window, event| {
-            if matches!(
-                event,
-                WindowEvent::CloseRequested { .. } | WindowEvent::Destroyed
-            ) {
-                let processing = window.state::<Processing>();
-                for stop in processing.stops.lock().values() {
+            if window.label() != "main" {
+                return;
+            }
+            if let WindowEvent::CloseRequested { api, .. } = event {
+                api.prevent_close();
+                if !window.state::<AgentState>().begin_shutdown() {
+                    return;
+                }
+                for stop in window.state::<Processing>().stops.lock().values() {
                     stop.stop();
                 }
-                processing.stops.lock().clear();
-                processing.jobs.lock().clear();
+                window.state::<AgentState>().cancel_all();
+                let window = window.clone();
+                drop(tauri::async_runtime::spawn(async move {
+                    window.state::<AgentState>().reset().await;
+                    // Drain any admitted pipeline and in-flight project commit before closing storage.
+                    let admission = window.state::<Processing>().admission.clone();
+                    let _permit = admission.lock_owned().await;
+                    let _ = window.destroy();
+                }));
+            } else if matches!(event, WindowEvent::Destroyed) {
                 window.state::<AgentState>().cancel_all();
             }
         })

@@ -7,10 +7,10 @@ use std::{
 use anyhow::{Context as _, Result, anyhow, bail};
 use async_trait::async_trait;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
-use koharu_agent::{Control, Host, Invocation, Tool, ToolCall};
+use koharu_agent::{Control, Host, Invocation, RunId, Tool, ToolCall};
 use koharu_desktop::{Desktop, Frame};
 use koharu_pipeline::{Committer, Operation, RunStatus, Scope, Stage, StageOutput, StopToken};
-use koharu_scene::{Commit, EntityId, Snapshot};
+use koharu_scene::{Commit, EntityId, Revision, Snapshot};
 use schemars::{JsonSchema, schema_for};
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -25,20 +25,23 @@ use crate::commands::{
     editing::{GeometryUpdate, TypographyUpdate},
     output,
     preferences::Preferences,
-    processing::{JobId, Processing},
-    project::{CurrentProject, Project, Typography},
+    processing::Processing,
+    project::{CurrentProject, Project, ProjectLease, Typography},
 };
 
 #[derive(Clone)]
 pub(super) struct KoharuHost {
     handle: AppHandle<CefRuntime>,
     binding: Option<Binding>,
+    target: Option<ProjectLease>,
 }
 
 #[derive(Clone)]
 struct Binding {
     instance: uuid::Uuid,
     control: Control,
+    run: RunId,
+    observed: Arc<parking_lot::Mutex<Option<Revision>>>,
 }
 
 impl Binding {
@@ -51,13 +54,21 @@ impl Binding {
         }
         Ok(())
     }
+    fn check_revision(&self, project: &Project) -> Result<()> {
+        anyhow::ensure!(
+            self.observed.lock().as_ref() == Some(&project.revision()),
+            "the project changed since it was inspected; read inspect_project/inspect_page again before editing"
+        );
+        Ok(())
+    }
 }
 
 impl KoharuHost {
-    pub(super) fn new(handle: AppHandle<CefRuntime>) -> Self {
+    pub(super) fn new(handle: AppHandle<CefRuntime>, target: Option<ProjectLease>) -> Self {
         Self {
             handle,
             binding: None,
+            target,
         }
     }
 
@@ -66,6 +77,43 @@ impl KoharuHost {
             .as_ref()
             .context("Agent host is not bound to a project")?
             .check(project)
+    }
+
+    fn target(&self) -> Result<&ProjectLease> {
+        self.target
+            .as_ref()
+            .context("agent has no retained project")
+    }
+
+    fn observe(&self, project: &Project) {
+        if let Some(binding) = &self.binding {
+            *binding.observed.lock() = Some(project.revision());
+        }
+    }
+
+    fn check_revision(&self, project: &Project) -> Result<()> {
+        self.binding
+            .as_ref()
+            .context("agent host is unbound")?
+            .check_revision(project)
+    }
+
+    fn progress(
+        &self,
+        phase: super::AgentPhase,
+        page: Option<String>,
+        element: Option<String>,
+        stage: Option<Stage>,
+    ) {
+        if let Some(binding) = &self.binding {
+            self.handle.state::<super::AgentState>().store.progress(
+                binding.run,
+                phase,
+                page,
+                element,
+                stage,
+            );
+        }
     }
 
     async fn project_context(&self, query: &Window) -> Result<Value> {
@@ -82,11 +130,12 @@ impl KoharuHost {
             },
             "typesetting": preferences.typesetting,
         });
-        let current = self.handle.state::<CurrentProject>();
-        let current = current.project.lock().await;
-        let project = current.as_ref().context("no project is open")?;
-        self.check_project(project)?;
-        context::overview(project, configuration, query)
+        let projects = self.handle.state::<CurrentProject>();
+        let (project, _) = projects.project.target(self.target()?).await?;
+        self.check_project(&project)?;
+        let result = context::overview(&project, configuration, query)?;
+        self.observe(&project);
+        Ok(result)
     }
 
     async fn mutate<T>(
@@ -100,23 +149,21 @@ impl KoharuHost {
     where
         T: serde::Serialize + Send,
     {
-        let (commit, value, page, project) = {
-            let current = self.handle.state::<CurrentProject>();
-            let mut current = current.project.lock().await;
-            let project = current.as_mut().context("no project is open")?;
-            self.check_project(project)?;
-            let (commit, value) = mutation(project).await?;
-            project.record_commit(&commit);
-            project.reconcile_page();
-            (commit, value, project.active_page(), project.info())
-        };
+        let projects = self.handle.state::<CurrentProject>();
+        let (mut project, visible) = projects.project.target(self.target()?).await?;
+        self.check_project(&project)?;
+        self.check_revision(&project)?;
+        let (commit, value) = mutation(&mut project).await?;
+        project.record_commit(&commit);
+        project.reconcile_page();
+        self.observe(&project);
         let revision = commit.revision;
-        self.synchronize(commit, page).await?;
-        Invocation::changed(json!({
-            "revision": revision,
-            "project": project,
-            "result": value,
-        }))
+        if visible {
+            self.synchronize(commit, project.active_page()).await?;
+        }
+        Invocation::changed(
+            json!({"revision": revision, "project": project.info(), "result": value}),
+        )
     }
 
     async fn synchronize(&self, commit: Commit, page: Option<EntityId>) -> Result<()> {
@@ -130,46 +177,55 @@ impl KoharuHost {
     async fn run_pipeline(&self, arguments: RunPipeline, control: &Control) -> Result<Invocation> {
         let scope = arguments.scope()?;
         let operation = arguments.operation.into();
+        let stop = StopToken::default();
+
+        self.progress(super::AgentPhase::Waiting, None, None, None);
+        let processing = self.handle.state::<Processing>();
+        let _permit = tokio::select! {
+            biased;
+            () = control.cancelled() => { bail!("agent pipeline wait was cancelled"); },
+            permit = processing.wait(&stop) => permit.context("agent pipeline wait was cancelled")?,
+        };
         let snapshot = {
-            let current = self.handle.state::<CurrentProject>();
-            let current = current.project.lock().await;
-            let project = current.as_ref().context("no project is open")?;
-            self.check_project(project)?;
+            let projects = self.handle.state::<CurrentProject>();
+            let (project, _) = projects.project.target(self.target()?).await?;
+            self.check_project(&project)?;
+            self.check_revision(&project)?;
             project.snapshot()
         };
-        let job = JobId::new();
-        let stop = StopToken::default();
-        let _permit = self.handle.state::<Processing>().try_admit()?;
-        {
-            let processing = self.handle.state::<Processing>();
-            let mut stops = processing.stops.lock();
-            stops.insert(job, stop.clone());
-        }
-
-        let watcher = tauri::async_runtime::spawn({
-            let control = control.clone();
-            let stop = stop.clone();
-            async move {
-                control.cancelled().await;
-                stop.stop();
-            }
+        let progress_host = self.clone();
+        let labels = snapshot
+            .pages()
+            .filter_map(|page| page.page().ok().map(|value| (page.id(), value.label)))
+            .collect::<std::collections::HashMap<_, _>>();
+        let progress: koharu_pipeline::ProgressSink = Arc::new(move |event| {
+            use koharu_pipeline::Progress;
+            let (page, stage) = match event {
+                Progress::Loading { page, stage, .. }
+                | Progress::Running { page, stage, .. }
+                | Progress::Finished { page, stage, .. }
+                | Progress::Retrying { page, stage, .. }
+                | Progress::Skipped { page, stage } => (labels.get(&page).cloned(), Some(stage)),
+                _ => (None, None),
+            };
+            progress_host.progress(super::AgentPhase::Pipeline, page, None, stage);
         });
         let mut committer = AgentCommitter { host: self.clone() };
         let request = koharu_pipeline::Request {
             resume: false,
             operation,
             scope,
-            stop,
-            progress: None,
+            stop: stop.clone(),
+            progress: Some(progress),
             inpainting_mask: None,
         };
-        let result = self
-            .handle
-            .state::<koharu_pipeline::Pipeline>()
-            .execute(snapshot, request, &mut committer)
-            .await;
-        watcher.abort();
-        self.handle.state::<Processing>().stops.lock().remove(&job);
+        let pipeline = self.handle.state::<koharu_pipeline::Pipeline>();
+        let execution = pipeline.execute(snapshot, request, &mut committer);
+        tokio::pin!(execution);
+        let result = tokio::select! {
+            result = &mut execution => result,
+            () = control.cancelled() => { stop.stop(); execution.await },
+        };
         let report = result.map_err(|error| anyhow!(error))?;
         if report.status == RunStatus::Stopped {
             bail!("pipeline processing was cancelled");
@@ -186,18 +242,21 @@ impl KoharuHost {
 
 #[async_trait]
 impl Host for KoharuHost {
-    async fn bind(&self, control: Control) -> Result<Arc<dyn Host>> {
+    async fn bind(&self, run: RunId, control: Control) -> Result<Arc<dyn Host>> {
         if control.is_cancelled() {
             bail!("Agent request was cancelled");
         }
-        let current = self.handle.state::<CurrentProject>();
-        let current = current.project.lock().await;
-        let project = current.as_ref().context("no project is open")?;
+        let target = self.target()?.clone();
+        let projects = self.handle.state::<CurrentProject>();
+        drop(projects.project.target(&target).await?);
         Ok(Arc::new(Self {
             handle: self.handle.clone(),
+            target: Some(target.clone()),
             binding: Some(Binding {
-                instance: project.instance_id,
+                instance: target.id,
                 control,
+                run,
+                observed: Arc::new(parking_lot::Mutex::new(None)),
             }),
         }))
     }
@@ -266,6 +325,36 @@ impl Host for KoharuHost {
         if control.is_cancelled() {
             bail!("Agent request was cancelled");
         }
+        {
+            let args: Value = serde_json::from_str(&call.arguments)?;
+            let element = args["element"]
+                .as_str()
+                .map(str::to_owned)
+                .or_else(|| args["elements"][0].as_str().map(str::to_owned));
+            let requested = args["page"]
+                .as_str()
+                .or_else(|| args["pages"][0].as_str())
+                .map(str::to_owned)
+                .or_else(|| element.clone());
+            let projects = self.handle.state::<CurrentProject>();
+            let (project, _) = projects.project.target(self.target()?).await?;
+            self.check_project(&project)?;
+            let snapshot = project.snapshot();
+            let page = requested
+                .and_then(|id| entity(&id).ok())
+                .and_then(|mut id| {
+                    loop {
+                        if let Ok(page) = snapshot.page(id).and_then(|page| page.page()) {
+                            break Some(page.label);
+                        }
+                        match snapshot.parent(id) {
+                            Ok(Some(parent)) => id = parent,
+                            _ => break None,
+                        }
+                    }
+                });
+            self.progress(super::AgentPhase::Tool, page, element, None);
+        }
         match call.name.as_str() {
             "inspect_project" => {
                 let query: Window = arguments(&call)?;
@@ -274,30 +363,39 @@ impl Host for KoharuHost {
             "inspect_page" => {
                 let query: InspectPage = arguments(&call)?;
                 let page = entity(&query.page)?;
-                let current = self.handle.state::<CurrentProject>();
-                let current = current.project.lock().await;
-                let project = current.as_ref().context("no project is open")?;
-                self.check_project(project)?;
-                Invocation::read(context::page(&project.snapshot(), page, query.offset, query.limit)?)
+                let projects = self.handle.state::<CurrentProject>();
+                let (project, _) = projects.project.target(self.target()?).await?;
+                self.check_project(&project)?;
+                let result = context::page(&project.snapshot(), page, query.offset, query.limit)?;
+                self.observe(&project);
+                Invocation::read(result)
             }
             "list_fonts" => {
                 let query: Window = arguments(&call)?;
                 {
-                    let current = self.handle.state::<CurrentProject>();
-                    let current = current.project.lock().await;
-                    self.check_project(current.as_ref().context("no project is open")?)?;
+                    let projects = self.handle.state::<CurrentProject>();
+                    let (project, _) = projects.project.target(self.target()?).await?;
+                    self.check_project(&project)?;
                 }
-                let fonts = self.handle.state::<Desktop>().renderer().available_fonts().await?;
-                Invocation::read(context::fonts(fonts.into_iter().map(|font| font.name).collect(), &query)?)
+                let fonts = self
+                    .handle
+                    .state::<Desktop>()
+                    .renderer()
+                    .available_fonts()
+                    .await?;
+                Invocation::read(context::fonts(
+                    fonts.into_iter().map(|font| font.name).collect(),
+                    &query,
+                )?)
             }
             "view_page" => {
                 let arguments: ViewPage = arguments(&call)?;
                 let page = entity(&arguments.page)?;
                 let (label, snapshot) = {
-                    let current = self.handle.state::<CurrentProject>();
-                    let current = current.project.lock().await;
-                    let project = current.as_ref().context("no project is open")?;
-                    self.check_project(project)?;
+                    let projects = self.handle.state::<CurrentProject>();
+                    let (project, _) = projects.project.target(self.target()?).await?;
+                    self.check_project(&project)?;
+                    self.observe(&project);
                     let snapshot = project.snapshot();
                     let label = snapshot.page(page)?.page()?.label;
                     (label, snapshot)
@@ -512,19 +610,18 @@ struct AgentCommitter {
 #[async_trait]
 impl Committer for AgentCommitter {
     async fn commit(&mut self, output: StageOutput) -> Result<Snapshot> {
-        let (commit, page) = {
-            let current = self.host.handle.state::<CurrentProject>();
-            let mut current = current.project.lock().await;
-            let project = current.as_mut().context("no project is open")?;
-            self.host.check_project(project)?;
-            let Some(commit) = project.commit_rebased(output.patch).await? else {
-                return Ok(project.snapshot());
-            };
-            project.record_commit(&commit);
-            (commit, project.active_page())
+        let projects = self.host.handle.state::<CurrentProject>();
+        let (mut project, visible) = projects.project.target(self.host.target()?).await?;
+        self.host.check_project(&project)?;
+        let Some(commit) = project.commit_rebased(output.patch).await? else {
+            return Ok(project.snapshot());
         };
+        project.record_commit(&commit);
+        self.host.observe(&project);
         let snapshot = commit.snapshot.clone();
-        self.host.synchronize(commit, page).await?;
+        if visible {
+            self.host.synchronize(commit, project.active_page()).await?;
+        }
         Ok(snapshot)
     }
 }
@@ -565,6 +662,8 @@ mod tests {
         let binding = Binding {
             instance: project.instance_id,
             control: control.clone(),
+            run: RunId::new(),
+            observed: Arc::new(parking_lot::Mutex::new(None)),
         };
         let mut page = None;
         let patch = project.snapshot().patch(|edit| {
@@ -592,11 +691,16 @@ mod tests {
         drop(commit);
         let before = serde_json::to_value(Project::page(&project.snapshot(), page)?)?;
         binding.check(&project)?;
+        *binding.observed.lock() = Some(project.revision());
+        binding.check_revision(&project)?;
         let commit = project
             .set_translation(element, Some("Edited through agent tools".into()))
             .await?;
         project.record_commit(&commit);
         drop(commit);
+        assert!(binding.check_revision(&project).is_err());
+        *binding.observed.lock() = Some(project.revision());
+        binding.check_revision(&project)?;
         assert_ne!(
             serde_json::to_value(Project::page(&project.snapshot(), page)?)?,
             before
@@ -611,6 +715,8 @@ mod tests {
         let old = Binding {
             instance: project.instance_id,
             control: Control::default(),
+            run: RunId::new(),
+            observed: Arc::new(parking_lot::Mutex::new(None)),
         };
         drop(project);
         let reopened = Project::open("fixture".into(), path).await?;

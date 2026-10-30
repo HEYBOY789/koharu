@@ -70,7 +70,34 @@
     "saveSetup": "Kaydet ve denetle",
     "checkConnection": "Bağlantıyı denetle",
     "checking": "CLI ve modeller denetleniyor…",
-    "cliSignInHint": "Önce bu CLI ile oturum açın, ardından bağlantıyı burada denetleyin."
+    "cliSignInHint": "Önce bu CLI ile oturum açın, ardından bağlantıyı burada denetleyin.",
+    "progress": {
+      "starting": "Ajan hazırlanıyor…",
+      "responding": "Yanıt yazılıyor…",
+      "waiting": "İşleme sırası bekleniyor…",
+      "summary": "Akıl yürütme özeti",
+      "changes": "Tamamlanan düzenleme: {{count}}",
+      "background": "Ajan “{{name}}” üzerinde çalışıyor.",
+      "newConversation": "Yeni konuşma"
+    },
+    "tools": {
+      "inspect_project": "Proje sayfaları okunuyor",
+      "inspect_page": "Sayfa katmanları okunuyor",
+      "list_fonts": "Kullanılabilir yazı tipleri kontrol ediliyor",
+      "view_page": "Sayfa görüntüsü inceleniyor",
+      "rename_page": "Sayfa yeniden adlandırılıyor",
+      "move_page": "Sayfa sıralanıyor",
+      "delete_pages": "Sayfalar siliniyor",
+      "add_text_box": "Metin kutusu ekleniyor",
+      "set_source_text": "Kaynak metin düzenleniyor",
+      "set_translation": "Çeviri düzenleniyor",
+      "set_typography": "Tipografi ayarlanıyor",
+      "set_geometry": "Yerleşim ayarlanıyor",
+      "set_visibility": "Görünürlük güncelleniyor",
+      "delete_elements": "Katmanlar kaldırılıyor",
+      "move_element": "Katman taşınıyor",
+      "run_pipeline": "İşlem hattı çalıştırılıyor"
+    }
   },
   "canvas": {
     "empty": "Başlamak için bir sayfa seçin.",

@@ -70,7 +70,34 @@
     "saveSetup": "儲存並檢查",
     "checkConnection": "檢查連線",
     "checking": "正在檢查CLI與模型…",
-    "cliSignInHint": "請先在對應CLI中登入，再在這裡檢查連線。"
+    "cliSignInHint": "請先在對應CLI中登入，再在這裡檢查連線。",
+    "progress": {
+      "starting": "準備代理程式…",
+      "responding": "撰寫回覆…",
+      "waiting": "等待處理空閒…",
+      "summary": "思考摘要",
+      "changes": "已完成修改：{{count}}",
+      "background": "代理程式正在處理「{{name}}」。",
+      "newConversation": "新對話"
+    },
+    "tools": {
+      "inspect_project": "讀取專案頁面",
+      "inspect_page": "讀取頁面圖層",
+      "list_fonts": "檢查可用字型",
+      "view_page": "檢視頁面影像",
+      "rename_page": "重新命名頁面",
+      "move_page": "調整頁面順序",
+      "delete_pages": "刪除頁面",
+      "add_text_box": "新增文字方塊",
+      "set_source_text": "編輯原文",
+      "set_translation": "編輯譯文",
+      "set_typography": "調整文字排版",
+      "set_geometry": "調整版面配置",
+      "set_visibility": "更新可見性",
+      "delete_elements": "刪除圖層",
+      "move_element": "移動圖層",
+      "run_pipeline": "執行處理流程"
+    }
   },
   "canvas": {
     "empty": "請選擇頁面以開始。",

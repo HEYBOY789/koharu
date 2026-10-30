@@ -570,6 +570,9 @@ impl Stream {
                 self.conversation = Some(id.into());
             }
             if value["event"] == "step_update" {
+                if value["step_update"]["step_type"] == "agent_response" && value["step_update"]["state"] == "ACTIVE" && value["step_update"]["text_delta"].as_str().is_none_or(str::is_empty) {
+                    publish(Event::ReasoningDelta { run, delta: String::new() });
+                }
                 if let Some(delta) = value["step_update"]["text_delta"].as_str() {
                     publish(Event::TextDelta {
                         run,
@@ -619,7 +622,7 @@ impl Stream {
                         }
                         Some("thinking_delta") => publish(Event::ReasoningDelta {
                             run,
-                            delta: String::new(),
+                            delta: event["delta"].as_str().unwrap_or_default().to_owned(),
                         }),
                         _ => {}
                     }

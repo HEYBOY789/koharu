@@ -6,17 +6,16 @@ import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { call } from '@/lib/backend'
-import { pageKey, pagesKey, projectKey, refresh } from '@/lib/queries'
+import { useProject } from '@/lib/queries'
+import { useKoharuStore } from '@/lib/store'
 import {
   commands,
   type AgentStatus,
   type Backend,
   type CliConfig,
   type Config,
-  type Event,
   type LoginEvent,
   type Reasoning,
-  type RunId,
 } from '@koharu/bridge/protocol'
 import { Badge } from '@koharu/ui/components/badge'
 import { Button } from '@koharu/ui/components/button'
@@ -25,12 +24,7 @@ import { NativeSelect, NativeSelectOption } from '@koharu/ui/components/native-s
 import { ScrollArea } from '@koharu/ui/components/scroll-area'
 import { Textarea } from '@koharu/ui/components/textarea'
 
-interface ConversationMessage {
-  id: string
-  role: 'user' | 'assistant'
-  text: string
-  error?: boolean
-}
+import { AgentProgress } from './AgentProgress'
 
 export function AgentPanel() {
   const { t } = useTranslation()
@@ -47,14 +41,25 @@ export function AgentPanel() {
   })
   const [loginEvent, setLoginEvent] = useState<LoginEvent | null>(null)
   const [loggingIn, setLoggingIn] = useState(false)
-  const [messages, setMessages] = useState<ConversationMessage[]>([])
   const [prompt, setPrompt] = useState('')
-  const [running, setRunning] = useState<RunId | null>(null)
-  const [activity, setActivity] = useState<string | null>(null)
+  const project = useProject().data
+  const snapshot = useKoharuStore((state) => state.agent)
+  const activeRun = snapshot.run?.state === 'running' ? snapshot.run : null
+  const running = activeRun?.id ?? null
+  const messages =
+    snapshot.conversations.find((chat) => chat.project === project?.name)?.messages ?? []
+  const ownRun = snapshot.run?.project === project?.name ? snapshot.run : null
   const alive = useRef(true)
   const checks = useRef(0)
-  const conversation = useRef(0)
   const requestPending = useRef(false)
+  const submitted = useRef<string | null>(null)
+  useEffect(() => {
+    if (submitted.current && snapshot.run?.id === submitted.current) {
+      setPending(false)
+      requestPending.current = false
+      submitted.current = null
+    }
+  }, [snapshot.sequence])
 
   useEffect(() => {
     alive.current = true
@@ -135,6 +140,14 @@ export function AgentPanel() {
           </Button>
         </div>
         <p className='text-[10px] leading-4 text-muted-foreground'>{t('agent.backendHint')}</p>
+        <Button
+          variant='ghost'
+          size='sm'
+          disabled={busy}
+          onClick={() => void call(commands.clearAgentSession)}
+        >
+          {t('agent.progress.newConversation')}
+        </Button>
         {backend === 'codex' && status.account && (
           <div className='flex min-w-0 items-center gap-2'>
             <div className='min-w-0 flex-1'>
@@ -309,7 +322,7 @@ export function AgentPanel() {
             {error || status.error}
           </p>
         )}
-        {backend !== 'codex' && (
+        {backend !== 'codex' && !status.ready && (
           <p className='text-[10px] leading-4 text-muted-foreground'>{t('agent.cliSignInHint')}</p>
         )}
       </div>
@@ -335,6 +348,25 @@ export function AgentPanel() {
         </div>
       ) : (
         <>
+          {activeRun && activeRun.project !== project?.name && (
+            <div className='grid gap-2 border-b p-3 text-[11px]'>
+              <p className='min-w-0 break-words'>
+                {t('agent.progress.background', { name: activeRun.project })}
+              </p>
+              <AgentProgress run={activeRun} />
+              <Button
+                size='sm'
+                variant='outline'
+                className='w-full min-w-0'
+                title={t('activity.openProject', { name: activeRun.project })}
+                onClick={() => void call(commands.openProject, activeRun.project)}
+              >
+                <span className='min-w-0 truncate'>
+                  {t('activity.openProject', { name: activeRun.project })}
+                </span>
+              </Button>
+            </div>
+          )}
           <ScrollArea className='min-h-0 flex-1'>
             {messages.length ? (
               <div className='grid gap-3 p-3'>
@@ -349,16 +381,26 @@ export function AgentPanel() {
                       data-error={message.error || undefined}
                       className='max-w-[90%] rounded-xl bg-muted px-3 py-2 text-[11px] leading-5 whitespace-pre-wrap select-text data-[error=true]:bg-destructive/10 data-[error=true]:text-destructive data-[role=user]:bg-primary data-[role=user]:text-primary-foreground'
                     >
-                      {message.text || (message.role === 'assistant' ? t('agent.working') : '')}
+                      {message.text ||
+                        (ownRun?.id === message.id && ownRun.state === 'running' ? (
+                          <AgentProgress run={ownRun} />
+                        ) : message.role === 'assistant' ? (
+                          t(message.state === 'stopped' ? 'agent.cancelled' : 'activity.finished')
+                        ) : (
+                          ''
+                        ))}
+                      {message.reasoning && (
+                        <details className='mt-2 border-t pt-2 text-muted-foreground'>
+                          <summary className='cursor-pointer'>
+                            {t('agent.progress.summary')}
+                          </summary>
+                          <p className='mt-1 whitespace-pre-wrap'>{message.reasoning}</p>
+                        </details>
+                      )}
                     </div>
                   </div>
                 ))}
-                {activity ? (
-                  <div className='flex items-center gap-1.5 text-[10px] text-muted-foreground'>
-                    <span className='size-1.5 rounded-full bg-primary' />
-                    {activity}
-                  </div>
-                ) : null}
+                {ownRun && messages.at(-1)?.text && <AgentProgress run={ownRun} />}
               </div>
             ) : (
               <div className='grid min-h-64 place-items-center p-6 text-center'>
@@ -401,7 +443,7 @@ export function AgentPanel() {
                   <Button
                     variant='outline'
                     size='icon-sm'
-                    aria-label={t('agent.cancel')}
+                    aria-label={t('activity.stop')}
                     onClick={() => void call(commands.cancelAgent, running).catch(() => undefined)}
                   >
                     <CircleStop />
@@ -432,7 +474,6 @@ export function AgentPanel() {
       const value = await call(commands.getAgentStatus)
       if (alive.current && check === checks.current) {
         setStatus(value)
-        setRunning(value.running)
       }
     } catch (cause) {
       if (alive.current && check === checks.current)
@@ -449,9 +490,6 @@ export function AgentPanel() {
     try {
       const saved = await call(commands.saveAgentConfig, config)
       if (!alive.current) return
-      conversation.current++
-      setMessages([])
-      setActivity(null)
       setStatus((current) => (current ? { ...current, config: saved } : current))
       await checkConnection()
     } catch (cause) {
@@ -481,9 +519,6 @@ export function AgentPanel() {
   async function logout() {
     try {
       setStatus(await call(commands.logoutAgent))
-      conversation.current++
-      setMessages([])
-      setActivity(null)
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause))
     }
@@ -491,89 +526,25 @@ export function AgentPanel() {
 
   async function send() {
     const message = prompt.trim()
-    if (!message || requestPending.current || !status?.ready) return
+    if (!message || requestPending.current || !status?.ready || !project || running) return
     requestPending.current = true
     setPending(true)
-    const generation = conversation.current
-    const id = crypto.randomUUID()
-    const assistant = crypto.randomUUID()
-    let settled = false
-    setPrompt('')
-    setMessages((current) => [
-      ...current,
-      { id, role: 'user', text: message },
-      { id: assistant, role: 'assistant', text: '' },
-    ])
-    setActivity(t('agent.working'))
-
-    const channel = new Channel<Event>()
-    channel.onmessage = (event) => {
-      if (!alive.current || generation !== conversation.current) return
-      switch (event.type) {
-        case 'started':
-          setRunning(event.run)
-          break
-        case 'text_delta':
-          updateAssistant((text) => text + event.delta)
-          break
-        case 'reasoning_delta':
-          setActivity(t('agent.thinking'))
-          break
-        case 'tool_started':
-          setActivity(t('agent.applying'))
-          break
-        case 'tool_finished':
-          if (event.changed) void refresh(projectKey, pagesKey, pageKey)
-          setActivity(t('agent.working'))
-          break
-        case 'completed':
-          settled = true
-          requestPending.current = false
-          setPending(false)
-          updateAssistant(() => event.message || t('activity.finished'))
-          setRunning(null)
-          setActivity(null)
-          void refresh(projectKey, pagesKey, pageKey)
-          break
-        case 'failed':
-          settled = true
-          requestPending.current = false
-          setPending(false)
-          updateAssistant(() => event.message, true)
-          setRunning(null)
-          setActivity(null)
-          break
-        case 'cancelled':
-          settled = true
-          requestPending.current = false
-          setPending(false)
-          updateAssistant((text) => text || t('agent.cancelled'))
-          setRunning(null)
-          setActivity(null)
-          break
-      }
-    }
+    setError('')
     try {
-      const run = await call(commands.runAgent, message, channel)
-      if (!settled && alive.current && generation === conversation.current) setRunning(run)
-    } catch (error) {
-      if (!alive.current || generation !== conversation.current) return
+      const run = await call(commands.runAgent, message, project.name)
+      submitted.current = run
+      if (useKoharuStore.getState().agent.run?.id === run) {
+        requestPending.current = false
+        if (alive.current) setPending(false)
+        submitted.current = null
+      }
+      if (alive.current) setPrompt('')
+    } catch (cause) {
       requestPending.current = false
-      setPending(false)
-      settled = true
-      updateAssistant(() => (error instanceof Error ? error.message : String(error)), true)
-      setRunning(null)
-      setActivity(null)
-    }
-
-    function updateAssistant(update: (text: string) => string, error = false) {
-      setMessages((current) =>
-        current.map((item) =>
-          item.id === assistant
-            ? { ...item, text: update(item.text), error: error || item.error }
-            : item,
-        ),
-      )
+      if (alive.current) {
+        setPending(false)
+        setError(cause instanceof Error ? cause.message : String(cause))
+      }
     }
   }
 }

@@ -13,6 +13,7 @@ import i18n from '@/lib/i18n'
 import { chaptersKey, pageKey, pagesKey, projectKey, queryClient, refresh } from '@/lib/queries'
 import {
   receiveCanvas,
+  receiveAgent,
   receiveDownload,
   receiveStartupState,
   receiveJob,
@@ -22,6 +23,7 @@ import {
 import {
   commands,
   type CanvasState,
+  type AgentSnapshot,
   type Download,
   type Job,
   type ModelResources,
@@ -81,6 +83,20 @@ export function Providers({ children }: { children: ReactNode }) {
             } else {
               queryClient.setQueryData(pagesKey, [])
               queryClient.setQueryData(pageKey, null)
+            }
+          }),
+          channel<AgentSnapshot>((agent) => {
+            if (agent.sequence <= useKoharuStore.getState().agent.sequence) return
+            const previous = useKoharuStore.getState().agent.run
+            receiveAgent(agent)
+            const active = queryClient.getQueryData<ProjectInfo | null>(projectKey)
+            const run = agent.run
+            if (
+              run &&
+              run.project === active?.name &&
+              (run.changes !== previous?.changes || run.state !== previous?.state)
+            ) {
+              void refresh(projectKey, pagesKey, pageKey, chaptersKey).catch(() => undefined)
             }
           }),
         )

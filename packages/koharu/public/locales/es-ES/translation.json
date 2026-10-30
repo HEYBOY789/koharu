@@ -70,7 +70,34 @@
     "saveSetup": "Guardar y comprobar",
     "checkConnection": "Comprobar conexión",
     "checking": "Comprobando CLI y modelos…",
-    "cliSignInHint": "Inicia sesión en este CLI y luego comprueba aquí la conexión."
+    "cliSignInHint": "Inicia sesión en este CLI y luego comprueba aquí la conexión.",
+    "progress": {
+      "starting": "Preparando agente…",
+      "responding": "Redactando respuesta…",
+      "waiting": "Esperando procesamiento…",
+      "summary": "Resumen del razonamiento",
+      "changes": "Ediciones completadas: {{count}}",
+      "background": "El agente trabaja en «{{name}}».",
+      "newConversation": "Nueva conversación"
+    },
+    "tools": {
+      "inspect_project": "Leyendo páginas del proyecto",
+      "inspect_page": "Leyendo capas de la página",
+      "list_fonts": "Consultando fuentes disponibles",
+      "view_page": "Inspeccionando imagen de la página",
+      "rename_page": "Renombrando página",
+      "move_page": "Reordenando página",
+      "delete_pages": "Eliminando páginas",
+      "add_text_box": "Añadiendo cuadro de texto",
+      "set_source_text": "Editando texto original",
+      "set_translation": "Editando traducción",
+      "set_typography": "Ajustando tipografía",
+      "set_geometry": "Ajustando disposición",
+      "set_visibility": "Actualizando visibilidad",
+      "delete_elements": "Eliminando capas",
+      "move_element": "Moviendo capa",
+      "run_pipeline": "Ejecutando procesamiento"
+    }
   },
   "canvas": {
     "empty": "Selecciona una página para empezar.",

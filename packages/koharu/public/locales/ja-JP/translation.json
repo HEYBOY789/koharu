@@ -70,7 +70,34 @@
     "saveSetup": "保存して確認",
     "checkConnection": "接続を確認",
     "checking": "CLIとモデルを確認中…",
-    "cliSignInHint": "先にこのCLIでログインしてから、ここで接続を確認してください。"
+    "cliSignInHint": "先にこのCLIでログインしてから、ここで接続を確認してください。",
+    "progress": {
+      "starting": "エージェントを準備中…",
+      "responding": "応答を作成中…",
+      "waiting": "処理の空きを待機中…",
+      "summary": "推論の要約",
+      "changes": "完了した編集: {{count}}",
+      "background": "エージェントは「{{name}}」で作業中です。",
+      "newConversation": "新しい会話"
+    },
+    "tools": {
+      "inspect_project": "プロジェクトのページを読取中",
+      "inspect_page": "ページのレイヤーを読取中",
+      "list_fonts": "利用可能なフォントを確認中",
+      "view_page": "ページ画像を確認中",
+      "rename_page": "ページ名を変更中",
+      "move_page": "ページを並べ替え中",
+      "delete_pages": "ページを削除中",
+      "add_text_box": "テキストボックスを追加中",
+      "set_source_text": "原文を編集中",
+      "set_translation": "翻訳を編集中",
+      "set_typography": "文字設定を調整中",
+      "set_geometry": "レイアウトを調整中",
+      "set_visibility": "表示設定を更新中",
+      "delete_elements": "レイヤーを削除中",
+      "move_element": "レイヤーを移動中",
+      "run_pipeline": "パイプラインを実行中"
+    }
   },
   "canvas": {
     "empty": "ページを選択して開始します。",

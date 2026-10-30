@@ -20,11 +20,14 @@ import { useKoharuStore } from '@/lib/store'
 import { commands, type Download as DownloadState, type Job } from '@koharu/bridge/protocol'
 import { Button } from '@koharu/ui/components/button'
 
+import { AgentProgress, agentProgressLabel } from './AgentProgress'
+
 export function ActivityCenter() {
   const { t } = useTranslation()
   const [expanded, setExpanded] = useState(false)
   const project = useProject().data
   const jobs = useKoharuStore((state) => state.jobs)
+  const agent = useKoharuStore((state) => state.agent.run)
   const downloads = useKoharuStore((state) => state.downloads)
   const activities = useMutationState({
     filters: { status: 'pending' },
@@ -41,7 +44,11 @@ export function ActivityCenter() {
   )
   const failedDownloads = Object.values(downloads).filter((download) => download.state === 'failed')
   const visibleDownloads = [...runningDownloads, ...failedDownloads]
-  const empty = activities.length === 0 && visibleJobs.length === 0 && visibleDownloads.length === 0
+  const empty =
+    activities.length === 0 &&
+    visibleJobs.length === 0 &&
+    visibleDownloads.length === 0 &&
+    agent === null
   useEffect(() => {
     if (empty) setExpanded(false)
   }, [empty])
@@ -52,26 +59,32 @@ export function ActivityCenter() {
     visibleJobs.find((job) => job.state === 'queued') ??
     visibleJobs.find((job) => job.state === 'failed') ??
     visibleJobs[0]
+  const agentPrimary = agent && (agent.state === 'running' || !primary)
   const percent = primary ? progress(primary.completed, primary.total) : null
-  const errors = visibleJobs.filter((job) => job.state === 'failed').length + failedDownloads.length
-  const label = primary
-    ? [
-        primary.project,
-        primary.state === 'running'
-          ? (primary.chapter_title ??
-            (primary.stage ? t(`phase.${primary.stage}`) : t('activity.processing')))
-          : t(
-              primary.state === 'failed'
-                ? 'activity.processingFailed'
-                : `activity.${primary.state}`,
-            ),
-        primary.state === 'running' && percent !== null ? `${percent}%` : null,
-      ]
-        .filter(Boolean)
-        .join(' · ')
-    : activities[0]
-      ? t(activities[0].label)
-      : t('activity.downloadingFiles', { count: visibleDownloads.length })
+  const errors =
+    visibleJobs.filter((job) => job.state === 'failed').length +
+    failedDownloads.length +
+    Number(agent?.state === 'failed')
+  const label = agentPrimary
+    ? `${agent.project} · ${t('agent.title')} · ${agentProgressLabel(t, agent)}`
+    : primary
+      ? [
+          primary.project,
+          primary.state === 'running'
+            ? (primary.chapter_title ??
+              (primary.stage ? t(`phase.${primary.stage}`) : t('activity.processing')))
+            : t(
+                primary.state === 'failed'
+                  ? 'activity.processingFailed'
+                  : `activity.${primary.state}`,
+              ),
+          primary.state === 'running' && percent !== null ? `${percent}%` : null,
+        ]
+          .filter(Boolean)
+          .join(' · ')
+      : activities[0]
+        ? t(activities[0].label)
+        : t('activity.downloadingFiles', { count: visibleDownloads.length })
 
   return (
     <section
@@ -102,22 +115,40 @@ export function ActivityCenter() {
             </span>
           ) : null}
         </Button>
-        {primary?.project &&
-        primary.project !== project?.name &&
-        primary.state !== 'queued' &&
-        !(primary.state === 'running' && primary.phase === 'import') ? (
-          <OpenProject name={primary.project} />
-        ) : null}
-        {primary?.state === 'running' || primary?.state === 'queued' ? (
-          <Button
-            size='icon-xs'
-            variant='ghost'
-            aria-label={t('activity.stop')}
-            onClick={() => void call(commands.stopJob, primary.id).catch(() => undefined)}
-          >
-            <Square className='size-2.5 fill-current' />
-          </Button>
-        ) : null}
+        {agentPrimary ? (
+          <>
+            {agent.project !== project?.name && <OpenProject name={agent.project} agent />}
+            {agent.state === 'running' && (
+              <Button
+                size='icon-xs'
+                variant='ghost'
+                aria-label={t('activity.stop')}
+                onClick={() => void call(commands.cancelAgent, agent.id).catch(() => undefined)}
+              >
+                <Square className='size-2.5 fill-current' />
+              </Button>
+            )}
+          </>
+        ) : (
+          <>
+            {primary?.project &&
+            primary.project !== project?.name &&
+            primary.state !== 'queued' &&
+            !(primary.state === 'running' && primary.phase === 'import') ? (
+              <OpenProject name={primary.project} />
+            ) : null}
+            {primary?.state === 'running' || primary?.state === 'queued' ? (
+              <Button
+                size='icon-xs'
+                variant='ghost'
+                aria-label={t('activity.stop')}
+                onClick={() => void call(commands.stopJob, primary.id).catch(() => undefined)}
+              >
+                <Square className='size-2.5 fill-current' />
+              </Button>
+            ) : null}{' '}
+          </>
+        )}
       </div>
       {expanded ? (
         <div
@@ -149,6 +180,39 @@ export function ActivityCenter() {
           {failedDownloads.map((download) => (
             <DownloadItem key={download.id} download={download} />
           ))}
+          {agent && (
+            <div className='border-b p-3 text-[11px] last:border-b-0'>
+              <div className='flex min-w-0 items-center gap-2'>
+                <span className='min-w-0 flex-1 truncate font-medium'>
+                  {agent.project} · {t('agent.title')}
+                </span>
+                {agent.project !== project?.name && <OpenProject name={agent.project} agent />}
+                {agent.state === 'running' ? (
+                  <Button
+                    size='icon-xs'
+                    variant='ghost'
+                    aria-label={t('activity.stop')}
+                    onClick={() => void call(commands.cancelAgent, agent.id).catch(() => undefined)}
+                  >
+                    <Square className='size-2.5 fill-current' />
+                  </Button>
+                ) : (
+                  <Button
+                    size='icon-xs'
+                    variant='ghost'
+                    aria-label={t('activity.dismiss')}
+                    onClick={() => void call(commands.dismissAgentActivity)}
+                  >
+                    <X className='size-3' />
+                  </Button>
+                )}
+              </div>
+              <AgentProgress run={agent} />
+              {agent.state !== 'running' && agent.error && (
+                <p className='break-words text-destructive'>{agent.error}</p>
+              )}
+            </div>
+          )}
           {visibleJobs.map((job) => (
             <JobItem key={job.id} job={job} />
           ))}
@@ -158,7 +222,7 @@ export function ActivityCenter() {
   )
 }
 
-function OpenProject({ name }: { name: string }) {
+function OpenProject({ name, agent = false }: { name: string; agent?: boolean }) {
   const { t } = useTranslation()
   const setWorkspaceTab = useKoharuStore((state) => state.setWorkspaceTab)
   return (
@@ -169,7 +233,10 @@ function OpenProject({ name }: { name: string }) {
       title={t('activity.openProject', { name })}
       onClick={() =>
         void call(commands.openProject, name)
-          .then(() => setWorkspaceTab('projects'))
+          .then(() => {
+            setWorkspaceTab('projects')
+            if (agent) useKoharuStore.getState().setInspectorPanel('agent')
+          })
           .catch(() => undefined)
       }
     >

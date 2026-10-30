@@ -70,7 +70,34 @@
     "saveSetup": "Save and check",
     "checkConnection": "Check connection",
     "checking": "Checking CLI and models…",
-    "cliSignInHint": "Sign in using this CLI first, then check the connection here."
+    "cliSignInHint": "Sign in using this CLI first, then check the connection here.",
+    "progress": {
+      "starting": "Preparing agent…",
+      "responding": "Writing response…",
+      "waiting": "Waiting for processing…",
+      "summary": "Reasoning summary",
+      "changes": "Completed edits: {{count}}",
+      "background": "Agent is working on “{{name}}”.",
+      "newConversation": "New conversation"
+    },
+    "tools": {
+      "inspect_project": "Reading project pages",
+      "inspect_page": "Reading page layers",
+      "list_fonts": "Checking available fonts",
+      "view_page": "Inspecting page image",
+      "rename_page": "Renaming page",
+      "move_page": "Reordering page",
+      "delete_pages": "Deleting pages",
+      "add_text_box": "Adding text box",
+      "set_source_text": "Editing source text",
+      "set_translation": "Editing translation",
+      "set_typography": "Adjusting typography",
+      "set_geometry": "Adjusting layout",
+      "set_visibility": "Updating visibility",
+      "delete_elements": "Removing layers",
+      "move_element": "Moving layer",
+      "run_pipeline": "Running pipeline"
+    }
   },
   "canvas": {
     "empty": "Select a page to begin.",

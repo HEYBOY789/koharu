@@ -212,7 +212,7 @@ where
                 }
             });
             let result = async {
-                let host = self.host.bind(lease.clone()).await?;
+                let host = self.host.bind(run, lease.clone()).await?;
                 let mut session = self.cli.lock().await;
                 cli::run(
                     &mut session,
@@ -232,7 +232,7 @@ where
             let message = result?;
             return Ok(RunResult { run, message });
         }
-        let host = self.host.bind(control.clone()).await?;
+        let host = self.host.bind(run, control.clone()).await?;
         let context = host.context().await?;
         let models = self.codex.models().await?;
         let model = match config.codex.model.as_deref() {
