@@ -9,18 +9,16 @@ import {
   Play,
   Settings,
   Sparkles,
-  Square,
 } from 'lucide-react'
 import { useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { ModelPicker } from '@/components/controls/ModelPicker'
 import { OutputPicker, type OutputDraft } from '@/components/controls/OutputPicker'
-import { call, refreshTranslationModels, savePreferences } from '@/lib/backend'
+import { refreshTranslationModels, savePreferences } from '@/lib/backend'
 import { pipelineStages, receivePreferences, useKoharuStore, type PipelineScope } from '@/lib/store'
 import { modelKey, providerName } from '@/lib/translation'
 import {
-  commands,
   type Model,
   type ModelSelection,
   type ProviderPreference,
@@ -29,6 +27,8 @@ import {
 import { Button } from '@koharu/ui/components/button'
 import { Popover, PopoverContent, PopoverTrigger } from '@koharu/ui/components/popover'
 import { cn } from '@koharu/ui/lib/utils'
+
+import { StopJobButton } from './StopJobButton'
 
 type SelectorView = 'root' | 'model' | 'scope' | 'stages' | 'output'
 
@@ -49,11 +49,6 @@ export function InferenceControl({
   const running = Object.values(jobs).find((job) => job.state === 'running') ?? null
   const unavailable = scope === 'selected-pages' && selectedPages.length === 0
 
-  const stop = () => {
-    if (!running) return
-    void call(commands.stopJob, running.id).catch(() => undefined)
-  }
-
   return (
     <div className='flex items-center gap-1'>
       <RuntimeSelector
@@ -65,20 +60,24 @@ export function InferenceControl({
         onStagesChange={setStages}
       />
 
-      <Button
-        type='button'
-        size='sm'
-        className={cn(
-          'rounded-lg px-2.5 text-[11px]',
-          !running && 'bg-primary/80 hover:bg-primary/90',
-        )}
-        disabled={(disabled || unavailable) && !running}
-        aria-label={running ? t('inference.stopProcessing') : t('inference.runProcessing')}
-        onClick={running ? stop : () => onRun(scope, stages)}
-      >
-        {running ? <Square className='size-3 fill-current' /> : <Play className='size-3' />}
-        <span>{running ? t('inference.stop') : t('inference.run')}</span>
-      </Button>
+      {running ? (
+        <StopJobButton id={running.id} label className='rounded-lg px-2.5 text-[11px]' />
+      ) : (
+        <Button
+          type='button'
+          size='sm'
+          className={cn(
+            'rounded-lg px-2.5 text-[11px]',
+            !running && 'bg-primary/80 hover:bg-primary/90',
+          )}
+          disabled={disabled || unavailable}
+          aria-label={t('inference.runProcessing')}
+          onClick={() => onRun(scope, stages)}
+        >
+          <Play className='size-3' />
+          <span>{t('inference.run')}</span>
+        </Button>
+      )}
     </div>
   )
 }

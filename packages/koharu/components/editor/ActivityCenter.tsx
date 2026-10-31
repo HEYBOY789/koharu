@@ -21,12 +21,14 @@ import { commands, type Download as DownloadState, type Job } from '@koharu/brid
 import { Button } from '@koharu/ui/components/button'
 
 import { AgentProgress, agentProgressLabel } from './AgentProgress'
+import { StopJobButton } from './StopJobButton'
 
 export function ActivityCenter() {
   const { t } = useTranslation()
   const [expanded, setExpanded] = useState(false)
   const project = useProject().data
   const jobs = useKoharuStore((state) => state.jobs)
+  const stoppingJobs = useKoharuStore((state) => state.stoppingJobs)
   const agent = useKoharuStore((state) => state.agent.run)
   const downloads = useKoharuStore((state) => state.downloads)
   const activities = useMutationState({
@@ -71,14 +73,18 @@ export function ActivityCenter() {
       ? [
           primary.project,
           primary.state === 'running'
-            ? (primary.chapter_title ??
-              (primary.stage ? t(`phase.${primary.stage}`) : t('activity.processing')))
+            ? stoppingJobs[primary.id]
+              ? t('activity.stopping')
+              : (primary.chapter_title ??
+                (primary.stage ? t(`phase.${primary.stage}`) : t('activity.processing')))
             : t(
                 primary.state === 'failed'
                   ? 'activity.processingFailed'
                   : `activity.${primary.state}`,
               ),
-          primary.state === 'running' && percent !== null ? `${percent}%` : null,
+          primary.state === 'running' && !stoppingJobs[primary.id] && percent !== null
+            ? `${percent}%`
+            : null,
         ]
           .filter(Boolean)
           .join(' · ')
@@ -138,14 +144,7 @@ export function ActivityCenter() {
               <OpenProject name={primary.project} />
             ) : null}
             {primary?.state === 'running' || primary?.state === 'queued' ? (
-              <Button
-                size='icon-xs'
-                variant='ghost'
-                aria-label={t('activity.stop')}
-                onClick={() => void call(commands.stopJob, primary.id).catch(() => undefined)}
-              >
-                <Square className='size-2.5 fill-current' />
-              </Button>
+              <StopJobButton id={primary.id} />
             ) : null}{' '}
           </>
         )}
@@ -276,6 +275,7 @@ function DownloadGroup({ downloads }: { downloads: DownloadState[] }) {
 
 function JobItem({ job }: { job: Job }) {
   const { t } = useTranslation()
+  const stopping = useKoharuStore((state) => Boolean(state.stoppingJobs[job.id]))
   const dismiss = useKoharuStore((state) => state.dismissJob)
   // The pipeline reports which page it is on; the rail has already loaded the
   // labels, so this resolves from cache rather than fetching.
@@ -307,14 +307,7 @@ function JobItem({ job }: { job: Job }) {
         <span className='min-w-0 flex-1 break-words'>
           {job.project || job.chapter_title} · {t('activity.queued')}
         </span>
-        <Button
-          size='icon-xs'
-          variant='ghost'
-          aria-label={t('activity.stop')}
-          onClick={() => void call(commands.stopJob, job.id).catch(() => undefined)}
-        >
-          <Square className='size-2.5 fill-current' />
-        </Button>
+        <StopJobButton id={job.id} />
       </div>
     )
   }
@@ -346,32 +339,28 @@ function JobItem({ job }: { job: Job }) {
           <span className='mt-1.5 size-1.5 justify-self-center rounded-full bg-primary' />
           <div className='min-w-0'>
             <span className='block truncate text-[12px] font-medium'>
-              {job.chapter_title && job.phase
-                ? t(
-                    job.phase === 'import'
-                      ? 'sourceImport.downloading'
-                      : job.phase === 'summarize'
-                        ? 'activity.summarizingChapter'
-                        : 'activity.translatingChapter',
-                    { chapter: job.chapter_title },
-                  )
-                : job.stage
-                  ? t(`phase.${job.stage}`, { defaultValue: job.stage })
-                  : t('activity.processing')}
+              {stopping
+                ? t('activity.stopping')
+                : job.chapter_title && job.phase
+                  ? t(
+                      job.phase === 'inspect'
+                        ? 'sourceImport.previewing'
+                        : job.phase === 'import'
+                          ? 'sourceImport.downloading'
+                          : job.phase === 'summarize'
+                            ? 'activity.summarizingChapter'
+                            : 'activity.translatingChapter',
+                      { chapter: job.chapter_title },
+                    )
+                  : job.stage
+                    ? t(`phase.${job.stage}`, { defaultValue: job.stage })
+                    : t('activity.processing')}
             </span>
           </div>
           <span className='pt-0.5 text-right text-[10px] tabular-nums'>
             {percent !== null ? `${percent}%` : null}
           </span>
-          <Button
-            size='icon-xs'
-            variant='ghost'
-            className='-mt-1'
-            aria-label={t('activity.stop')}
-            onClick={() => void call(commands.stopJob, job.id).catch(() => undefined)}
-          >
-            <Square className='size-2.5 fill-current' />
-          </Button>
+          <StopJobButton id={job.id} className='-mt-1' />
           {pageLabel ? (
             <p className='col-start-2 col-end-4 mt-0.5 truncate text-[10px] text-muted-foreground'>
               {pageLabel}
@@ -382,7 +371,14 @@ function JobItem({ job }: { job: Job }) {
               {job.detail}
             </p>
           ) : null}
-          {job.retry ? (
+          {stopping ? (
+            <p
+              role='status'
+              className='col-start-2 col-end-4 mt-1 text-[10px] leading-4 break-words text-muted-foreground'
+            >
+              {t('activity.stoppingHint')}
+            </p>
+          ) : job.retry ? (
             <p
               role='status'
               className='col-start-2 col-end-4 mt-1 text-[10px] leading-4 break-words text-muted-foreground'

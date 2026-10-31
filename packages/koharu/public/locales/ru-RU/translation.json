@@ -25,7 +25,9 @@
     "openProject": "Открыть проект «{{name}}»",
     "details": "Подробности выполнения",
     "attention": "Требует внимания: {{count}}",
-    "queued": "В очереди"
+    "queued": "В очереди",
+    "stopping": "Остановка…",
+    "stoppingHint": "Ожидание завершения текущей операции. Готовая работа сохраняется."
   },
   "agent": {
     "account": "Учётная запись ChatGPT",
@@ -351,7 +353,8 @@
     "renameDescription": "Выберите новое имя для страницы.",
     "renameTitle": "Переименовать страницу",
     "selected": "Выбрано: {{count}}",
-    "folderChapterHint": "Importing a folder uses each immediate subfolder as one chapter."
+    "folderChapterHint": "Importing a folder uses each immediate subfolder as one chapter.",
+    "openPage": "Открыть {{page}}"
   },
   "outputPicker": {
     "instructions": "Инструкции по переводу",
@@ -390,9 +393,9 @@
     "cpu": "CPU",
     "processUtilization": "Использование процессом",
     "ram": "RAM",
-    "summary": "ОЗУ {{ram}}%, ЦП {{cpu}}%",
+    "summary": "ОЗУ {{ram}}, ЦП {{cpu}}",
     "title": "Ресурсы системы",
-    "tooltip": "ОЗУ {{ramUsed}} из {{ramTotal}} · ЦП {{cpu}}%",
+    "tooltip": "ОЗУ {{ramUsed}} из {{ramTotal}} · ЦП {{cpu}}",
     "usedOfTotal": "Использовано {{used}} из {{total}}",
     "vramUnavailable": "Недоступно",
     "vramValue": "Видеопамять: {{value}}"
@@ -565,7 +568,9 @@
     "projectNamePlaceholder": "Мой новый проект",
     "storageHint": "Проекты хранятся локально в папке «Документы».",
     "title": "Проекты",
-    "yourProjects": "Ваши проекты"
+    "yourProjects": "Ваши проекты",
+    "library": "Библиотека проектов",
+    "returnToProject": "Вернуться к {{name}}"
   },
   "startup": {
     "description": "Загрузка локальных сред выполнения ИИ и подготовка рабочего пространства. Первый запуск может занять некоторое время.",
@@ -721,7 +726,23 @@
     "downloading": "Загрузка и импорт {{chapter}}",
     "sourceDiscovery": "Агент находит сайт для чтения и готовит настройки сбора; код скачивает изображения. MangaDex используется только для метаданных каталога.",
     "downloadURL": "URL источника загрузки (необязательно)",
-    "downloadURLHint": "Оставьте пустым для поиска источника. Вставьте страницу манги, чтобы выбрать сайт. Источник и настройки сохраняются для повторного использования."
+    "downloadURLHint": "Оставьте пустым для поиска источника. Вставьте страницу манги, чтобы выбрать сайт. Источник и настройки сохраняются для повторного использования.",
+    "invalidURL": "Введите корректный веб-адрес, например https://example.com/manga.",
+    "preview": "Просмотр глав",
+    "previewing": "Чтение списка глав…",
+    "previewHint": "Проверьте источник перед импортом. Будут загружены только выбранные главы. Для поиска источника может использоваться выбранный агент.",
+    "previewSource": "Источник: {{source}}",
+    "chapterSelection": "Главы для загрузки",
+    "allChapters": "Все главы",
+    "chapterRange": "Диапазон глав",
+    "selectChapters": "Выбрать главы",
+    "firstChapter": "Только первая глава",
+    "chapterFrom": "С главы (включительно)",
+    "chapterTo": "По главу (включительно)",
+    "chapterCount": "Выбрано {{count}} из {{total}} глав",
+    "previousChapters": "Предыдущие главы",
+    "nextChapters": "Следующие главы",
+    "sizeUnknown": "Объём загрузки неизвестен до получения изображений."
   },
   "mangadex": {
     "title": "Найти мангу на MangaDex",

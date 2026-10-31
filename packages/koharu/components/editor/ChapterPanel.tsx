@@ -1,6 +1,6 @@
 'use client'
 
-import { BookOpen, FolderInput, Pencil, Play, Plus, Sparkles, Square, Trash2 } from 'lucide-react'
+import { BookOpen, FolderInput, Pencil, Play, Plus, Sparkles, Trash2 } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import ReactMarkdown from 'react-markdown'
@@ -34,6 +34,8 @@ import { ScrollArea } from '@koharu/ui/components/scroll-area'
 import { Switch } from '@koharu/ui/components/switch'
 import { Textarea } from '@koharu/ui/components/textarea'
 import { cn } from '@koharu/ui/lib/utils'
+
+import { StopJobButton } from './StopJobButton'
 
 const WIKI_SLUG = /^[a-z0-9_]{1,64}$/
 
@@ -211,15 +213,7 @@ export function ChapterPanel() {
               {ownRunning.phase === 'summarize'
                 ? t('chapter.summarizing')
                 : t('chapter.translating')}
-              <Button
-                size='icon-xs'
-                variant='ghost'
-                className='ml-auto'
-                aria-label={t('activity.stop')}
-                onClick={() => void call(commands.stopJob, ownRunning.id).catch(() => undefined)}
-              >
-                <Square className='size-2.5 fill-current' />
-              </Button>
+              <StopJobButton id={ownRunning.id} className='ml-auto' />
             </div>
             {ownRunning.detail ? (
               <p className='mt-1 line-clamp-2 text-[9px] leading-3.5 text-muted-foreground'>

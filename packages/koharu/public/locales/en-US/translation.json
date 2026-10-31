@@ -25,7 +25,9 @@
     "openProject": "Open project “{{name}}”",
     "details": "Activity details",
     "attention": "Needs attention: {{count}}",
-    "queued": "Queued"
+    "queued": "Queued",
+    "stopping": "Stopping…",
+    "stoppingHint": "Waiting for the current operation to finish. Completed work is kept."
   },
   "agent": {
     "account": "ChatGPT account",
@@ -351,7 +353,8 @@
     "renameDescription": "Choose a new name for this page.",
     "renameTitle": "Rename page",
     "selected": "{{count}} selected",
-    "folderChapterHint": "Importing a folder uses each immediate subfolder as one chapter."
+    "folderChapterHint": "Importing a folder uses each immediate subfolder as one chapter.",
+    "openPage": "Open {{page}}"
   },
   "outputPicker": {
     "instructions": "Translation instructions",
@@ -390,9 +393,9 @@
     "cpu": "CPU",
     "processUtilization": "Process utilization",
     "ram": "RAM",
-    "summary": "RAM {{ram}}%, CPU {{cpu}}%",
+    "summary": "RAM {{ram}}, CPU {{cpu}}",
     "title": "System resources",
-    "tooltip": "RAM {{ramUsed}} of {{ramTotal}} · CPU {{cpu}}%",
+    "tooltip": "RAM {{ramUsed}} of {{ramTotal}} · CPU {{cpu}}",
     "usedOfTotal": "{{used}} of {{total}} used",
     "vramUnavailable": "Unavailable",
     "vramValue": "{{value}} VRAM"
@@ -565,7 +568,9 @@
     "projectNamePlaceholder": "My new project",
     "storageHint": "Projects are stored locally in your Documents folder.",
     "title": "Projects",
-    "yourProjects": "Your projects"
+    "yourProjects": "Your projects",
+    "library": "Project library",
+    "returnToProject": "Return to {{name}}"
   },
   "startup": {
     "description": "Loading local AI runtimes and preparing the workspace. First launch can take a moment.",
@@ -721,7 +726,23 @@
     "downloading": "Downloading and importing {{chapter}}",
     "sourceDiscovery": "The agent finds a reading website and prepares its scraper; code downloads the images. MangaDex provides catalog metadata only.",
     "downloadURL": "Download source URL (optional)",
-    "downloadURLHint": "Leave blank to find a source automatically. Paste a manga page to choose a specific reading website. The selected source and scraper are saved for reuse."
+    "downloadURLHint": "Leave blank to find a source automatically. Paste a manga page to choose a specific reading website. The selected source and scraper are saved for reuse.",
+    "invalidURL": "Enter a valid web URL, for example https://example.com/manga.",
+    "preview": "Preview chapters",
+    "previewing": "Reading chapter list…",
+    "previewHint": "Preview the source before importing. Only selected chapters will download. Source discovery may use the selected agent.",
+    "previewSource": "Reading source: {{source}}",
+    "chapterSelection": "Chapters to download",
+    "allChapters": "All chapters",
+    "chapterRange": "Chapter range",
+    "selectChapters": "Select chapters",
+    "firstChapter": "First chapter only",
+    "chapterFrom": "From chapter (inclusive)",
+    "chapterTo": "To chapter (inclusive)",
+    "chapterCount": "{{count}} of {{total}} chapters selected",
+    "previousChapters": "Previous chapters",
+    "nextChapters": "Next chapters",
+    "sizeUnknown": "Download size is not available until page images are fetched."
   },
   "mangadex": {
     "title": "Find manga on MangaDex",

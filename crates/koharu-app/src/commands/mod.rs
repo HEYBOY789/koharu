@@ -125,6 +125,7 @@ pub fn bindings() -> tauri_specta::Builder<tauri_runtime_cef::CefRuntime> {
             publication::get_publication_settings,
             source_import::get_source_import_settings,
             source_import::import_source_url,
+            source_import::preview_source_url,
             publication::inspect_publication,
             publication::pick_publication_file,
             publication::prepare_publication,

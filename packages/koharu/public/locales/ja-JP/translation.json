@@ -25,7 +25,9 @@
     "openProject": "プロジェクト「{{name}}」を開く",
     "details": "アクティビティの詳細",
     "attention": "確認が必要: {{count}}",
-    "queued": "待機中"
+    "queued": "待機中",
+    "stopping": "停止中…",
+    "stoppingHint": "現在の処理の終了を待っています。完了した作業は保持されます。"
   },
   "agent": {
     "account": "ChatGPTアカウント",
@@ -351,7 +353,8 @@
     "renameDescription": "このページの新しい名前を入力します。",
     "renameTitle": "ページ名を変更",
     "selected": "{{count}}件選択中",
-    "folderChapterHint": "Importing a folder uses each immediate subfolder as one chapter."
+    "folderChapterHint": "Importing a folder uses each immediate subfolder as one chapter.",
+    "openPage": "{{page}}を開く"
   },
   "outputPicker": {
     "instructions": "翻訳指示",
@@ -390,9 +393,9 @@
     "cpu": "CPU",
     "processUtilization": "プロセス使用率",
     "ram": "RAM",
-    "summary": "RAM {{ram}}%、CPU {{cpu}}%",
+    "summary": "RAM {{ram}}、CPU {{cpu}}",
     "title": "システムリソース",
-    "tooltip": "RAM {{ramUsed}} / {{ramTotal}} · CPU {{cpu}}%",
+    "tooltip": "RAM {{ramUsed}} / {{ramTotal}} · CPU {{cpu}}",
     "usedOfTotal": "{{total}}中{{used}}を使用",
     "vramUnavailable": "利用不可",
     "vramValue": "VRAM {{value}}"
@@ -565,7 +568,9 @@
     "projectNamePlaceholder": "新しいプロジェクト",
     "storageHint": "プロジェクトは「ドキュメント」フォルダーにローカル保存されます。",
     "title": "プロジェクト",
-    "yourProjects": "プロジェクト一覧"
+    "yourProjects": "プロジェクト一覧",
+    "library": "プロジェクト一覧",
+    "returnToProject": "{{name}}に戻る"
   },
   "startup": {
     "description": "ローカル AI ランタイムを読み込み、ワークスペースを準備しています。初回起動には少し時間がかかる場合があります。",
@@ -721,7 +726,23 @@
     "downloading": "{{chapter}} をダウンロード・インポート中",
     "sourceDiscovery": "エージェントが閲覧サイトを探して取得設定を作成し、コードが画像をダウンロードします。MangaDex はカタログ情報のみに使います。",
     "downloadURL": "ダウンロード元 URL（任意）",
-    "downloadURLHint": "空欄なら自動で探します。漫画のページを入力してサイトを指定できます。選択した取得元と設定は再利用のため保存されます。"
+    "downloadURLHint": "空欄なら自動で探します。漫画のページを入力してサイトを指定できます。選択した取得元と設定は再利用のため保存されます。",
+    "invalidURL": "有効なURLを入力してください。例：https://example.com/manga",
+    "preview": "チャプターを確認",
+    "previewing": "チャプター一覧を取得中…",
+    "previewHint": "インポート前に配信元を確認してください。選択したチャプターのみダウンロードします。配信元の検索に選択中のエージェントを使う場合があります。",
+    "previewSource": "配信元：{{source}}",
+    "chapterSelection": "ダウンロードするチャプター",
+    "allChapters": "すべてのチャプター",
+    "chapterRange": "チャプターの範囲",
+    "selectChapters": "チャプターを選択",
+    "firstChapter": "最初のチャプターのみ",
+    "chapterFrom": "開始チャプター（含む）",
+    "chapterTo": "終了チャプター（含む）",
+    "chapterCount": "{{total}}チャプター中{{count}}件を選択",
+    "previousChapters": "前のチャプター",
+    "nextChapters": "次のチャプター",
+    "sizeUnknown": "画像を取得するまでダウンロード容量は不明です。"
   },
   "mangadex": {
     "title": "MangaDexで漫画を探す",

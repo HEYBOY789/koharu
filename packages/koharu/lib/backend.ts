@@ -8,7 +8,7 @@ import type {
   TypesettingConfig,
 } from '@koharu/bridge/protocol'
 
-import { receiveError, receivePreferences, receiveTranslationModels } from './store'
+import { receiveError, receivePreferences, receiveTranslationModels, useKoharuStore } from './store'
 
 type Command<Args extends unknown[], Result> = (...args: Args) => Promise<Result>
 
@@ -16,6 +16,22 @@ let translationModelsRequest: Promise<void> | null = null
 let translationModelsGeneration = 0
 let preferencesWriteGeneration = 0
 let preferencesWriteQueue: Promise<void> = Promise.resolve()
+
+export async function stopJob(id: string): Promise<void> {
+  const state = useKoharuStore.getState()
+  if (state.stoppingJobs[id]) return
+  useKoharuStore.setState({ stoppingJobs: { ...state.stoppingJobs, [id]: true } })
+  try {
+    await call(commands.stopJob, id)
+  } catch (error) {
+    useKoharuStore.setState((current) => {
+      const stoppingJobs = { ...current.stoppingJobs }
+      delete stoppingJobs[id]
+      return { stoppingJobs }
+    })
+    throw error
+  }
+}
 
 export async function call<Args extends unknown[], Result>(
   command: Command<Args, Result>,

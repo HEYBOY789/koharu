@@ -285,7 +285,10 @@ function AppearancePreferences() {
             )}
             onValueChange={(language) => language && i18n.changeLanguage(language)}
           >
-            <SelectTrigger className='h-8 w-full text-[11px]'>
+            <SelectTrigger
+              className='h-8 w-full text-[11px]'
+              aria-label={t('settings.appearance.language')}
+            >
               <SelectValue />
             </SelectTrigger>
             <SelectContent>

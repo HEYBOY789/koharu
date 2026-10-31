@@ -112,7 +112,7 @@ it('keeps editing available while the background job stays stoppable and can be 
   fireEvent.click(screen.getByRole('button', { name: 'Activity details' }))
   const details = screen.getByRole('region', { name: 'Activity details' })
   expect(within(details).getByText('B')).toBeVisible()
-  expect(within(details).getByText('Translating “Chapter 8”')).toBeVisible()
+  expect(within(details).getByText('Stopping…')).toBeVisible()
   expect(within(details).queryByText(/A cached page/)).not.toBeInTheDocument()
   expect(pages).not.toHaveBeenCalled()
   expect(useKoharuStore.getState().selectedLayers).toEqual(['a-layer'])

@@ -1,4 +1,3 @@
-use crate::commands::project::ProjectOwner;
 use super::{
     ChannelExt as _, Error, chapter,
     import::{self, ChapterSource, ImportedChapter},
@@ -8,12 +7,13 @@ use super::{
     publication::{self, PublicationConfig},
     summarizer,
 };
+use crate::commands::project::ProjectOwner;
 use anyhow::{Context as _, Result, bail};
 use koharu_pipeline::StopToken;
 use koharu_scene::{
     AssetInput, AssetMetadata, AssetRole, BlobId, ImportedSource, PublicationMetadata,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use specta::Type;
 use std::{
     path::{Component, Path, PathBuf},
@@ -54,6 +54,148 @@ pub struct SourceImportOptions {
     pub project_name: Option<String>,
     pub summarize: bool,
     pub translate: bool,
+    pub chapters: Option<Vec<String>>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, Type)]
+pub struct SourceChapterPreview {
+    pub url: String,
+    pub title: String,
+    pub number: f64,
+}
+
+#[derive(Clone, Debug, Serialize, Type)]
+pub struct SourcePreview {
+    pub title: String,
+    pub source_url: String,
+    pub chapters: Vec<SourceChapterPreview>,
+}
+
+#[derive(Deserialize)]
+struct SourceSurvey {
+    version: u8,
+    url: String,
+    #[serde(rename = "catalogURL")]
+    catalog_url: Option<String>,
+    metadata: PublicationMetadata,
+    chapters: Vec<SourceChapterPreview>,
+}
+
+#[tauri::command]
+#[specta::specta]
+pub(crate) async fn preview_source_url(
+    url: String,
+    mut config: PublicationConfig,
+    mut options: SourceImportOptions,
+    handle: AppHandle<CefRuntime>,
+) -> std::result::Result<Option<SourcePreview>, Error> {
+    let result: Result<Option<SourcePreview>> = async {
+        let (url, catalog) = source_address(&url, options.language.as_deref())?;
+        if let Some(reader) = &options.download_url {
+            anyhow::ensure!(catalog, "a source override requires a catalog URL");
+            reader_address(reader)?;
+        }
+        options.chapters = None;
+        let checked = publication::inspect(&config, false).await?;
+        anyhow::ensure!(
+            checked.missing.is_empty(),
+            "missing local tools: {}",
+            checked.missing.join(", ")
+        );
+        config.node = checked.node.context("Node is missing")?;
+        config.script = checked.script.context("publisher toolkit is missing")?;
+        config.binary = checked.binary;
+        let id = JobId::new();
+        let stop = StopToken::default();
+        let job = Job {
+            id,
+            project: None,
+            state: JobState::Queued,
+            completed: 0,
+            total: 0,
+            page: None,
+            chapter: None,
+            chapter_title: Some(url.clone()),
+            phase: Some(ChapterPhase::Inspect),
+            stage: None,
+            model: config.model.clone(),
+            detail: None,
+            retry: None,
+            error: None,
+        };
+        let processing = handle.state::<Processing>();
+        {
+            let mut jobs = processing.jobs.lock();
+            anyhow::ensure!(
+                !jobs.values().any(|other| matches!(
+                    other.state,
+                    JobState::Running | JobState::Queued
+                ) && other.chapter_title.as_deref() == Some(&url)),
+                "this source is already queued or running"
+            );
+            jobs.insert(id, job.clone());
+            processing.stops.lock().insert(id, stop.clone());
+        }
+        handle.state::<JobChannel>().channel.publish(job);
+        let result: Result<SourcePreview> = async {
+            let _permit = processing
+                .wait(&stop)
+                .await
+                .context("source preview stopped while queued")?;
+            if let Some(job) = processing.jobs.lock().get_mut(&id) {
+                job.state = JobState::Running;
+                handle.state::<JobChannel>().channel.publish(job.clone());
+            }
+            let output =
+                run_source_command(&handle, id, &url, &config, &options, &stop, true).await?;
+            let bytes = tokio::fs::read(output.join("preview.json")).await?;
+            anyhow::ensure!(
+                bytes.len() < 16 * 1024 * 1024,
+                "source preview is too large"
+            );
+            let survey: SourceSurvey = serde_json::from_slice(&bytes)?;
+            anyhow::ensure!(
+                survey.version == 1
+                    && !survey.chapters.is_empty()
+                    && survey.chapters.len() <= 20000,
+                "invalid chapter survey"
+            );
+            anyhow::ensure!(
+                if catalog {
+                    survey.catalog_url.as_deref() == Some(&url)
+                        && reader_address(&survey.url).is_ok()
+                } else {
+                    survey.catalog_url.is_none() && survey.url == url
+                },
+                "source survey does not match the requested manga"
+            );
+            Ok(SourcePreview {
+                title: survey.metadata.title,
+                source_url: survey.url,
+                chapters: survey.chapters,
+            })
+        }
+        .await;
+        processing.stops.lock().remove(&id);
+        if let Some(job) = processing.jobs.lock().get_mut(&id) {
+            job.state = if stop.stopped() {
+                JobState::Stopped
+            } else if result.is_ok() {
+                JobState::Finished
+            } else {
+                JobState::Failed
+            };
+            job.error = result.as_ref().err().map(|error| format!("{error:#}"));
+            handle.state::<JobChannel>().channel.publish(job.clone());
+        }
+        if stop.stopped() {
+            Ok(None)
+        } else {
+            result.map(Some)
+        }
+    }
+    .await;
+    result.map_err(Into::into)
 }
 
 fn source_address(url: &str, language: Option<&str>) -> Result<(String, bool)> {
@@ -234,14 +376,15 @@ pub(crate) async fn import_source_url(
     Ok(id)
 }
 
-async fn download_and_import(
+async fn run_source_command(
     handle: &AppHandle<CefRuntime>,
     id: JobId,
     url: &str,
     config: &PublicationConfig,
     options: &SourceImportOptions,
     stop: &StopToken,
-) -> Result<()> {
+    scan_only: bool,
+) -> Result<PathBuf> {
     let home = dirs::data_local_dir()
         .context("local data directory is unavailable")?
         .join("Koharu");
@@ -280,6 +423,18 @@ async fn download_and_import(
     if let Some(download_url) = &options.download_url {
         command.arg("--download-url").arg(download_url);
     }
+    if scan_only {
+        command.arg("--scan-only");
+    }
+    if let Some(chapters) = &options.chapters {
+        anyhow::ensure!(
+            !chapters.is_empty() && chapters.len() <= 20000,
+            "choose at least one chapter"
+        );
+        let selection = output.join(format!("selection-{id}.json"));
+        tokio::fs::write(&selection, serde_json::to_vec(chapters)?).await?;
+        command.arg("--chapters-file").arg(selection);
+    }
     #[cfg(windows)]
     command.creation_flags(0x08000000);
     let mut child = command
@@ -300,6 +455,18 @@ async fn download_and_import(
         bail!("source importer failed: {last}");
     }
     anyhow::ensure!(!stop.stopped(), "source import stopped");
+    Ok(output)
+}
+
+async fn download_and_import(
+    handle: &AppHandle<CefRuntime>,
+    id: JobId,
+    url: &str,
+    config: &PublicationConfig,
+    options: &SourceImportOptions,
+    stop: &StopToken,
+) -> Result<()> {
+    let output = run_source_command(handle, id, url, config, options, stop, false).await?;
     let bytes = tokio::fs::read(output.join("source.json")).await?;
     anyhow::ensure!(
         bytes.len() < 16 * 1024 * 1024,
@@ -308,6 +475,21 @@ async fn download_and_import(
     let manifest: SourceManifest =
         serde_json::from_slice(&bytes).context("invalid source manifest")?;
     validate_manifest_source(&manifest, url)?;
+    if let Some(selected) = &options.chapters {
+        let expected = selected.iter().collect::<std::collections::HashSet<_>>();
+        let actual = manifest
+            .chapters
+            .iter()
+            .map(|chapter| &chapter.url)
+            .collect::<std::collections::HashSet<_>>();
+        anyhow::ensure!(
+            expected.len() == selected.len()
+                && expected == actual
+                && actual.len() == manifest.chapters.len(),
+            "downloaded chapter selection does not match the request"
+        );
+    }
+
     let library = handle.state::<ProjectLibrary>().inner().clone();
     {
         let current = handle.state::<super::project::CurrentProject>();

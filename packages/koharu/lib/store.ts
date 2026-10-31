@@ -47,6 +47,7 @@ interface KoharuStore {
   resources: ModelResources | null
   agent: AgentSnapshot
   jobs: Record<string, Job>
+  stoppingJobs: Record<string, true>
   downloads: Record<string, Download>
   camera: { zoom: number; translation: [number, number]; fitted: boolean }
   canvasPage: EntityId | null
@@ -100,6 +101,7 @@ export const useKoharuStore = create<KoharuStore>()((set) => ({
   resources: null,
   agent: { sequence: 0, conversations: [], run: null },
   jobs: {},
+  stoppingJobs: {},
   downloads: {},
   camera: { zoom: 1, translation: [0, 0], fitted: true },
   canvasPage: null,
@@ -137,8 +139,10 @@ export const useKoharuStore = create<KoharuStore>()((set) => ({
   dismissJob: (id) =>
     set((state) => {
       const jobs = { ...state.jobs }
+      const stoppingJobs = { ...state.stoppingJobs }
       delete jobs[id]
-      return { jobs }
+      delete stoppingJobs[id]
+      return { jobs, stoppingJobs }
     }),
   dismissDownload: (id) =>
     set((state) => {
@@ -167,7 +171,11 @@ export function receiveCanvas(canvas: CanvasState): void {
 }
 
 export function receiveJob(job: Job): void {
-  useKoharuStore.setState((state) => ({ jobs: { ...state.jobs, [job.id]: job } }))
+  useKoharuStore.setState((state) => {
+    const stoppingJobs = { ...state.stoppingJobs }
+    if (job.state !== 'running' && job.state !== 'queued') delete stoppingJobs[job.id]
+    return { jobs: { ...state.jobs, [job.id]: job }, stoppingJobs }
+  })
 }
 
 export function receiveDownload(download: Download): void {

@@ -1,7 +1,7 @@
 'use client'
 
 import { BookOpen, Folder } from 'lucide-react'
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { MangaDexSearchPage } from '@/components/app/MangaDexSearchPage'
@@ -12,11 +12,13 @@ import { SettingsPage } from '@/components/preferences/SettingsPage'
 import { StartView } from '@/components/start/StartView'
 import { useProject } from '@/lib/queries'
 import { useKoharuStore } from '@/lib/store'
+import { Button } from '@koharu/ui/components/button'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@koharu/ui/components/tabs'
 import { cn } from '@koharu/ui/lib/utils'
 
 export function KoharuApp() {
   const { t } = useTranslation()
+  const [libraryOpen, setLibraryOpen] = useState(false)
   const project = useProject().data
   const selectedPages = useKoharuStore((state) => state.selectedPages)
   const selectPages = useKoharuStore((state) => state.selectPages)
@@ -27,7 +29,13 @@ export function KoharuApp() {
   const setWorkspaceTab = useKoharuStore((state) => state.setWorkspaceTab)
   const activePage = project?.active_page
   const editorOpen =
-    project !== undefined && project !== null && !settingsOpen && workspaceTab === 'projects'
+    project !== undefined &&
+    project !== null &&
+    !settingsOpen &&
+    workspaceTab === 'projects' &&
+    !libraryOpen
+
+  useEffect(() => setLibraryOpen(false), [project?.name])
 
   useEffect(() => {
     if (!projectLoaded || selectedPages.length > 0) return
@@ -50,20 +58,40 @@ export function KoharuApp() {
         }}
         className={cn('min-h-0 flex-1 gap-0', settingsOpen && 'hidden')}
       >
-        <TabsList
-          variant='line'
-          aria-label={t('mangadex.navigation')}
-          className='mx-4 my-1 shrink-0'
-        >
-          <TabsTrigger value='projects' className='px-3'>
-            <Folder />
-            {t('start.title')}
-          </TabsTrigger>
-          <TabsTrigger value='mangadex' className='px-3'>
-            <BookOpen />
-            {t('mangadex.tab')}
-          </TabsTrigger>
-        </TabsList>
+        <div className='flex min-w-0 shrink-0 items-center gap-2'>
+          <TabsList
+            variant='line'
+            aria-label={t('mangadex.navigation')}
+            className='mx-4 my-1 shrink-0'
+          >
+            <TabsTrigger value='projects' className='px-3'>
+              <Folder />
+              {t('start.title')}
+            </TabsTrigger>
+            <TabsTrigger value='mangadex' className='px-3'>
+              <BookOpen />
+              {t('mangadex.tab')}
+            </TabsTrigger>
+          </TabsList>
+          {project && (
+            <Button
+              variant='ghost'
+              size='sm'
+              className='max-w-64 min-w-0 text-xs'
+              onClick={() => {
+                setWorkspaceTab('projects')
+                setLibraryOpen((current) => !current)
+              }}
+            >
+              {libraryOpen ? <BookOpen /> : <Folder />}
+              <span className='truncate'>
+                {libraryOpen
+                  ? t('start.returnToProject', { name: project.name })
+                  : t('start.library')}
+              </span>
+            </Button>
+          )}
+        </div>
         <TabsContent
           value='projects'
           keepMounted
@@ -76,10 +104,17 @@ export function KoharuApp() {
                 {t('startup.opening')}
               </div>
             </main>
-          ) : project === null ? (
-            <StartView />
           ) : (
-            <Editor key={project.name} />
+            <>
+              {(project === null || libraryOpen) && (
+                <StartView onOpenProject={() => setLibraryOpen(false)} />
+              )}
+              {project && (
+                <div className={cn('flex min-h-0 flex-1 flex-col', libraryOpen && 'hidden')}>
+                  <Editor key={project.name} />
+                </div>
+              )}
+            </>
           )}
         </TabsContent>
         <TabsContent value='mangadex' keepMounted className='min-h-0 data-[hidden]:hidden'>

@@ -24,7 +24,7 @@ import { Input } from '@koharu/ui/components/input'
 import { ScrollArea } from '@koharu/ui/components/scroll-area'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@koharu/ui/components/tooltip'
 
-export function StartView() {
+export function StartView({ onOpenProject }: { onOpenProject: () => void }) {
   const { t } = useTranslation()
   const setSettingsOpen = useKoharuStore((state) => state.setSettingsOpen)
   const [projects, setProjects] = useState<ProjectSummary[]>([])
@@ -66,6 +66,7 @@ export function StartView() {
       await call(commands.createProject, projectName)
       await refresh(projectKey, pagesKey, pageKey)
       setName('')
+      onOpenProject()
     } finally {
       setBusy(null)
     }
@@ -77,6 +78,7 @@ export function StartView() {
     try {
       await call(commands.openProject, projectName)
       await refresh(projectKey, pagesKey, pageKey)
+      onOpenProject()
     } finally {
       setBusy(null)
     }

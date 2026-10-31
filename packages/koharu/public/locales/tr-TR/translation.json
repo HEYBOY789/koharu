@@ -25,7 +25,9 @@
     "openProject": "“{{name}}” projesini aç",
     "details": "Etkinlik ayrıntıları",
     "attention": "İlgilenilmesi gereken: {{count}}",
-    "queued": "Sırada"
+    "queued": "Sırada",
+    "stopping": "Durduruluyor…",
+    "stoppingHint": "Geçerli işlemin bitmesi bekleniyor. Tamamlanan çalışmalar korunur."
   },
   "agent": {
     "account": "ChatGPT hesabı",
@@ -351,7 +353,8 @@
     "renameDescription": "Bu sayfa için yeni bir ad seçin.",
     "renameTitle": "Sayfayı yeniden adlandır",
     "selected": "{{count}} seçili",
-    "folderChapterHint": "Importing a folder uses each immediate subfolder as one chapter."
+    "folderChapterHint": "Importing a folder uses each immediate subfolder as one chapter.",
+    "openPage": "{{page}} aç"
   },
   "outputPicker": {
     "instructions": "Çeviri talimatları",
@@ -565,7 +568,9 @@
     "projectNamePlaceholder": "Yeni projem",
     "storageHint": "Projeler Belgeler klasörünüzde yerel olarak saklanır.",
     "title": "Projeler",
-    "yourProjects": "Projeleriniz"
+    "yourProjects": "Projeleriniz",
+    "library": "Proje kitaplığı",
+    "returnToProject": "{{name}} projesine dön"
   },
   "startup": {
     "description": "Yerel yapay zekâ çalışma zamanları yükleniyor ve çalışma alanı hazırlanıyor. İlk açılış biraz sürebilir.",
@@ -721,7 +726,23 @@
     "downloading": "{{chapter}} indiriliyor ve içe aktarılıyor",
     "sourceDiscovery": "Ajan bir okuma sitesi bulup kazıyıcı ayarlarını hazırlar; kod görselleri indirir. MangaDex yalnızca katalog bilgileri için kullanılır.",
     "downloadURL": "İndirme kaynağı URL’si (isteğe bağlı)",
-    "downloadURLHint": "Otomatik kaynak aramak için boş bırakın. Site seçmek için manga sayfasını yapıştırın. Kaynak ve kazıyıcı yeniden kullanım için kaydedilir."
+    "downloadURLHint": "Otomatik kaynak aramak için boş bırakın. Site seçmek için manga sayfasını yapıştırın. Kaynak ve kazıyıcı yeniden kullanım için kaydedilir.",
+    "invalidURL": "Geçerli bir web adresi girin. Örnek: https://example.com/manga.",
+    "preview": "Bölümleri önizle",
+    "previewing": "Bölüm listesi okunuyor…",
+    "previewHint": "İçe aktarmadan önce kaynağı kontrol edin. Yalnızca seçilen bölümler indirilir. Kaynak araması seçilen aracıyı kullanabilir.",
+    "previewSource": "Okuma kaynağı: {{source}}",
+    "chapterSelection": "İndirilecek bölümler",
+    "allChapters": "Tüm bölümler",
+    "chapterRange": "Bölüm aralığı",
+    "selectChapters": "Bölüm seç",
+    "firstChapter": "Yalnızca ilk bölüm",
+    "chapterFrom": "Başlangıç bölümü (dahil)",
+    "chapterTo": "Bitiş bölümü (dahil)",
+    "chapterCount": "{{total}} bölümden {{count}} seçildi",
+    "previousChapters": "Önceki bölümler",
+    "nextChapters": "Sonraki bölümler",
+    "sizeUnknown": "Sayfa görselleri alınmadan indirme boyutu bilinmez."
   },
   "mangadex": {
     "title": "MangaDex üzerinde manga bul",

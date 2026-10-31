@@ -94,6 +94,7 @@ export function PageRail() {
   const { importPages, importing } = useImportPages()
   const anchor = useRef<number | null>(null)
   const selectionRequest = useRef(0)
+  const pendingFocus = useRef<string | null>(null)
   const intentPrefetch = useRef<IntentPrefetchState | null>(null)
   const [dragged, setDragged] = useState<string | null>(null)
   const [query, setQuery] = useState('')
@@ -143,7 +144,6 @@ export function PageRail() {
     for (const item of loose) result.push({ kind: 'page', ...item })
     return result
   }, [chapters, collapsed, normalized, pages])
-
   const pageList = useRef<HTMLDivElement>(null)
   const pageVirtualizer = useVirtualizer({
     count: rows.length,
@@ -164,6 +164,13 @@ export function PageRail() {
         callback({ width: rect.width || 240, height: rect.height || 600 }),
       ),
   })
+  const virtualRows = pageVirtualizer.getVirtualItems()
+  const renderedPages = virtualRows
+    .map((row) => rows[row.index])
+    .filter((row) => row.kind === 'page')
+  const tabbablePage = renderedPages.some((row) => row.page.id === active)
+    ? active
+    : renderedPages[0]?.page.id
 
   useEffect(
     () => () => {
@@ -171,6 +178,28 @@ export function PageRail() {
     },
     [],
   )
+
+  const navigatePage = (id: string, direction: 'next' | 'previous' | 'first' | 'last') => {
+    const visible = rows.filter((row) => row.kind === 'page')
+    const current = visible.findIndex((row) => row.page.id === id)
+    const index =
+      direction === 'first'
+        ? 0
+        : direction === 'last'
+          ? visible.length - 1
+          : Math.max(0, Math.min(visible.length - 1, current + (direction === 'next' ? 1 : -1)))
+    const target = visible[index]
+    if (!target) return
+    pendingFocus.current = target.page.id
+    pageVirtualizer.scrollToIndex(rows.indexOf(target))
+    const button = Array.from(
+      pageList.current?.querySelectorAll<HTMLButtonElement>('[data-page-open]') ?? [],
+    ).find((node) => node.dataset.pageOpen === target.page.id)
+    if (button) {
+      pendingFocus.current = null
+      button.focus()
+    }
+  }
 
   const select = (index: number, additive: boolean, range: boolean) => {
     const page = pages[index]
@@ -403,7 +432,7 @@ export function PageRail() {
             viewportRef={pageList}
           >
             <div className='relative w-full' style={{ height: pageVirtualizer.getTotalSize() }}>
-              {pageVirtualizer.getVirtualItems().map((virtualRow) => {
+              {virtualRows.map((virtualRow) => {
                 const row = rows[virtualRow.index]
                 if (!row) return null
                 return (
@@ -470,6 +499,14 @@ export function PageRail() {
                         selected={selected.includes(row.page.id)}
                         dragged={dragged === row.page.id}
                         nested={Boolean(row.page.chapter)}
+                        tabIndex={tabbablePage === row.page.id ? 0 : -1}
+                        buttonRef={(node) => {
+                          if (node && pendingFocus.current === row.page.id) {
+                            pendingFocus.current = null
+                            node.focus()
+                          }
+                        }}
+                        onNavigate={(direction) => navigatePage(row.page.id, direction)}
                         onIntent={
                           active === row.page.id ? undefined : () => prefetchOnIntent(row.page.id)
                         }
@@ -811,6 +848,9 @@ function PageItem({
   onRename,
   onDelete,
   onDrop,
+  tabIndex,
+  buttonRef,
+  onNavigate,
 }: {
   page: PageSummary
   active: boolean
@@ -824,6 +864,9 @@ function PageItem({
   onRename: () => void
   onDelete: () => void
   onDrop: () => void
+  tabIndex: number
+  buttonRef: (node: HTMLButtonElement | null) => void
+  onNavigate: (direction: 'next' | 'previous' | 'first' | 'last') => void
 }) {
   const { t } = useTranslation()
 
@@ -833,7 +876,7 @@ function PageItem({
       data-active={active}
       data-selected={selected}
       className={cn(
-        'group grid cursor-default grid-cols-[48px_minmax(0,1fr)] gap-2.5 rounded-xl p-1.5 transition-colors select-none',
+        'group relative grid cursor-default grid-cols-[48px_minmax(0,1fr)] gap-2.5 rounded-xl p-1.5 transition-colors select-none',
         nested && 'ml-3',
         active
           ? 'bg-primary/[0.09] hover:bg-primary/[0.09]'
@@ -857,6 +900,30 @@ function PageItem({
         onDrop()
       }}
     >
+      <button
+        type='button'
+        ref={buttonRef}
+        tabIndex={tabIndex}
+        data-page-open={page.id}
+        aria-label={t('navigator.openPage', { page: page.label })}
+        aria-current={active ? 'page' : undefined}
+        aria-pressed={selected}
+        className='absolute inset-0 z-10 rounded-xl outline-none focus-visible:ring-2 focus-visible:ring-ring'
+        onClick={(event) => onSelect(event.ctrlKey || event.metaKey, event.shiftKey)}
+        onKeyDown={(event) => {
+          const directions: Record<string, Parameters<typeof onNavigate>[0] | undefined> = {
+            ArrowDown: 'next',
+            ArrowUp: 'previous',
+            Home: 'first',
+            End: 'last',
+          }
+          const direction = directions[event.key]
+          if (direction) {
+            event.preventDefault()
+            onNavigate(direction)
+          }
+        }}
+      />
       <div className='grid h-16 w-12 place-items-center overflow-hidden rounded-lg bg-[var(--surface-well)]'>
         {page.source_asset ? (
           <PageThumbnail page={page.id} asset={page.source_asset} label={page.label} />
@@ -874,7 +941,7 @@ function PageItem({
                   variant='ghost'
                   size='icon-xs'
                   aria-label={t('navigator.actionsFor', { page: page.label })}
-                  className='-mt-1 shrink-0 opacity-0 shadow-none group-hover:opacity-100 aria-expanded:opacity-100'
+                  className='relative z-20 -mt-1 shrink-0 opacity-0 shadow-none group-focus-within:opacity-100 group-hover:opacity-100 aria-expanded:opacity-100'
                 />
               }
             >

@@ -25,7 +25,9 @@
     "openProject": "打开项目“{{name}}”",
     "details": "活动详情",
     "attention": "需要关注：{{count}}",
-    "queued": "排队中"
+    "queued": "排队中",
+    "stopping": "正在停止…",
+    "stoppingHint": "正在等待当前操作结束。已完成的工作会保留。"
   },
   "agent": {
     "account": "ChatGPT 账户",
@@ -351,7 +353,8 @@
     "renameDescription": "为此页面选择一个新名称。",
     "renameTitle": "重命名页面",
     "selected": "已选择 {{count}}",
-    "folderChapterHint": "Importing a folder uses each immediate subfolder as one chapter."
+    "folderChapterHint": "Importing a folder uses each immediate subfolder as one chapter.",
+    "openPage": "打开{{page}}"
   },
   "outputPicker": {
     "instructions": "翻译说明",
@@ -390,9 +393,9 @@
     "cpu": "CPU",
     "processUtilization": "进程利用率",
     "ram": "RAM",
-    "summary": "内存 {{ram}}%，CPU {{cpu}}%",
+    "summary": "内存 {{ram}}，CPU {{cpu}}",
     "title": "系统资源",
-    "tooltip": "内存 {{ramUsed}} / {{ramTotal}} · CPU {{cpu}}%",
+    "tooltip": "内存 {{ramUsed}} / {{ramTotal}} · CPU {{cpu}}",
     "usedOfTotal": "已使用 {{used}}，共 {{total}}",
     "vramUnavailable": "不可用",
     "vramValue": "{{value}} 显存"
@@ -565,7 +568,9 @@
     "projectNamePlaceholder": "我的新项目",
     "storageHint": "项目存储在本地“文档”文件夹中。",
     "title": "项目",
-    "yourProjects": "你的项目"
+    "yourProjects": "你的项目",
+    "library": "项目库",
+    "returnToProject": "返回{{name}}"
   },
   "startup": {
     "description": "正在加载本地 AI 运行时并准备工作区。首次启动可能需要一些时间。",
@@ -721,7 +726,23 @@
     "downloading": "正在下载并导入 {{chapter}}",
     "sourceDiscovery": "代理寻找阅读网站并生成抓取配置，代码负责下载图片。MangaDex 仅提供目录元数据。",
     "downloadURL": "下载来源网址（可选）",
-    "downloadURLHint": "留空以自动寻找来源；填写漫画页面可指定阅读网站。所选来源和抓取配置会保存以供复用。"
+    "downloadURLHint": "留空以自动寻找来源；填写漫画页面可指定阅读网站。所选来源和抓取配置会保存以供复用。",
+    "invalidURL": "请输入有效网址，例如 https://example.com/manga。",
+    "preview": "预览章节",
+    "previewing": "正在读取章节列表…",
+    "previewHint": "导入前请确认来源。只下载选中的章节。寻找来源时可能使用所选代理。",
+    "previewSource": "阅读来源：{{source}}",
+    "chapterSelection": "要下载的章节",
+    "allChapters": "全部章节",
+    "chapterRange": "章节范围",
+    "selectChapters": "选择章节",
+    "firstChapter": "仅第一章",
+    "chapterFrom": "起始章节（含）",
+    "chapterTo": "结束章节（含）",
+    "chapterCount": "已选{{count}}章，共{{total}}章",
+    "previousChapters": "上一批章节",
+    "nextChapters": "下一批章节",
+    "sizeUnknown": "获取页面图片之前无法确定下载大小。"
   },
   "mangadex": {
     "title": "在 MangaDex 查找漫画",

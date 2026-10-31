@@ -8,7 +8,7 @@ import { commands } from '@koharu/bridge/protocol'
 
 function ProjectFlow() {
   const project = useProject().data
-  return project ? <p>Opened {project.name}</p> : <StartView />
+  return project ? <p>Opened {project.name}</p> : <StartView onOpenProject={() => {}} />
 }
 
 function renderProjectFlow() {
@@ -86,7 +86,7 @@ describe('StartView', () => {
       .mockResolvedValueOnce([{ name: 'Blue Archive' }])
       .mockResolvedValueOnce([])
     const remove = vi.spyOn(commands, 'deleteProject').mockResolvedValue(null)
-    render(<StartView />)
+    render(<StartView onOpenProject={() => {}} />)
 
     const deleteButton = await screen.findByRole('button', { name: 'Delete Blue Archive' })
     await waitFor(() => expect(deleteButton).toBeEnabled())

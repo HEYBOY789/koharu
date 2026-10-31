@@ -97,6 +97,11 @@ export const commands = {
         getPublicationSettings: () => __TAURI_INVOKE<PublicationSettings>("get_publication_settings"),
         getSourceImportSettings: () => __TAURI_INVOKE<PublicationConfig>("get_source_import_settings"),
         importSourceUrl: (url: string, config: PublicationConfig, options: SourceImportOptions) => __TAURI_INVOKE<JobId>("import_source_url", { url, config, options }),
+        previewSourceUrl: (url: string, config: PublicationConfig, options: SourceImportOptions) => __TAURI_INVOKE<{
+        title: string,
+        source_url: string,
+        chapters: SourceChapterPreview[],
+} | null>("preview_source_url", { url, config, options }).then((v) => (v==null?v:({...v,chapters:v.chapters.map(i=>i)}) as typeof v)),
         inspectPublication: (config: PublicationConfig, refresh: boolean) => __TAURI_INVOKE<PublicationReadiness>("inspect_publication", { config, refresh }),
         pickPublicationFile: (kind: string) => __TAURI_INVOKE<string | null>("pick_publication_file", { kind }),
         preparePublication: (metadata: PublicationMetadata, config: PublicationConfig) => __TAURI_INVOKE<string | null>("prepare_publication", { metadata, config }),
@@ -237,7 +242,7 @@ export type ChapterInfo = {
         summarize: boolean,
 };
 
-export type ChapterPhase = "import" | "summarize" | "translate";
+export type ChapterPhase = "inspect" | "import" | "summarize" | "translate";
 
 export type ClaudeConfig = Record<string, never>;
 
@@ -759,12 +764,25 @@ export type Scope = { scope: "project" } | { scope: "pages"; value: EntityId[] }
         bounds: Bounds,
 } } | { scope: "entities"; value: EntityId[] };
 
+export type SourceChapterPreview = {
+        url: string,
+        title: string,
+        number: number,
+};
+
 export type SourceImportOptions = {
         language: string | null,
         download_url: string | null,
         project_name: string | null,
         summarize: boolean,
         translate: boolean,
+        chapters: string[] | null,
+};
+
+export type SourcePreview = {
+        title: string,
+        source_url: string,
+        chapters: SourceChapterPreview[],
 };
 
 export type SourceText = {

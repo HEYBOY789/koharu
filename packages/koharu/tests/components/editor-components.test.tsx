@@ -480,6 +480,63 @@ describe('greenfield editor', () => {
     expect(screen.queryByText('01')).not.toBeInTheDocument()
   })
 
+  it('opens a page with keyboard focus navigation and Enter', async () => {
+    installProject()
+    const base = queryClient.getQueryData<Awaited<ReturnType<typeof commands.getPage>>>(pageKey)!
+    queryClient.setQueryData(
+      pagesKey,
+      [1, 2, 3].map((index) => ({
+        id: index === 1 ? 'page' : `page-${index}`,
+        label: `Page ${index}`,
+        chapter: null,
+        size: base.size,
+        source_asset: null,
+        layer_count: 0,
+      })),
+    )
+    const select = vi.spyOn(commands, 'selectPage').mockImplementation(async (id) => ({
+      project: { name: 'Book', revision: 1, active_page: id, can_undo: true, can_redo: false },
+      page: { ...base, id },
+    }))
+    render(<PageRail />)
+    const user = userEvent.setup()
+    const first = screen.getByRole('button', { name: 'Open Page 1' })
+    first.focus()
+    await user.keyboard('{ArrowDown}')
+    expect(screen.getByRole('button', { name: 'Open Page 2' })).toHaveFocus()
+    await user.keyboard('{Enter}')
+    await waitFor(() => expect(select).toHaveBeenCalledWith('page-2'))
+    expect(screen.getByRole('button', { name: 'Open Page 2' })).toHaveAttribute(
+      'aria-current',
+      'page',
+    )
+    await user.keyboard('{End}')
+    expect(screen.getByRole('button', { name: 'Open Page 3' })).toHaveFocus()
+    await user.keyboard('{Home}')
+    expect(first).toHaveFocus()
+  })
+
+  it('keeps a page keyboard entry when the current page is outside the rendered rows', () => {
+    installProject()
+    vi.spyOn(Element.prototype, 'getBoundingClientRect').mockReturnValue(new DOMRect(0, 0, 240, 72))
+    const base = queryClient.getQueryData<Awaited<ReturnType<typeof commands.getPage>>>(pageKey)!
+    queryClient.setQueryData(pageKey, { ...base, id: 'page-150' })
+    queryClient.setQueryData(
+      pagesKey,
+      Array.from({ length: 200 }, (_, index) => ({
+        id: `page-${index + 1}`,
+        label: `Page ${index + 1}`,
+        chapter: null,
+        size: base.size,
+        source_asset: null,
+        layer_count: 0,
+      })),
+    )
+    render(<PageRail />)
+    expect(screen.queryByRole('button', { name: 'Open Page 150' })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Open Page 1' })).toHaveAttribute('tabindex', '0')
+  })
+
   it('keeps rapid page switches on the latest native selection', async () => {
     installProject()
     const pages = [

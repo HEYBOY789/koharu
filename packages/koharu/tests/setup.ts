@@ -75,6 +75,7 @@ beforeEach(() => {
     translationModels: [],
     resources: null,
     jobs: {},
+    stoppingJobs: {},
     downloads: {},
     camera: { zoom: 1, translation: [0, 0], fitted: true },
     canvasPage: null,

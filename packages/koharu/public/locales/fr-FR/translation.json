@@ -25,7 +25,9 @@
     "openProject": "Ouvrir le projet « {{name}} »",
     "details": "Détails de l’activité",
     "attention": "À vérifier : {{count}}",
-    "queued": "En attente"
+    "queued": "En attente",
+    "stopping": "Arrêt en cours…",
+    "stoppingHint": "En attente de la fin de l’opération en cours. Le travail terminé est conservé."
   },
   "agent": {
     "account": "Compte ChatGPT",
@@ -351,7 +353,8 @@
     "renameDescription": "Choisissez un nouveau nom pour cette page.",
     "renameTitle": "Renommer la page",
     "selected": "Sélection : {{count}}",
-    "folderChapterHint": "Importing a folder uses each immediate subfolder as one chapter."
+    "folderChapterHint": "Importing a folder uses each immediate subfolder as one chapter.",
+    "openPage": "Ouvrir {{page}}"
   },
   "outputPicker": {
     "instructions": "Instructions de traduction",
@@ -565,7 +568,9 @@
     "projectNamePlaceholder": "Mon nouveau projet",
     "storageHint": "Les projets sont stockés localement dans votre dossier Documents.",
     "title": "Projets",
-    "yourProjects": "Vos projets"
+    "yourProjects": "Vos projets",
+    "library": "Bibliothèque de projets",
+    "returnToProject": "Revenir à {{name}}"
   },
   "startup": {
     "description": "Chargement des environnements d’IA locaux et préparation de l’espace de travail. Le premier lancement peut prendre un moment.",
@@ -721,7 +726,23 @@
     "downloading": "Téléchargement et import de {{chapter}}",
     "sourceDiscovery": "L’agent trouve un site de lecture et prépare son extracteur ; le code télécharge les images. MangaDex fournit uniquement les métadonnées du catalogue.",
     "downloadURL": "URL de téléchargement (facultatif)",
-    "downloadURLHint": "Laissez vide pour rechercher une source. Collez une page de manga pour choisir un site. La source et son extracteur sont conservés."
+    "downloadURLHint": "Laissez vide pour rechercher une source. Collez une page de manga pour choisir un site. La source et son extracteur sont conservés.",
+    "invalidURL": "Saisissez une URL web valide, par exemple https://example.com/manga.",
+    "preview": "Voir les chapitres",
+    "previewing": "Lecture des chapitres…",
+    "previewHint": "Vérifiez la source avant d’importer. Seuls les chapitres choisis seront téléchargés. La recherche peut utiliser l’agent sélectionné.",
+    "previewSource": "Source : {{source}}",
+    "chapterSelection": "Chapitres à télécharger",
+    "allChapters": "Tous les chapitres",
+    "chapterRange": "Plage de chapitres",
+    "selectChapters": "Choisir les chapitres",
+    "firstChapter": "Premier chapitre uniquement",
+    "chapterFrom": "Du chapitre (inclus)",
+    "chapterTo": "Au chapitre (inclus)",
+    "chapterCount": "{{count}} chapitres sélectionnés sur {{total}}",
+    "previousChapters": "Chapitres précédents",
+    "nextChapters": "Chapitres suivants",
+    "sizeUnknown": "La taille est inconnue avant de récupérer les images."
   },
   "mangadex": {
     "title": "Chercher un manga sur MangaDex",
