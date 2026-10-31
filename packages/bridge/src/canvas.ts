@@ -86,6 +86,7 @@ interface CanvasModule {
 let modulePromise: Promise<CanvasModule> | null = null
 let activeCanvas: Canvas | null = null
 let prefetchGeneration = 0
+const frameRequests = new WeakMap<Canvas, object>()
 
 export async function createCanvas(
   element: HTMLCanvasElement,
@@ -243,9 +244,18 @@ export function cancelCanvasPrefetch(): void {
   prefetchGeneration++
 }
 
+export function beginCanvasFrame(canvas: Canvas): () => void {
+  cancelCanvasPrefetch()
+  const request = {}
+  frameRequests.set(canvas, request)
+  return () => {
+    if (frameRequests.get(canvas) === request) frameRequests.delete(canvas)
+  }
+}
+
 export async function prefetchCanvasPages(pages: string[]) {
   const canvas = activeCanvas
-  if (!canvas || pages.length === 0) return []
+  if (!canvas || pages.length === 0 || frameRequests.has(canvas)) return []
   const preparedPages: CanvasPagePreparation[] = []
   const generation = ++prefetchGeneration
   const current = () => activeCanvas === canvas && prefetchGeneration === generation

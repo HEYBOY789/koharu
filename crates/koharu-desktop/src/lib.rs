@@ -118,8 +118,11 @@ impl Desktop {
     }
 
     pub async fn prepare_page(&self, snapshot: &Snapshot, page: EntityId) -> Result<bool> {
-        let request = self.request_preparation();
-        let _preparation = self.preparation.lock().await;
+        // Speculative work must neither cancel nor queue ahead of a page selection.
+        let request = self.presentation.read().requested_preparation;
+        let Ok(_preparation) = self.preparation.try_lock() else {
+            return Ok(false);
+        };
         if !self.is_current_preparation(request) {
             return Ok(false);
         }
@@ -547,6 +550,87 @@ mod tests {
     use tokio::{sync::Notify, time::timeout};
 
     use super::Desktop;
+
+    #[tokio::test]
+    #[ignore = "requires KOHARU_PREVIEW_FIXTURE pointing to an isolated project copy"]
+    async fn measure_project_page_selection() {
+        use koharu_scene::Session;
+        use std::time::Instant;
+
+        let path = std::env::var_os("KOHARU_PREVIEW_FIXTURE").expect("isolated fixture path");
+        let session = Session::open(path).await.unwrap();
+        let snapshot = session.snapshot();
+        let pages = snapshot.pages().map(|page| page.id()).collect::<Vec<_>>();
+        let desktop = Desktop::new().unwrap();
+        for index in [0, 1, 2, pages.len() / 2, pages.len() - 1] {
+            let started = Instant::now();
+            assert!(
+                timeout(
+                    Duration::from_secs(30),
+                    desktop.show_page(&snapshot, Some(pages[index]))
+                )
+                .await
+                .unwrap()
+                .unwrap()
+            );
+            let cold = started.elapsed();
+            let started = Instant::now();
+            assert!(
+                desktop
+                    .show_page(&snapshot, Some(pages[index]))
+                    .await
+                    .unwrap()
+            );
+            println!(
+                "index={index} cold_ms={} cached_ms={} size={:?}",
+                cold.as_millis(),
+                started.elapsed().as_millis(),
+                desktop.canvas_state().size
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn page_prefetch_cannot_cancel_the_selected_page() {
+        use koharu_scene::{At, PageDraft, Session};
+        use std::{future::Future, task::Poll};
+
+        let mut session = Session::memory().await.unwrap();
+        let mut pages = Vec::new();
+        let patch = session
+            .snapshot()
+            .patch(|edit| {
+                for label in ["selected", "prefetched"] {
+                    pages.push(edit.add_page(PageDraft::new(label, 100.0, 160.0), At::End)?);
+                }
+                Ok(())
+            })
+            .unwrap();
+        session.commit(patch).await.unwrap();
+        let snapshot = session.snapshot();
+        let desktop = Desktop::new().unwrap();
+        let preparation = desktop.preparation.lock().await;
+        let selected = desktop.show_page(&snapshot, Some(pages[0]));
+        tokio::pin!(selected);
+        std::future::poll_fn(|cx| {
+            assert!(selected.as_mut().poll(cx).is_pending());
+            Poll::Ready(())
+        })
+        .await;
+        let prefetched = {
+            let prefetched = desktop.prepare_page(&snapshot, pages[1]);
+            tokio::pin!(prefetched);
+            std::future::poll_fn(|cx| Poll::Ready(prefetched.as_mut().poll(cx))).await
+        };
+        drop(preparation);
+        assert!(
+            selected.await.unwrap(),
+            "prefetch must not discard the user's page selection"
+        );
+        assert!(matches!(prefetched, Poll::Ready(Ok(false))));
+        assert!(desktop.prepare_page(&snapshot, pages[1]).await.unwrap());
+        assert_eq!(desktop.canvas_state().page, Some(pages[0]));
+    }
 
     #[tokio::test]
     async fn newer_request_preempts_current_preparation_and_acquires_ownership() {

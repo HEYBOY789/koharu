@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 
 import {
   activateCanvas,
+  beginCanvasFrame,
   cancelCanvasPrefetch,
   createCanvas,
   fetchCanvasManifest,
@@ -123,7 +124,7 @@ export function useCanvas(
       return
 
     const requested = generation
-    cancelCanvasPrefetch()
+    const finishFrame = beginCanvasFrame(canvas)
     const currentRequest = {}
     request.current = currentRequest
     setError(null)
@@ -138,6 +139,7 @@ export function useCanvas(
 
     void prepareFrame(canvas, requested, current)
       .then((activated) => {
+        finishFrame()
         if (!current() || !activated) return
         activeFrame.current = { canvas, generation: requested }
         setActiveGeneration(requested)
@@ -147,6 +149,7 @@ export function useCanvas(
         setStatus('ready')
       })
       .catch((reason: unknown) => {
+        finishFrame()
         if (!current()) return
         request.current = null
         setError(toError(reason))

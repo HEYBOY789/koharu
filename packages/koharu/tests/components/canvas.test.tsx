@@ -46,6 +46,7 @@ vi.mock('@koharu/bridge/canvas', () => ({
   fetchCanvasResource: (generation: number, resource: string) =>
     adapter.fetchResource(generation, resource),
   activateCanvas: (canvas: unknown) => adapter.activate(canvas),
+  beginCanvasFrame: vi.fn(() => vi.fn()),
   cancelCanvasPrefetch: vi.fn(),
 }))
 
