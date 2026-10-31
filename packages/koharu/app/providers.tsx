@@ -40,7 +40,6 @@ export function Providers({ children }: { children: ReactNode }) {
     lifecycle.active = true
     if (!lifecycle.bound) {
       lifecycle.bound = true
-      const completed = new Map<string, number>()
       const channel = <T,>(receive: (value: T) => void) =>
         new Channel<T>((value) => {
           if (lifecycle.active) receive(value)
@@ -52,15 +51,25 @@ export function Providers({ children }: { children: ReactNode }) {
         .subscribe(
           channel<CanvasState>(receiveCanvas),
           channel<Job>((job) => {
-            const previous = completed.get(job.id) ?? 0
-            completed.set(job.id, job.completed)
+            const previous = useKoharuStore.getState().jobs[job.id]
             receiveJob(job)
             const active = queryClient.getQueryData<ProjectInfo | null>(projectKey)
             const ownProject = job.project !== null && job.project === active?.name
-            if (ownProject && (job.completed > previous || job.state !== 'running')) {
+            const summarySaved =
+              previous?.phase === 'summarize' &&
+              (job.phase !== 'summarize' ||
+                job.chapter !== previous.chapter ||
+                job.completed > previous.completed)
+            if (
+              ownProject &&
+              (job.completed > (previous?.completed ?? 0) ||
+                job.state !== 'running' ||
+                summarySaved)
+            ) {
               void refresh(projectKey, pagesKey, pageKey, chaptersKey).catch(() => undefined)
             }
-            if (ownProject && job.state !== 'running') {
+            if (ownProject && (summarySaved || job.state !== 'running')) {
+              // Every chapter detail includes the shared project wiki.
               void queryClient.invalidateQueries({ queryKey: ['chapter'] }).catch(() => undefined)
             }
           }),

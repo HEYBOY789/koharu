@@ -1,13 +1,16 @@
-import { act, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { createElement, StrictMode } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import Providers from '@/app/providers'
+import { ChapterPanel } from '@/components/editor/ChapterPanel'
 import { call } from '@/lib/backend'
-import { useProject } from '@/lib/queries'
+import { chapterKey, queryClient, useProject } from '@/lib/queries'
 import { useKoharuStore } from '@/lib/store'
 import {
   commands,
+  type ChapterDetail,
+  type Job,
   type Preferences,
   type ProjectInfo,
   type StartupState,
@@ -96,6 +99,84 @@ function ProjectProbe() {
 }
 
 describe('Tauri runtime', () => {
+  it.each(['translate', 'summarize'] as const)(
+    'refreshes chapter outputs after summary commits while %s continues',
+    async (phase) => {
+      let detail: ChapterDetail = {
+        id: 'chapter',
+        title: 'Chapter 9.5',
+        pages: ['page'],
+        summary: null,
+        setting: null,
+        summarize: true,
+        wiki: { files: [{ slug: 'characters', body: 'Old wiki' }] },
+      }
+      vi.spyOn(commands, 'getProject').mockResolvedValue(project)
+      vi.spyOn(commands, 'getPage').mockResolvedValue({
+        id: 'page',
+        label: '001',
+        chapter: 'chapter',
+        size: { width: 100, height: 160 },
+        layers: [],
+        regions: [],
+      })
+      vi.spyOn(commands, 'getPages').mockResolvedValue([])
+      vi.spyOn(commands, 'getChapters').mockResolvedValue([
+        {
+          id: 'chapter',
+          title: 'Chapter 9.5',
+          pages: ['page'],
+          summarize: true,
+          has_summary: false,
+          has_setting: false,
+        },
+      ])
+      const getChapter = vi.spyOn(commands, 'getChapter').mockImplementation(async () => detail)
+      const binding = vi.spyOn(commands, 'subscribe').mockResolvedValue(startupState())
+      const view = render(createElement(Providers, null, createElement(ChapterPanel)))
+      await screen.findByText(/No summary yet/)
+      queryClient.setQueryData(chapterKey('other-chapter'), { wiki: 'Old shared wiki' })
+      const [, jobs] = binding.mock.calls[0]
+      const job: Job = {
+        id: 'chapter-job',
+        project: 'Book',
+        state: 'running',
+        completed: 0,
+        total: 62,
+        chapter: 'chapter',
+        chapter_title: 'Chapter 9.5',
+        phase: 'summarize',
+        page: null,
+        stage: null,
+        model: null,
+        detail: null,
+        retry: null,
+        error: null,
+      }
+      act(() => jobs.onmessage(job))
+      detail = {
+        ...detail,
+        summary: 'Committed summary',
+        setting: 'Committed prompt',
+        wiki: { files: [{ slug: 'characters', body: 'Committed wiki' }] },
+      }
+      const committed = { ...job, phase, completed: phase === 'summarize' ? 1 : 0 }
+      act(() => jobs.onmessage(committed))
+
+      expect(await screen.findByText('Committed summary')).toBeInTheDocument()
+      fireEvent.click(screen.getByRole('button', { name: 'Prompt' }))
+      expect(await screen.findByText('Committed prompt')).toBeInTheDocument()
+      fireEvent.click(screen.getByRole('button', { name: 'Wiki' }))
+      expect(await screen.findByText('Committed wiki')).toBeInTheDocument()
+      expect(queryClient.getQueryState(chapterKey('other-chapter'))?.isInvalidated).toBe(true)
+      expect(useKoharuStore.getState().jobs['chapter-job'].state).toBe('running')
+      const reads = getChapter.mock.calls.length
+      await act(async () => jobs.onmessage({ ...committed, completed: 1 }))
+      expect(getChapter.mock.calls.length).toBe(reads)
+      view.unmount()
+    },
+  )
+
   it('keeps newer agent events over a late startup snapshot and refreshes only the owning editor', async () => {
     const pending = deferred<StartupState>()
     const binding = vi.spyOn(commands, 'subscribe').mockReturnValue(pending.promise)
@@ -273,13 +354,16 @@ describe('Tauri runtime', () => {
         page: 'b-page',
         chapter: null,
         chapter_title: null,
-        phase: null,
+        phase: 'summarize',
         detail: null,
         retry: null,
-        stage: 'translation',
+        stage: null,
         model: 'model',
         error: null,
       }),
+    )
+    act(() =>
+      jobChannel.onmessage({ ...useKoharuStore.getState().jobs.background, phase: 'translate' }),
     )
     expect(invalidate).not.toHaveBeenCalled()
     expect(queryClient.getQueryData(pageKey)).toEqual({ id: 'a-page' })
