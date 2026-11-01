@@ -36,6 +36,11 @@ schedule. No content is repaired or committed from that response. If retries are
 exhausted the page stays unfinished; the error reports the parse/validation reason
 without flooding Activity with the model's repeating output. Account/authentication
 failures remain terminal, and other providers' recovery policies are unchanged.
+The compatible reader also rejects a likely generation loop when an output is
+longer than both 1,024 characters and eight times its source, and contains at
+least 64 identical consecutive whitespace-separated tokens. It retries the whole
+completion rather than shortening the translation. A source that is itself long
+and repetitive is not rejected by this expansion check.
 
 The shared translation reader accepts bare JSON or a single complete `json`/unlabelled
 code fence around it, including a compact opening such as ` ```json{ `. Only that

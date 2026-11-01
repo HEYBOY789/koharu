@@ -59,13 +59,33 @@ fn decode_response(response: ChatResponse, segments: &[String]) -> Result<Vec<St
         .message
         .content
         .context("OpenAI-compatible backend returned no message content")?;
-    prompt::translations("openai-compatible", &text, segments).map_err(|error| {
-        crate::Error::InvalidCompletion {
-            provider: "openai-compatible",
-            segments: segments.len(),
-            message: error.root_cause().to_string(),
+    let translations =
+        prompt::translations("openai-compatible", &text, segments).map_err(|error| {
+            crate::Error::InvalidCompletion {
+                provider: "openai-compatible",
+                segments: segments.len(),
+                message: error.root_cause().to_string(),
+            }
+        })?;
+    for (id, (source, text)) in segments.iter().zip(&translations).enumerate() {
+        // Reject only an extreme expansion with a long identical-token run.
+        // Ordinary emphasis and equally repetitive source text remain untouched.
+        if text.chars().count() > source.chars().count().saturating_mul(8).max(1024) {
+            let (mut previous, mut repeated) = ("", 0);
+            if text.split_whitespace().any(|word| {
+                repeated = if word == previous { repeated + 1 } else { 1 };
+                previous = word;
+                repeated >= 64
+            }) {
+                return Err(crate::Error::InvalidCompletion {
+                    provider: "openai-compatible",
+                    segments: segments.len(),
+                    message: format!("repetitive generation loop in segment {id}"),
+                });
+            }
         }
-    })
+    }
+    Ok(translations)
 }
 
 pub(super) async fn models(client: &Client, config: &OpenAiCompatibleConfig) -> Result<Vec<Model>> {
@@ -246,6 +266,28 @@ struct ListedModel {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn valid_json_with_a_generation_loop_is_not_saved_as_a_translation() {
+        let text = "ÁI ".repeat(1000);
+        let response = || {
+            serde_json::from_value(serde_json::json!({
+            "choices": [{"message": {"content": serde_json::json!({"translations":[{"id":0,"text":text}]}).to_string()}}]
+        })).unwrap()
+        };
+        let error = decode_response(response(), &["Ouch!".into()]).unwrap_err();
+        assert!(
+            error
+                .retry_delay(std::time::Duration::from_secs(15))
+                .is_some()
+        );
+        assert!(error.to_string().len() < 300);
+        // A genuinely long, repeated source must retain its meaning and length.
+        assert_eq!(
+            decode_response(response(), &[text.clone()]).unwrap(),
+            [text]
+        );
+    }
 
     #[test]
     fn malformed_repeating_completion_is_rejected_and_enters_bounded_recovery() {
