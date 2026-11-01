@@ -779,6 +779,11 @@
     "sizeUnknown": "페이지 이미지를 가져오기 전에는 용량을 알 수 없습니다."
   },
   "mangadex": {
+    "loadingCover": "표지 로딩 중…",
+    "coverFailed": "표지를 불러올 수 없음",
+    "retryCover": "표지 다시 로드",
+    "retryCoverFor": "{{title}} 표지 다시 로드",
+    "retryingCover": "표지 다시 시도 중…",
     "title": "MangaDex에서 만화 찾기",
     "description": "MangaDex를 검색하고 언어별 공개 챕터를 비교하세요.",
     "query": "만화 제목 (선택)",

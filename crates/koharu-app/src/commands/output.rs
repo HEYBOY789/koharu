@@ -11,23 +11,13 @@ use koharu_scene::{AssetRole, Chapters, EntityId, Snapshot};
 use serde::Deserialize;
 use specta::Type;
 use std::{collections::HashSet, io::Write as _, path::PathBuf, sync::Arc};
-use tauri::{State, WebviewWindow, ipc::IpcResponse};
+use tauri::{State, WebviewWindow};
 use tauri_runtime_cef::CefRuntime;
 
-use super::{Error, project::CurrentProject};
+use super::{Error, ImageBytes, project::CurrentProject};
 use koharu_desktop::Desktop;
 
 const THUMBNAIL_EDGE: u32 = 128;
-
-#[derive(Type)]
-#[specta(transparent)]
-pub(crate) struct ThumbnailBytes(#[specta(type = Vec<u8>)] Vec<u8>);
-
-impl IpcResponse for ThumbnailBytes {
-    fn body(self) -> tauri::Result<tauri::ipc::InvokeResponseBody> {
-        Ok(self.0.into())
-    }
-}
 
 #[derive(Clone, Copy, Debug, Deserialize, Type)]
 #[serde(rename_all = "snake_case")]
@@ -296,7 +286,7 @@ fn page_stem(label: &str) -> String {
 pub(crate) async fn get_thumbnail(
     page: EntityId,
     project: State<'_, CurrentProject>,
-) -> std::result::Result<ThumbnailBytes, Error> {
+) -> std::result::Result<ImageBytes, Error> {
     let snapshot = project
         .project
         .lock()
@@ -320,7 +310,7 @@ pub(crate) async fn get_thumbnail(
         Ok(encoder.encode(80.0).to_vec())
     })
     .await?;
-    Ok(ThumbnailBytes(bytes))
+    Ok(ImageBytes(bytes))
 }
 
 pub(crate) async fn rendered_preview(

@@ -779,6 +779,11 @@
     "sizeUnknown": "获取页面图片之前无法确定下载大小。"
   },
   "mangadex": {
+    "loadingCover": "正在加载封面…",
+    "coverFailed": "封面加载失败",
+    "retryCover": "重新加载封面",
+    "retryCoverFor": "重新加载{{title}}的封面",
+    "retryingCover": "正在重试封面…",
     "title": "在 MangaDex 查找漫画",
     "description": "浏览 MangaDex，比较不同语言的已有章节。",
     "query": "漫画名称（可选）",

@@ -779,6 +779,11 @@
     "sizeUnknown": "取得页面图片前，下载大小还勿晓得。"
   },
   "mangadex": {
+    "loadingCover": "正在加载封面…",
+    "coverFailed": "封面加载失败",
+    "retryCover": "重新加载封面",
+    "retryCoverFor": "重新加载{{title}}个封面",
+    "retryingCover": "正在重试封面…",
     "title": "勒 MangaDex 寻漫画",
     "description": "浏览 MangaDex，按语言比较已有个章节。",
     "query": "漫画名字（可不填）",

@@ -20,6 +20,14 @@ use serde::Serialize;
 use specta::Type;
 use tauri::ipc::{Channel, IpcResponse};
 
+#[derive(Type)]
+#[specta(transparent)]
+pub(crate) struct ImageBytes(#[specta(type = Vec<u8>)] Vec<u8>);
+
+impl IpcResponse for ImageBytes {
+    fn body(self) -> tauri::Result<tauri::ipc::InvokeResponseBody> { Ok(self.0.into()) }
+}
+
 #[derive(Debug, Type)]
 #[specta(transparent)]
 pub(crate) struct Error(#[specta(type = String)] anyhow::Error);
@@ -67,6 +75,7 @@ pub fn bindings() -> tauri_specta::Builder<tauri_runtime_cef::CefRuntime> {
             mangadex::get_mangadex_options,
             mangadex::get_mangadex_chapters,
             mangadex::get_mangadex_metadata,
+            mangadex::cover::get_mangadex_cover,
             following::get_following,
             following::follow_manga,
             following::check_follow,

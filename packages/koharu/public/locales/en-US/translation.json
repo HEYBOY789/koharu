@@ -779,6 +779,11 @@
     "sizeUnknown": "Download size is not available until page images are fetched."
   },
   "mangadex": {
+    "loadingCover": "Loading cover…",
+    "coverFailed": "Cover unavailable",
+    "retryCover": "Reload cover",
+    "retryCoverFor": "Reload cover for {{title}}",
+    "retryingCover": "Retrying cover…",
     "title": "Find manga on MangaDex",
     "description": "Browse MangaDex and compare available chapters by language.",
     "query": "Manga title (optional)",

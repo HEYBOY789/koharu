@@ -779,6 +779,11 @@
     "sizeUnknown": "Sayfa görselleri alınmadan indirme boyutu bilinmez."
   },
   "mangadex": {
+    "loadingCover": "Kapak yükleniyor…",
+    "coverFailed": "Kapak yüklenemedi",
+    "retryCover": "Kapağı yenile",
+    "retryCoverFor": "{{title}} kapağını yeniden yükle",
+    "retryingCover": "Kapak yeniden deneniyor…",
     "title": "MangaDex üzerinde manga bul",
     "description": "MangaDex’te arayın ve dillerin mevcut bölümlerini karşılaştırın.",
     "query": "Manga adı (isteğe bağlı)",

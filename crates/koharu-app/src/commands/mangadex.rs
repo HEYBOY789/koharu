@@ -1,4 +1,5 @@
 mod cache;
+pub(super) mod cover;
 mod metadata;
 mod query;
 pub use metadata::{MangaDexMetadataPage, MangaDexMetadataRequest};
@@ -94,12 +95,14 @@ pub struct MangaDexOptions {
 
 pub(crate) struct MangaDex {
     api: cache::Api,
+    covers: cover::Covers,
 }
 
 impl Default for MangaDex {
     fn default() -> Self {
         Self {
             api: cache::Api::new(None),
+            covers: cover::Covers::default(),
         }
     }
 }
@@ -144,6 +147,7 @@ impl MangaDex {
             .join("Koharu/mangadex/v1.json");
         Ok(Self {
             api: cache::Api::new(Some(file)),
+            covers: cover::Covers::default(),
         })
     }
 

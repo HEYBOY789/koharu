@@ -10,6 +10,7 @@ export const commands = {
         getMangadexOptions: (kind: MangaDexOptionsKind, name: string, cache: MangaDexCacheMode) => __TAURI_INVOKE<MangaDexOptions>("get_mangadex_options", { kind, name, cache }),
         getMangadexChapters: (input: MangaDexChapterRequest) => __TAURI_INVOKE<MangaDexComparison>("get_mangadex_chapters", { input }),
         getMangadexMetadata: (input: MangaDexMetadataRequest[], cache: MangaDexCacheMode) => __TAURI_INVOKE<MangaDexMetadataPage>("get_mangadex_metadata", { input, cache }).then((v) => (({...v,manga:v.manga.map(i=>({...i,rating:i.rating==null?i.rating:i.rating}))}) as typeof v)),
+        getMangadexCover: (url: string) => __TAURI_INVOKE<ImageBytes>("get_mangadex_cover", { url }),
         getFollowing: () => __TAURI_INVOKE<FollowedManga[]>("get_following"),
         followManga: (input: FollowInput) => __TAURI_INVOKE<FollowedManga[]>("follow_manga", { input }),
         checkFollow: (key: string, refresh: boolean) => __TAURI_INVOKE<FollowedManga[]>("check_follow", { key, refresh }),
@@ -98,7 +99,7 @@ export const commands = {
          *  layout the wiki importer reads back, so a backup restores as-is.
          */
         exportWiki: () => __TAURI_INVOKE<null>("export_wiki"),
-        getThumbnail: (page: EntityId) => __TAURI_INVOKE<ThumbnailBytes>("get_thumbnail", { page }),
+        getThumbnail: (page: EntityId) => __TAURI_INVOKE<ImageBytes>("get_thumbnail", { page }),
         getPublicationSettings: () => __TAURI_INVOKE<PublicationSettings>("get_publication_settings"),
         getSourceImportSettings: () => __TAURI_INVOKE<PublicationConfig>("get_source_import_settings"),
         importSourceUrl: (url: string, config: PublicationConfig, options: SourceImportOptions) => __TAURI_INVOKE<JobId>("import_source_url", { url, config, options }),
@@ -408,6 +409,8 @@ export type GoogleCloudConfig = Record<string, never>;
 export type GrokConfig = Record<string, never>;
 
 export type GroupRole = "text";
+
+export type ImageBytes = number[];
 
 export type InpaintingModel = { model: "lama" } | { model: "aot-inpainting" } | {
         model: "flux2-klein",
@@ -861,8 +864,6 @@ export type TextContent = {
 };
 
 export type TextLayoutKind = "point" | "paragraph";
-
-export type ThumbnailBytes = number[];
 
 export type TransformFrame = {
         element: EntityId,

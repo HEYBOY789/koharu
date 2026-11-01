@@ -15,6 +15,7 @@ import {
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
+import { MangaDexCover } from '@/components/app/MangaDexCover'
 import { SourceImportDialog } from '@/components/app/SourceImportDialog'
 import { mangaDexLanguages } from '@/lib/mangadex'
 import { followingKey, queryClient, useFollowing } from '@/lib/queries'
@@ -247,12 +248,12 @@ export function FollowingPage({ active }: { active: boolean }) {
             {visible.map((entry) => (
               <article key={entry.key} className='flex min-w-0 gap-4 rounded-lg border p-4'>
                 {entry.cover_url && (
-                  <img
-                    src={entry.cover_url}
-                    alt=''
-                    loading='lazy'
-                    decoding='async'
-                    className='h-28 w-20 shrink-0 rounded-md object-cover'
+                  <MangaDexCover
+                    key={entry.cover_url}
+                    url={entry.cover_url}
+                    title={entry.title}
+                    active={active}
+                    className='h-28 w-20'
                   />
                 )}
                 <div className='grid min-w-0 flex-1 gap-2'>

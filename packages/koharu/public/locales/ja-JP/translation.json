@@ -779,6 +779,11 @@
     "sizeUnknown": "画像を取得するまでダウンロード容量は不明です。"
   },
   "mangadex": {
+    "loadingCover": "表紙を読み込み中…",
+    "coverFailed": "表紙を読み込めません",
+    "retryCover": "表紙を再読み込み",
+    "retryCoverFor": "{{title}}の表紙を再読み込み",
+    "retryingCover": "表紙を再試行中…",
     "title": "MangaDexで漫画を探す",
     "description": "MangaDexを検索し、言語ごとの公開チャプターを比較できます。",
     "query": "作品名（任意）",

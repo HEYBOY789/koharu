@@ -31,6 +31,18 @@ beforeEach(() => {
   vi.spyOn(commands, 'getFollowing').mockResolvedValue([manga, website])
 })
 
+it('uses native image bytes for followed MangaDex covers instead of a direct CDN image request', async () => {
+  const coverUrl = 'https://uploads.mangadex.org/covers/book/cover.jpg.256.jpg'
+  vi.mocked(commands.getFollowing).mockResolvedValue([{ ...manga, cover_url: coverUrl }])
+  const download = vi.spyOn(commands, 'getMangadexCover').mockResolvedValue([255, 216, 255, 217])
+  render(<FollowingPage active />)
+  expect(await screen.findByRole('img', { name: 'Cover of Tracked manga' })).toHaveAttribute(
+    'src',
+    'blob:koharu-thumbnail',
+  )
+  expect(download).toHaveBeenCalledWith(coverUrl)
+})
+
 it('checks both source kinds, preserves badges until acknowledged and removes only the chosen follow', async () => {
   const check = vi
     .spyOn(commands, 'checkFollow')

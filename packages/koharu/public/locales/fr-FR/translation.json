@@ -779,6 +779,11 @@
     "sizeUnknown": "La taille est inconnue avant de récupérer les images."
   },
   "mangadex": {
+    "loadingCover": "Chargement…",
+    "coverFailed": "Couverture indisponible",
+    "retryCover": "Recharger",
+    "retryCoverFor": "Recharger la couverture de {{title}}",
+    "retryingCover": "Nouvel essai…",
     "title": "Chercher un manga sur MangaDex",
     "description": "Parcourez MangaDex et comparez les chapitres disponibles par langue.",
     "query": "Titre du manga (facultatif)",

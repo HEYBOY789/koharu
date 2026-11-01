@@ -12,6 +12,7 @@ vi.mock('@tauri-apps/plugin-opener', () => ({ openUrl }))
 afterEach(cleanup)
 const tag = { id: '00000000-0000-0000-0000-000000000002', name: 'Action', group: 'genre' }
 beforeEach(() => {
+  vi.spyOn(commands, 'getMangadexCover').mockResolvedValue([255, 216, 255, 217])
   vi.spyOn(commands, 'getFollowing').mockResolvedValue([])
   vi.spyOn(commands, 'getMangadexMetadata').mockImplementation(async (input) => ({
     manga: input.map(({ id }) => ({

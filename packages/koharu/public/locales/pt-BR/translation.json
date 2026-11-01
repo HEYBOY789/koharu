@@ -779,6 +779,11 @@
     "sizeUnknown": "O tamanho só fica disponível após obter as imagens."
   },
   "mangadex": {
+    "loadingCover": "Carregando capa…",
+    "coverFailed": "Capa indisponível",
+    "retryCover": "Recarregar capa",
+    "retryCoverFor": "Recarregar capa de {{title}}",
+    "retryingCover": "Tentando novamente…",
     "title": "Buscar mangás no MangaDex",
     "description": "Explore o MangaDex e compare os capítulos disponíveis por idioma.",
     "query": "Título do mangá (opcional)",

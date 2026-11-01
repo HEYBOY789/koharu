@@ -2,10 +2,11 @@
 
 import { useQuery } from '@tanstack/react-query'
 import { openUrl } from '@tauri-apps/plugin-opener'
-import { Bell, BellRing, BookOpen, ExternalLink, FolderPlus } from 'lucide-react'
+import { Bell, BellRing, ExternalLink, FolderPlus } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
+import { MangaDexCover } from '@/components/app/MangaDexCover'
 import { followingKey, queryClient, useFollowing } from '@/lib/queries'
 import {
   commands,
@@ -127,7 +128,6 @@ export function MangaDexResultCard({
   const { t, i18n } = useTranslation()
   const card = useRef<HTMLElement>(null)
   const [seen, setSeen] = useState(false)
-  const [imageFailed, setImageFailed] = useState(false)
   const [linkError, setLinkError] = useState('')
   const [followingPending, setFollowingPending] = useState(false)
   const following = useFollowing(active)
@@ -235,24 +235,12 @@ export function MangaDexResultCard({
   return (
     <article ref={card} className='min-w-0 space-y-3 rounded-lg border p-3'>
       <div className='flex items-start gap-3'>
-        {manga.cover_url && !imageFailed ? (
-          <img
-            src={manga.cover_url}
-            alt={t('mangadex.coverFor', { title: manga.title })}
-            width={96}
-            height={144}
-            loading='eager'
-            decoding='async'
-            fetchPriority='low'
-            referrerPolicy='no-referrer'
-            className='h-36 w-24 shrink-0 rounded-md bg-muted object-contain'
-            onError={() => setImageFailed(true)}
-          />
-        ) : (
-          <div className='flex h-36 w-24 shrink-0 items-center justify-center rounded-md bg-muted text-muted-foreground'>
-            <BookOpen className='size-6' aria-label={t('mangadex.noCover')} />
-          </div>
-        )}
+        <MangaDexCover
+          key={`${manga.cover_url ?? ''}:${generation}`}
+          url={manga.cover_url}
+          title={manga.title}
+          active={active}
+        />
         <div className='min-w-0 flex-1 space-y-2'>
           <h3 className='line-clamp-2 text-sm font-semibold break-words' title={manga.title}>
             {manga.title}
