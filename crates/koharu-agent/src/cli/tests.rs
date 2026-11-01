@@ -658,7 +658,7 @@ async fn installed_agy_edits_layer_with_native_contracts_and_chapter_range() -> 
         control.cancel();
     }
     let diagnostic = session.close().await;
-    if (result.is_err() || host.edited.load(Ordering::SeqCst) != 1) && !diagnostic.is_empty() {
+    if (result.is_err() || host.edited.load(Ordering::SeqCst) == 0) && !diagnostic.is_empty() {
         println!("AGY fixture failure: {}", redact(&diagnostic));
     }
     let message = result??;
