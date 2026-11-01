@@ -2,6 +2,22 @@
 
 Ngày: 31/10/2026. Source đã kiểm tra: `b4ce18dcbedc0f805145d8d2940e0189abd2349d`.
 
+## Cập nhật triển khai — 02/11/2026
+
+Phần bên dưới lưu kết quả rà soát ban đầu. Các thay đổi sau đã được triển khai cho sửa layer/font theo chapter:
+
+- AGY khai báo trực tiếp plugin MCP của phiên chạy trong agent Markdown. Lượt kiểm tra thật với AGY 1.4.12 / `gemini-3.8-flash-high` đã đọc chapter, xác định trang thứ 3, chọn khoảng trang, đọc font/layer và gửi `set_typography` với ID layer cùng tên font. Trước khi khai báo plugin trực tiếp, cùng lượt kiểm tra báo không có tool Koharu. Không cài plugin toàn cục hoặc đổi thiết lập tài khoản. Cách khai báo customization theo agent được mô tả trong [tài liệu custom agents của Google](https://antigravity.google/docs/subagents/).
+- Mọi struct nhận tham số từ agent từ chối field không hỗ trợ. `set_translation.text` và `set_geometry.points` bắt buộc có mặt; `null` là yêu cầu xóa/reset có chủ đích. Lời gọi thiếu ID trả hợp đồng tool và hướng dẫn đọc ID rồi thử lại; native không đoán ID hoặc sửa payload.
+- `set_typography` cập nhật các thuộc tính được gửi. Thuộc tính bỏ qua được giữ lại; `null` xóa override tương ứng. Các thay đổi vẫn đi qua thao tác native, revision check và Undo. Đổi font không yêu cầu gửi lại màu, viền, cỡ chữ, căn chỉnh hoặc auto-fit.
+- `inspect_chapters` liệt kê cả chapter rỗng; `inspect_chapter` trả trang theo thứ tự trong chapter. Page inspection/overview trả chapter ID/tên/thứ tự, vị trí trang 1-based trong chapter và toàn project. Pagination và giới hạn phản hồi 64 KiB được giữ lại. Context dùng chung một roster đã đọc cho mỗi batch.
+- Trước khi sửa, agent chọn `set_edit_scope(first_page, last_page)` bằng ID trang đầu/cuối, bao gồm cả hai đầu. Mỗi lượt yêu cầu có phạm vi riêng. Mutation, đích reorder trang/layer và pipeline đều kiểm tra phạm vi đã chọn. `run_pipeline` yêu cầu page hoặc element IDs tường minh, không tự biến danh sách rỗng thành cả project; `resume` mặc định bật. Cơ chế này chặn thao tác ngoài phạm vi agent đã chọn; việc hiểu đúng câu tiếng Việt và chọn phạm vi tương ứng vẫn là trách nhiệm của model.
+- `move_element` được thay bằng `reorder_element`, chỉ đổi cây layer. Di chuyển/resize chữ trên ảnh dùng `set_geometry`; reset geometry tự động dùng `points: null` và vẫn tuân theo kiểm tra native. `move_page` vẫn dùng index toàn project, mô tả rõ tác dụng lên chapter và trả lại membership/vị trí sau khi đổi.
+- Giao diện gửi page/layer selection tại thời điểm gửi yêu cầu. Native xác minh selection thuộc đúng project/trang trước khi truyền cho model. Tiến trình hiện chapter, vị trí trang trong chapter và label để phân biệt các trang trùng tên. Project binding/chạy nền và Stop dùng chủ sở hữu hiện có.
+
+29 kiểm tra tập trung đã qua: 11 native, 6 CLI/bridge, 6 UI/workspace, 5 localization và một lượt AGY/Gemini thật. Bốn kiểm tra hợp đồng thất bại trước khi sửa. Project native tạm xác minh phạm vi qua hai chapter có label trùng nhau, bảo vệ trang trước điểm bắt đầu, cập nhật font giữ thuộc tính khác, xóa override có chủ đích, Undo và selection cũ bị từ chối. Lượt AGY thật dùng các schema được xuất từ chính tool native với fixture trong bộ kiểm tra CLI hiện có; không chỉnh project người dùng và không phải nghiệm thu toàn cửa sổ native. TypeScript và frontend export cũng đã qua. Chi tiết log/build/bàn giao được ghi trong hồ sơ validation của workspace website.
+
+Các khả năng riêng **chưa mở cho Editor Agent**: đọc/chỉnh nội dung summary/setting/wiki và chạy workflow summarize-before-translate của chapter; transform canvas có resolved font/layout metrics; paint/erase, import/export xuất bản và Undo bằng tool. Workflow Chapter trong giao diện vẫn sở hữu summarize/wiki. Các phát hiện tương ứng bên dưới là lịch sử và chỉ phần còn lại này chưa được triển khai.
+
 Phạm vi: toàn bộ 16 tool của `KoharuHost`, context đầu vào, cách native thực thi thay đổi, chapter workflow, phạm vi pipeline, phiên chạy nền và thông tin lựa chọn từ editor. Đây là rà soát source; không chạy model, pipeline hoặc sửa project người dùng. Chưa thay đổi runtime, CLI, executable hay schema trong lần rà soát này.
 
 ## Kết luận

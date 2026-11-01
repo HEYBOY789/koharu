@@ -378,9 +378,9 @@ async fn start_child(
             .await?;
             let agents = workspace.join(".agents/agents");
             tokio::fs::create_dir_all(&agents).await?;
-            // MCP tools are injected separately; AGY's component registry does not
-            // accept the proxy function name `call_mcp_tool` as a built-in component.
-            tokio::fs::write(agents.join("koharu-editor.md"), format!("---\nname: koharu-editor\ndescription: Edit the open Koharu manga project through its native tools.\nmainAgent: true\nsubagent: false\ncommandExecutionPolicy: off\ntools: []\n---\n\n{}\n", super::agent::INSTRUCTIONS)).await?;
+            // Bind this custom agent to its run-local MCP plugin explicitly.
+            // Workspace discovery alone can leave AGY without any editor tools.
+            tokio::fs::write(agents.join("koharu-editor.md"), format!("---\nname: koharu-editor\ndescription: Edit the open Koharu manga project through its native tools.\nmainAgent: true\nsubagent: false\ncommandExecutionPolicy: off\ntools: []\nplugins: [../plugins/koharu-editor]\n---\n\n{}\n", super::agent::INSTRUCTIONS)).await?;
             command.args([
                 "--input-format",
                 "stream-json",
@@ -570,8 +570,16 @@ impl Stream {
                 self.conversation = Some(id.into());
             }
             if value["event"] == "step_update" {
-                if value["step_update"]["step_type"] == "agent_response" && value["step_update"]["state"] == "ACTIVE" && value["step_update"]["text_delta"].as_str().is_none_or(str::is_empty) {
-                    publish(Event::ReasoningDelta { run, delta: String::new() });
+                if value["step_update"]["step_type"] == "agent_response"
+                    && value["step_update"]["state"] == "ACTIVE"
+                    && value["step_update"]["text_delta"]
+                        .as_str()
+                        .is_none_or(str::is_empty)
+                {
+                    publish(Event::ReasoningDelta {
+                        run,
+                        delta: String::new(),
+                    });
                 }
                 if let Some(delta) = value["step_update"]["text_delta"].as_str() {
                     publish(Event::TextDelta {

@@ -115,6 +115,9 @@
       "newConversation": "新しい会話"
     },
     "tools": {
+      "inspect_chapters": "チャプターを読み取り中",
+      "inspect_chapter": "チャプターのページを読み取り中",
+      "set_edit_scope": "編集範囲を選択中",
       "inspect_project": "プロジェクトのページを読取中",
       "inspect_page": "ページのレイヤーを読取中",
       "list_fonts": "利用可能なフォントを確認中",
@@ -129,7 +132,7 @@
       "set_geometry": "レイアウトを調整中",
       "set_visibility": "表示設定を更新中",
       "delete_elements": "レイヤーを削除中",
-      "move_element": "レイヤーを移動中",
+      "reorder_element": "レイヤー順序を変更中",
       "run_pipeline": "パイプラインを実行中"
     }
   },

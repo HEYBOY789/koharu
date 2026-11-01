@@ -23,7 +23,11 @@ vi.mock('@tauri-apps/api/core', () => ({
 afterEach(cleanup)
 beforeEach(() => {
   editor.name = 'A'
-  useKoharuStore.setState({ agent: { sequence: 0, conversations: [], run: null } })
+  useKoharuStore.setState({
+    agent: { sequence: 0, conversations: [], run: null },
+    canvasPage: 'page-3',
+    selectedLayers: ['layer-1'],
+  })
 })
 const config: Config = {
   backend: 'codex',
@@ -105,7 +109,12 @@ it('switches to AGY without Codex login and reads edits from the native conversa
   await waitFor(() => expect(message).toBeEnabled())
   fireEvent.change(message, { target: { value: 'Correct this translation' } })
   fireEvent.click(screen.getByRole('button', { name: 'Send' }))
-  await waitFor(() => expect(send).toHaveBeenCalledWith('Correct this translation', 'A'))
+  await waitFor(() =>
+    expect(send).toHaveBeenCalledWith('Correct this translation', 'A', {
+      page: 'page-3',
+      elements: ['layer-1'],
+    }),
+  )
   expect(backend).toBeDisabled()
   act(() =>
     receiveAgent(snapshot(2, { ...run, phase: 'tool', tool: 'set_typography', page: '007' })),

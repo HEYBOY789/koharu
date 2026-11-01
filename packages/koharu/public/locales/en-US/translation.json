@@ -115,6 +115,9 @@
       "newConversation": "New conversation"
     },
     "tools": {
+      "inspect_chapters": "Reading chapters",
+      "inspect_chapter": "Reading chapter pages",
+      "set_edit_scope": "Selecting edit range",
       "inspect_project": "Reading project pages",
       "inspect_page": "Reading page layers",
       "list_fonts": "Checking available fonts",
@@ -129,7 +132,7 @@
       "set_geometry": "Adjusting layout",
       "set_visibility": "Updating visibility",
       "delete_elements": "Removing layers",
-      "move_element": "Moving layer",
+      "reorder_element": "Reordering layer tree",
       "run_pipeline": "Running pipeline"
     }
   },

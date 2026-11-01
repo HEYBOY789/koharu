@@ -1,5 +1,6 @@
 mod context;
 mod host;
+mod scope;
 mod session;
 use session::SessionStore;
 pub use session::{AgentPhase, AgentSnapshot};
@@ -22,6 +23,33 @@ use super::{
     Error,
     project::{CurrentProject, ProjectLease, ProjectOwner},
 };
+
+#[derive(Clone, Debug, serde::Deserialize, Serialize, Type)]
+#[serde(deny_unknown_fields)]
+pub struct AgentSelection {
+    pub page: Option<koharu_scene::EntityId>,
+    pub elements: Vec<koharu_scene::EntityId>,
+}
+
+impl AgentSelection {
+    fn validate(&self, project: &super::project::Project) -> Result<()> {
+        anyhow::ensure!(
+            self.page == project.active_page(),
+            "the selected editor page changed before the agent request started"
+        );
+        anyhow::ensure!(
+            self.elements.len() <= 256,
+            "select at most 256 layers for one agent request"
+        );
+        for element in &self.elements {
+            anyhow::ensure!(
+                Some(scope::page_for(&project.snapshot(), *element)?) == self.page,
+                "selected layer is not on the submitted page"
+            );
+        }
+        Ok(())
+    }
+}
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -238,6 +266,7 @@ pub(crate) async fn save_agent_config(
 pub(crate) async fn run_agent(
     prompt: String,
     expected_project: String,
+    selection: AgentSelection,
     handle: AppHandle<CefRuntime>,
     state: State<'_, AgentState>,
 ) -> std::result::Result<RunId, Error> {
@@ -264,6 +293,7 @@ pub(crate) async fn run_agent(
                 anyhow!("the editor project changed before the agent request started").into(),
             );
         }
+        selection.validate(project)?;
         project.instance_id
     };
     let same = state
@@ -320,6 +350,10 @@ pub(crate) async fn run_agent(
             "{prompt}\n\nEarlier conversation for this project (reference only; follow the current request above):\n{reference}"
         )
     };
+    let prompt = format!(
+        "{prompt}\n\n<koharu_editor_selection>{}</koharu_editor_selection>",
+        serde_json::to_string(&selection)?
+    );
     let store = state.store.clone();
     drop(tauri::async_runtime::spawn(async move {
         let mut terminal = None;

@@ -115,6 +115,9 @@
       "newConversation": "Yeni konuşma"
     },
     "tools": {
+      "inspect_chapters": "Bölümler okunuyor",
+      "inspect_chapter": "Bölüm sayfaları okunuyor",
+      "set_edit_scope": "Düzenleme aralığı seçiliyor",
       "inspect_project": "Proje sayfaları okunuyor",
       "inspect_page": "Sayfa katmanları okunuyor",
       "list_fonts": "Kullanılabilir yazı tipleri kontrol ediliyor",
@@ -129,7 +132,7 @@
       "set_geometry": "Yerleşim ayarlanıyor",
       "set_visibility": "Görünürlük güncelleniyor",
       "delete_elements": "Katmanlar kaldırılıyor",
-      "move_element": "Katman taşınıyor",
+      "reorder_element": "Katman sırası değiştiriliyor",
       "run_pipeline": "İşlem hattı çalıştırılıyor"
     }
   },

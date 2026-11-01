@@ -531,7 +531,11 @@ export function AgentPanel() {
     setPending(true)
     setError('')
     try {
-      const run = await call(commands.runAgent, message, project.name)
+      const editor = useKoharuStore.getState()
+      const run = await call(commands.runAgent, message, project.name, {
+        page: editor.canvasPage,
+        elements: [...editor.selectedLayers],
+      })
       submitted.current = run
       if (useKoharuStore.getState().agent.run?.id === run) {
         requestPending.current = false

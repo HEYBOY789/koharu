@@ -115,6 +115,9 @@
       "newConversation": "Nouvelle conversation"
     },
     "tools": {
+      "inspect_chapters": "Lecture des chapitres",
+      "inspect_chapter": "Lecture des pages du chapitre",
+      "set_edit_scope": "Sélection de la plage à modifier",
       "inspect_project": "Lecture des pages du projet",
       "inspect_page": "Lecture des calques de la page",
       "list_fonts": "Recherche des polices disponibles",
@@ -129,7 +132,7 @@
       "set_geometry": "Réglage de la disposition",
       "set_visibility": "Mise à jour de la visibilité",
       "delete_elements": "Suppression de calques",
-      "move_element": "Déplacement du calque",
+      "reorder_element": "Réorganisation des calques",
       "run_pipeline": "Exécution du traitement"
     }
   },

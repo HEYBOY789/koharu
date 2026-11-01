@@ -20,7 +20,7 @@ export const commands = {
         loginAgent: (onEvent: Channel<LoginEvent>) => __TAURI_INVOKE<AgentStatus>("login_agent", { onEvent }),
         logoutAgent: () => __TAURI_INVOKE<AgentStatus>("logout_agent"),
         saveAgentConfig: (config: Config) => __TAURI_INVOKE<Config>("save_agent_config", { config }),
-        runAgent: (prompt: string, expectedProject: string) => __TAURI_INVOKE<RunId>("run_agent", { prompt, expectedProject }),
+        runAgent: (prompt: string, expectedProject: string, selection: AgentSelection) => __TAURI_INVOKE<RunId>("run_agent", { prompt, expectedProject, selection }),
         cancelAgent: (run: RunId) => __TAURI_INVOKE<null>("cancel_agent", { run }),
         clearAgentSession: () => __TAURI_INVOKE<null>("clear_agent_session"),
         dismissAgentActivity: () => __TAURI_INVOKE<void>("dismiss_agent_activity"),
@@ -175,6 +175,11 @@ export type AgentRun = {
 };
 
 export type AgentRunState = "running" | "finished" | "failed" | "stopped";
+
+export type AgentSelection = {
+        page: EntityId | null,
+        elements: EntityId[],
+};
 
 export type AgentSnapshot = {
         sequence: number,

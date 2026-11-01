@@ -17,7 +17,10 @@ use serde_json::{Value, json};
 use tauri::{AppHandle, Manager as _};
 use tauri_runtime_cef::CefRuntime;
 
-use super::context::{self, InspectPage, Window};
+use super::{
+    context::{self, InspectChapter, InspectPage, Window},
+    scope::{self, EditRange},
+};
 
 use crate::commands::{
     ChannelExt as _,
@@ -42,6 +45,7 @@ struct Binding {
     control: Control,
     run: RunId,
     observed: Arc<parking_lot::Mutex<Option<Revision>>>,
+    pages: Arc<parking_lot::Mutex<Option<Vec<EntityId>>>>,
 }
 
 impl Binding {
@@ -140,6 +144,7 @@ impl KoharuHost {
 
     async fn mutate<T>(
         &self,
+        targets: Vec<EntityId>,
         mutation: impl for<'project> FnOnce(
             &'project mut Project,
         ) -> Pin<
@@ -153,6 +158,11 @@ impl KoharuHost {
         let (mut project, visible) = projects.project.target(self.target()?).await?;
         self.check_project(&project)?;
         self.check_revision(&project)?;
+        scope::check(
+            &project.snapshot(),
+            self.binding.as_ref().unwrap().pages.lock().as_deref(),
+            &targets,
+        )?;
         let (commit, value) = mutation(&mut project).await?;
         project.record_commit(&commit);
         project.reconcile_page();
@@ -191,12 +201,26 @@ impl KoharuHost {
             let (project, _) = projects.project.target(self.target()?).await?;
             self.check_project(&project)?;
             self.check_revision(&project)?;
+            let targets = match &scope {
+                Scope::Pages(ids) | Scope::Entities(ids) => ids,
+                _ => bail!("explicit pipeline scope is required"),
+            };
+            scope::check(
+                &project.snapshot(),
+                self.binding.as_ref().unwrap().pages.lock().as_deref(),
+                targets,
+            )?;
             project.snapshot()
         };
         let progress_host = self.clone();
+        let positions = context::Locations::new(&snapshot)?;
         let labels = snapshot
             .pages()
-            .filter_map(|page| page.page().ok().map(|value| (page.id(), value.label)))
+            .filter_map(|page| {
+                page.page()
+                    .ok()
+                    .map(|value| (page.id(), positions.label(page.id()).unwrap_or(value.label)))
+            })
             .collect::<std::collections::HashMap<_, _>>();
         let progress: koharu_pipeline::ProgressSink = Arc::new(move |event| {
             use koharu_pipeline::Progress;
@@ -212,7 +236,7 @@ impl KoharuHost {
         });
         let mut committer = AgentCommitter { host: self.clone() };
         let request = koharu_pipeline::Request {
-            resume: false,
+            resume: arguments.resume,
             operation,
             scope,
             stop: stop.clone(),
@@ -257,6 +281,7 @@ impl Host for KoharuHost {
                 control,
                 run,
                 observed: Arc::new(parking_lot::Mutex::new(None)),
+                pages: Arc::new(parking_lot::Mutex::new(None)),
             }),
         }))
     }
@@ -266,59 +291,7 @@ impl Host for KoharuHost {
     }
 
     fn tools(&self) -> Vec<Tool> {
-        static TOOLS: OnceLock<Vec<Tool>> = OnceLock::new();
-        TOOLS
-            .get_or_init(|| {
-                vec![
-                    definition::<Window>(
-                        "inspect_project",
-                        "Read the current project overview and a batch of page IDs. Follow pagination.next_offset until null to list every page. Layer content is read separately with inspect_page.",
-                    ),
-                    definition::<InspectPage>(
-                        "inspect_page",
-                        "Read one page's semantic layer and analysis-region entries, including text, font and geometry. Follow pagination.next_offset until null for all entries. No image rendering is performed.",
-                    ),
-                    definition::<Window>(
-                        "list_fonts",
-                        "List available font family names. Follow pagination.next_offset until null for all fonts.",
-                    ),
-                    definition::<ViewPage>(
-                        "view_page",
-                        "Render and inspect one page image. Call this only for pages whose visual appearance matters to the request.",
-                    ),
-                    definition::<RenamePage>("rename_page", "Rename a project page."),
-                    definition::<MovePage>("move_page", "Move a page to a zero-based project index."),
-                    definition::<DeletePages>("delete_pages", "Delete pages and their contents."),
-                    definition::<AddTextBox>("add_text_box", "Add a paragraph text box to a page."),
-                    definition::<SetText>("set_source_text", "Replace an element's source text."),
-                    definition::<SetTranslation>(
-                        "set_translation",
-                        "Set an element's translation, or pass null to remove it.",
-                    ),
-                    definition::<SetTypography>(
-                        "set_typography",
-                        "Replace an element's typography settings. Font is a family name returned by list_fonts.",
-                    ),
-                    definition::<SetGeometry>(
-                        "set_geometry",
-                        "Replace an element's page-space polygon geometry.",
-                    ),
-                    definition::<SetVisibility>(
-                        "set_visibility",
-                        "Change visibility and/or opacity for elements.",
-                    ),
-                    definition::<DeleteElements>("delete_elements", "Delete elements and descendants."),
-                    definition::<MoveElement>(
-                        "move_element",
-                        "Move an element under a page or element at a zero-based index.",
-                    ),
-                    definition::<RunPipeline>(
-                        "run_pipeline",
-                        "Run Koharu's configured processing pipeline for the whole project, selected pages, or selected text elements.",
-                    ),
-                ]
-            })
-            .clone()
+        editor_tools()
     }
 
     async fn invoke(&self, call: ToolCall, control: &Control) -> Result<Invocation> {
@@ -345,7 +318,10 @@ impl Host for KoharuHost {
                 .and_then(|mut id| {
                     loop {
                         if let Ok(page) = snapshot.page(id).and_then(|page| page.page()) {
-                            break Some(page.label);
+                            break context::Locations::new(&snapshot)
+                                .and_then(|positions| positions.label(id))
+                                .ok()
+                                .or(Some(page.label));
                         }
                         match snapshot.parent(id) {
                             Ok(Some(parent)) => id = parent,
@@ -359,6 +335,34 @@ impl Host for KoharuHost {
             "inspect_project" => {
                 let query: Window = arguments(&call)?;
                 Invocation::read(self.project_context(&query).await?)
+            }
+            "inspect_chapters" => {
+                let query: Window = arguments(&call)?;
+                let projects = self.handle.state::<CurrentProject>();
+                let (project, _) = projects.project.target(self.target()?).await?;
+                self.check_project(&project)?;
+                self.observe(&project);
+                Invocation::read(context::chapters(&project.snapshot(), &query)?)
+            }
+            "inspect_chapter" => {
+                let query: InspectChapter = arguments(&call)?;
+                let projects = self.handle.state::<CurrentProject>();
+                let (project, _) = projects.project.target(self.target()?).await?;
+                self.check_project(&project)?;
+                self.observe(&project);
+                Invocation::read(context::chapter(&project.snapshot(), &query)?)
+            }
+            "set_edit_scope" => {
+                let query: EditRange = arguments(&call)?;
+                let projects = self.handle.state::<CurrentProject>();
+                let (project, _) = projects.project.target(self.target()?).await?;
+                self.check_project(&project)?;
+                self.check_revision(&project)?;
+                let snapshot = project.snapshot();
+                let pages = query.resolve(&snapshot)?;
+                let result = json!({"first":context::location(&snapshot, pages[0])?, "last":context::location(&snapshot, *pages.last().unwrap())?, "page_count":pages.len()});
+                *self.binding.as_ref().unwrap().pages.lock() = Some(pages);
+                Invocation::read(result)
             }
             "inspect_page" => {
                 let query: InspectPage = arguments(&call)?;
@@ -415,7 +419,7 @@ impl Host for KoharuHost {
             "rename_page" => {
                 let arguments: RenamePage = arguments(&call)?;
                 let page = entity(&arguments.page)?;
-                self.mutate(|project| {
+                self.mutate(vec![page], |project| {
                     Box::pin(async move {
                         Ok((
                             project.rename_page(page, arguments.label).await?,
@@ -428,11 +432,21 @@ impl Host for KoharuHost {
             "move_page" => {
                 let arguments: MovePage = arguments(&call)?;
                 let page = entity(&arguments.page)?;
-                self.mutate(|project| {
+                let allowed = self.binding.as_ref().unwrap().pages.lock().clone();
+                self.mutate(vec![page], |project| {
                     Box::pin(async move {
                         Ok((
-                            project.move_page(page, arguments.index).await?,
-                            json!({ "page": page }),
+                            {
+                                let snapshot = project.snapshot();
+                                let destination = snapshot
+                                    .pages()
+                                    .nth(arguments.index)
+                                    .context("destination project index is out of bounds")?
+                                    .id();
+                                scope::check(&snapshot, allowed.as_deref(), &[destination])?;
+                                project.move_page(page, arguments.index).await?
+                            },
+                            context::location(&project.snapshot(), page)?,
                         ))
                     })
                 })
@@ -441,7 +455,7 @@ impl Host for KoharuHost {
             "delete_pages" => {
                 let arguments: DeletePages = arguments(&call)?;
                 let pages = entities(&arguments.pages)?;
-                self.mutate(|project| {
+                self.mutate(pages.clone(), |project| {
                     Box::pin(async move {
                         Ok((
                             project.delete_pages(pages.clone()).await?,
@@ -461,7 +475,7 @@ impl Host for KoharuHost {
                     height: arguments.height,
                     angle_degrees: arguments.angle_degrees,
                 };
-                self.mutate(|project| {
+                self.mutate(vec![page], |project| {
                     Box::pin(async move {
                         let (commit, element) = project.add_text_box(page, frame).await?;
                         Ok((commit, json!({ "page": page, "element": element })))
@@ -472,7 +486,7 @@ impl Host for KoharuHost {
             "set_source_text" => {
                 let arguments: SetText = arguments(&call)?;
                 let element = entity(&arguments.element)?;
-                self.mutate(|project| {
+                self.mutate(vec![element], |project| {
                     Box::pin(async move {
                         Ok((
                             project.set_source_text(element, arguments.text).await?,
@@ -485,7 +499,7 @@ impl Host for KoharuHost {
             "set_translation" => {
                 let arguments: SetTranslation = arguments(&call)?;
                 let element = entity(&arguments.element)?;
-                self.mutate(|project| {
+                self.mutate(vec![element], |project| {
                     Box::pin(async move {
                         Ok((
                             project.set_translation(element, arguments.text).await?,
@@ -498,20 +512,9 @@ impl Host for KoharuHost {
             "set_typography" => {
                 let arguments: SetTypography = arguments(&call)?;
                 let element = entity(&arguments.element)?;
-                let typography = Typography {
-                    preferred_font: arguments.preferred_font,
-                    font_weight: arguments.font_weight,
-                    font_style: arguments.font_style.map(Into::into),
-                    size: arguments.size,
-                    auto_fit: arguments.auto_fit,
-                    color: arguments.color,
-                    stroke_color: arguments.stroke_color,
-                    stroke_width: arguments.stroke_width,
-                    alignment: arguments.alignment.map(Into::into),
-                    writing_mode: arguments.writing_mode.map(Into::into),
-                };
-                self.mutate(|project| {
+                self.mutate(vec![element], |project| {
                     Box::pin(async move {
+                        let typography = arguments.merge(&project.snapshot(), element)?;
                         Ok((
                             project
                                 .set_typography(vec![TypographyUpdate {
@@ -528,21 +531,22 @@ impl Host for KoharuHost {
             "set_geometry" => {
                 let arguments: SetGeometry = arguments(&call)?;
                 let element = entity(&arguments.element)?;
-                let points = arguments
-                    .points
-                    .into_iter()
-                    .map(|point| Point {
-                        x: point.x,
-                        y: point.y,
-                    })
-                    .collect();
-                self.mutate(|project| {
+                let points = arguments.points.map(|points| {
+                    points
+                        .into_iter()
+                        .map(|point| Point {
+                            x: point.x,
+                            y: point.y,
+                        })
+                        .collect()
+                });
+                self.mutate(vec![element], |project| {
                     Box::pin(async move {
                         Ok((
                             project
                                 .set_geometry(vec![GeometryUpdate {
                                     layer: element,
-                                    points: Some(points),
+                                    points,
                                 }])
                                 .await?,
                             json!({ "element": element }),
@@ -554,7 +558,7 @@ impl Host for KoharuHost {
             "set_visibility" => {
                 let arguments: SetVisibility = arguments(&call)?;
                 let elements = entities(&arguments.elements)?;
-                self.mutate(|project| {
+                self.mutate(elements.clone(), |project| {
                     Box::pin(async move {
                         Ok((
                             project
@@ -573,7 +577,7 @@ impl Host for KoharuHost {
             "delete_elements" => {
                 let arguments: DeleteElements = arguments(&call)?;
                 let elements = entities(&arguments.elements)?;
-                self.mutate(|project| {
+                self.mutate(elements.clone(), |project| {
                     Box::pin(async move {
                         Ok((
                             project.delete_layers(elements.clone()).await?,
@@ -583,11 +587,11 @@ impl Host for KoharuHost {
                 })
                 .await
             }
-            "move_element" => {
-                let arguments: MoveElement = arguments(&call)?;
+            "reorder_element" => {
+                let arguments: ReorderElement = arguments(&call)?;
                 let element = entity(&arguments.element)?;
                 let parent = entity(&arguments.parent)?;
-                self.mutate(|project| {
+                self.mutate(vec![element, parent], |project| {
                     Box::pin(async move {
                         Ok((
                             project.move_layer(element, parent, arguments.index).await?,
@@ -626,6 +630,65 @@ impl Committer for AgentCommitter {
     }
 }
 
+fn editor_tools() -> Vec<Tool> {
+    static TOOLS: OnceLock<Vec<Tool>> = OnceLock::new();
+    TOOLS
+            .get_or_init(|| {
+                vec![
+                    definition::<Window>(
+                        "inspect_project",
+                        "Read the current project overview and a batch of page IDs. Follow pagination.next_offset until null to list every page. Layer content is read separately with inspect_page.",
+                    ),
+                    definition::<Window>("inspect_chapters", "List ordered chapter IDs, titles and page counts, including empty chapters. Follow pagination.next_offset. Page labels repeat across chapters: never use a label as an ID."),
+                    definition::<InspectChapter>("inspect_chapter", "Read the ordered page IDs and 1-based page numbers of one chapter. Use this to resolve requests such as page 3 of Chapter 1. Follow pagination.next_offset."),
+                    definition::<EditRange>("set_edit_scope", "Before editing, select the user's inclusive range with first_page and last_page IDs from inspection. Native rejects every mutation outside it. For the whole project use overview.first_page and overview.last_page; for a single page use the same ID twice. Never expand the range to work around an error."),
+                    definition::<InspectPage>(
+                        "inspect_page",
+                        "Read one page's semantic layer and analysis-region entries, including text, font and geometry. Follow pagination.next_offset until null for all entries. No image rendering is performed.",
+                    ),
+                    definition::<Window>(
+                        "list_fonts",
+                        "List available font family names. Follow pagination.next_offset until null for all fonts.",
+                    ),
+                    definition::<ViewPage>(
+                        "view_page",
+                        "Render and inspect one page image. Call this only for pages whose visual appearance matters to the request.",
+                    ),
+                    definition::<RenamePage>("rename_page", "Rename a project page."),
+                    definition::<MovePage>("move_page", "Move a page to a zero-based GLOBAL project index. This can change its chapter membership. Inspect the returned page position after moving. Both source and destination pages must be in the edit scope."),
+                    definition::<DeletePages>("delete_pages", "Delete pages and their contents."),
+                    definition::<AddTextBox>("add_text_box", "Add a paragraph text box to a page."),
+                    definition::<SetText>("set_source_text", "Replace an element's source text."),
+                    definition::<SetTranslation>(
+                        "set_translation",
+                        "Set an element's translation, or pass null to remove it.",
+                    ),
+                    definition::<SetTypography>(
+                        "set_typography",
+                        "Patch only the supplied typography properties; omitted properties are preserved, explicit null clears an override. Example: element = an inspected text-layer ID, preferred_font = a family from list_fonts.",
+                    ),
+                    definition::<SetGeometry>(
+                        "set_geometry",
+                        "Move or resize visible text on the IMAGE using page-space polygon points. Requires element (text-layer ID from inspect_page) and points. Pass explicit null to reset an automatic layout; omitted points is invalid. Do not use reorder_element to move text on the image.",
+                    ),
+                    definition::<SetVisibility>(
+                        "set_visibility",
+                        "Change visibility and/or opacity for elements.",
+                    ),
+                    definition::<DeleteElements>("delete_elements", "Delete elements and descendants."),
+                    definition::<ReorderElement>(
+                        "reorder_element",
+                        "Reorder the LAYER TREE only. Requires element (ID from inspect_page), parent (page/group ID), index (zero-based). This does not move text on the image: use set_geometry for that.",
+                    ),
+                    definition::<RunPipeline>(
+                        "run_pipeline",
+                        "Run the configured page pipeline on explicit pages OR text elements inside the edit scope. resume defaults to true to preserve completed work. This is page processing, not chapter summarization; use the Chapter workflow UI for summarize/wiki generation.",
+                    ),
+                ]
+            })
+            .clone()
+}
+
 fn definition<T: JsonSchema>(name: &str, description: &str) -> Tool {
     Tool::new(
         name,
@@ -634,9 +697,21 @@ fn definition<T: JsonSchema>(name: &str, description: &str) -> Tool {
     )
 }
 
-fn arguments<T: for<'de> Deserialize<'de>>(call: &ToolCall) -> Result<T> {
+fn arguments<T: for<'de> Deserialize<'de> + JsonSchema>(call: &ToolCall) -> Result<T> {
     serde_json::from_str(&call.arguments)
-        .with_context(|| format!("invalid arguments for {}", call.name))
+        .with_context(|| format!("Invalid arguments for {}. No edit was applied. Read the tool schema and retry with IDs from inspect_page/inspect_project. Required contract: {}", call.name, schema_for!(T).as_value()))
+}
+
+fn nullable<'de, D: serde::Deserializer<'de>, T: Deserialize<'de>>(
+    d: D,
+) -> std::result::Result<Option<T>, D::Error> {
+    Option::<T>::deserialize(d)
+}
+
+fn patch_field<'de, D: serde::Deserializer<'de>, T: Deserialize<'de>>(
+    d: D,
+) -> std::result::Result<Option<Option<T>>, D::Error> {
+    Ok(Some(Option::<T>::deserialize(d)?))
 }
 
 fn entity(value: &str) -> Result<EntityId> {
@@ -652,6 +727,241 @@ fn entities(values: &[String]) -> Result<Vec<EntityId>> {
 mod tests {
     use super::*;
 
+    fn call(name: &str, args: Value) -> ToolCall {
+        ToolCall {
+            call_id: "regression".into(),
+            name: name.into(),
+            arguments: args.to_string(),
+        }
+    }
+
+    #[test]
+    fn editor_contract_missing_text_or_unknown_fields_cannot_delete_translation() {
+        assert!(
+            arguments::<SetTranslation>(&call("set_translation", json!({"element":"layer"})))
+                .is_err()
+        );
+        assert!(
+            arguments::<SetTranslation>(&call(
+                "set_translation",
+                json!({"element":"layer", "text":null, "translation":"wrong field"})
+            ))
+            .is_err()
+        );
+        assert!(
+            arguments::<SetTranslation>(&call(
+                "set_translation",
+                json!({"element":"layer", "text":null})
+            ))
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn editor_contract_small_typography_edit_does_not_require_replacement() {
+        assert!(
+            arguments::<SetTypography>(&call(
+                "set_typography",
+                json!({"element":"layer", "preferred_font":"Noto Sans"})
+            ))
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn editor_contract_missing_or_misspelled_scope_cannot_process_whole_project() {
+        assert!(
+            arguments::<RunPipeline>(&call(
+                "run_pipeline",
+                json!({"operation":"translation", "chapter":"not-a-supported-scope"})
+            ))
+            .is_err()
+        );
+        let parsed =
+            arguments::<RunPipeline>(&call("run_pipeline", json!({"operation":"translation"})));
+        assert!(parsed.is_err() || parsed.unwrap().scope().is_err());
+    }
+
+    #[test]
+    fn editor_contract_geometry_can_explicitly_reset_to_automatic() {
+        assert!(
+            arguments::<SetGeometry>(&call(
+                "set_geometry",
+                json!({"element":"layer", "points":null})
+            ))
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn editor_contract_invalid_reorder_returns_schema_without_guessing_ids() {
+        let error = arguments::<ReorderElement>(&call("reorder_element", json!({})))
+            .err()
+            .unwrap();
+        let text = format!("{error:#}");
+        assert!(
+            text.contains("element")
+                && text.contains("parent")
+                && text.contains("index")
+                && text.contains("No edit was applied")
+        );
+        let schema = serde_json::to_value(schema_for!(SetTranslation)).unwrap();
+        assert!(
+            schema["required"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|v| v == "text")
+        );
+    }
+
+    #[tokio::test]
+    async fn editor_contract_chapter_range_typography_and_selection_preserve_native_edits()
+    -> Result<()> {
+        use koharu_scene::{At, PageDraft};
+        let directory = tempfile::tempdir()?;
+        let mut project = Project::create(
+            "chapter fixture".into(),
+            directory.path().join("fixture.khrproj"),
+        )
+        .await?;
+        let mut pages = Vec::new();
+        let patch = project.snapshot().patch(|edit| {
+            for _ in 0..5 {
+                pages.push(edit.add_page(PageDraft::new("003", 1000.0, 1600.0), At::End)?);
+            }
+            Ok(())
+        })?;
+        project.session.commit(patch).await?;
+        let (_, chapter1) = project.create_chapter("Chapter 1".into(), true).await?;
+        let (_, chapter2) = project.create_chapter("Chapter 2".into(), true).await?;
+        project
+            .create_chapter("Empty chapter".into(), false)
+            .await?;
+        for (index, page) in pages.iter().copied().enumerate() {
+            project
+                .assign_page(page, if index < 3 { chapter1 } else { chapter2 })
+                .await?;
+        }
+        let (_, layer) = project
+            .add_text_box(
+                pages[2],
+                Frame {
+                    x: 10.0,
+                    y: 10.0,
+                    width: 80.0,
+                    height: 80.0,
+                    angle_degrees: 0.0,
+                },
+            )
+            .await?;
+        let snapshot = project.snapshot();
+        let roster = context::chapters(&snapshot, &Window::default())?;
+        assert_eq!(roster["chapters"][2]["page_count"], 0);
+        let chapter = context::chapter(
+            &snapshot,
+            &InspectChapter {
+                chapter: chapter1.to_string(),
+                offset: 0,
+                limit: 20,
+            },
+        )?;
+        assert_eq!(chapter["pages"][2]["id"], pages[2].to_string());
+        assert_eq!(chapter["pages"][2]["chapter_page_number"], 3);
+        let range = EditRange {
+            first_page: pages[2].to_string(),
+            last_page: pages[4].to_string(),
+        }
+        .resolve(&snapshot)?;
+        assert_eq!(range, pages[2..]);
+        assert!(scope::check(&snapshot, Some(&range), &[layer]).is_ok());
+        assert!(scope::check(&snapshot, Some(&range), &[pages[0]]).is_err());
+        assert!(scope::check(&snapshot, None, &[layer]).is_err());
+        assert!(
+            EditRange {
+                first_page: pages[3].to_string(),
+                last_page: pages[0].to_string()
+            }
+            .resolve(&snapshot)
+            .is_err()
+        );
+        let initial = Typography {
+            preferred_font: Some("Old font".into()),
+            font_weight: Some(700),
+            font_style: Some(koharu_scene::FontStyle::Italic),
+            size: Some(24.0),
+            auto_fit: false,
+            color: Some([1, 2, 3, 255]),
+            stroke_color: Some([4, 5, 6, 255]),
+            stroke_width: Some(2.0),
+            alignment: Some(koharu_scene::TextAlignment::Center),
+            writing_mode: Some(koharu_scene::WritingMode::Horizontal),
+        };
+        project
+            .set_typography(vec![TypographyUpdate {
+                layer,
+                typography: initial.clone(),
+            }])
+            .await?;
+        let before = project.snapshot();
+        let args: SetTypography = arguments(&call(
+            "set_typography",
+            json!({"element":layer,"preferred_font":"New font"}),
+        ))?;
+        let changed = args.merge(&before, layer)?;
+        let mut expected = initial;
+        expected.preferred_font = Some("New font".into());
+        assert_eq!(
+            serde_json::to_value(&changed)?,
+            serde_json::to_value(&expected)?
+        );
+        let commit = project
+            .set_typography(vec![TypographyUpdate {
+                layer,
+                typography: changed,
+            }])
+            .await?;
+        project.record_commit(&commit);
+        assert_eq!(
+            project
+                .snapshot()
+                .component::<koharu_scene::Typography>(layer)?
+                .unwrap()
+                .preferred_font
+                .as_deref(),
+            Some("New font")
+        );
+        project.undo().await?;
+        assert_eq!(
+            project
+                .snapshot()
+                .component::<koharu_scene::Typography>(layer)?,
+            before.component::<koharu_scene::Typography>(layer)?
+        );
+        let clear: SetTypography = arguments(&call(
+            "set_typography",
+            json!({"element":layer,"stroke_width":null}),
+        ))?;
+        assert!(clear.merge(&before, layer)?.stroke_width.is_none());
+        project.select_page(pages[2])?;
+        let selection = super::super::AgentSelection {
+            page: Some(pages[2]),
+            elements: vec![layer],
+        };
+        selection.validate(&project)?;
+        project.select_page(pages[3])?;
+        assert!(selection.validate(&project).is_err());
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "Manual contract export for the installed AGY test; requires KOHARU_EDITOR_CONTRACT_FILE"]
+    fn export_editor_contracts_for_installed_cli() -> Result<()> {
+        let path = std::env::var("KOHARU_EDITOR_CONTRACT_FILE")?;
+        std::fs::write(path, serde_json::to_vec_pretty(&editor_tools())?)?;
+        Ok(())
+    }
+
     #[tokio::test]
     async fn agent_binding_preserves_undo_and_rejects_cancelled_or_reopened_projects() -> Result<()>
     {
@@ -664,6 +974,7 @@ mod tests {
             control: control.clone(),
             run: RunId::new(),
             observed: Arc::new(parking_lot::Mutex::new(None)),
+            pages: Arc::new(parking_lot::Mutex::new(None)),
         };
         let mut page = None;
         let patch = project.snapshot().patch(|edit| {
@@ -717,6 +1028,7 @@ mod tests {
             control: Control::default(),
             run: RunId::new(),
             observed: Arc::new(parking_lot::Mutex::new(None)),
+            pages: Arc::new(parking_lot::Mutex::new(None)),
         };
         drop(project);
         let reopened = Project::open("fixture".into(), path).await?;
@@ -726,28 +1038,33 @@ mod tests {
 }
 
 #[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct ViewPage {
     page: String,
 }
 
 #[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct RenamePage {
     page: String,
     label: String,
 }
 
 #[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct MovePage {
     page: String,
     index: usize,
 }
 
 #[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct DeletePages {
     pages: Vec<String>,
 }
 
 #[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct AddTextBox {
     page: String,
     x: f32,
@@ -759,14 +1076,18 @@ struct AddTextBox {
 }
 
 #[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct SetText {
     element: String,
     text: String,
 }
 
 #[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct SetTranslation {
     element: String,
+    #[serde(deserialize_with = "nullable")]
+    #[schemars(required)]
     text: Option<String>,
 }
 
@@ -825,33 +1146,107 @@ impl From<AgentWritingMode> for koharu_scene::WritingMode {
 }
 
 #[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct SetTypography {
     element: String,
-    preferred_font: Option<String>,
-    font_weight: Option<u16>,
-    font_style: Option<AgentFontStyle>,
-    size: Option<f32>,
-    auto_fit: bool,
-    color: Option<[u8; 4]>,
-    stroke_color: Option<[u8; 4]>,
-    stroke_width: Option<f32>,
-    alignment: Option<AgentTextAlignment>,
-    writing_mode: Option<AgentWritingMode>,
+    #[serde(default, deserialize_with = "patch_field")]
+    preferred_font: Option<Option<String>>,
+    #[serde(default, deserialize_with = "patch_field")]
+    font_weight: Option<Option<u16>>,
+    #[serde(default, deserialize_with = "patch_field")]
+    font_style: Option<Option<AgentFontStyle>>,
+    #[serde(default, deserialize_with = "patch_field")]
+    size: Option<Option<f32>>,
+    auto_fit: Option<bool>,
+    #[serde(default, deserialize_with = "patch_field")]
+    color: Option<Option<[u8; 4]>>,
+    #[serde(default, deserialize_with = "patch_field")]
+    stroke_color: Option<Option<[u8; 4]>>,
+    #[serde(default, deserialize_with = "patch_field")]
+    stroke_width: Option<Option<f32>>,
+    #[serde(default, deserialize_with = "patch_field")]
+    alignment: Option<Option<AgentTextAlignment>>,
+    #[serde(default, deserialize_with = "patch_field")]
+    writing_mode: Option<Option<AgentWritingMode>>,
+}
+
+impl SetTypography {
+    fn merge(self, snapshot: &Snapshot, element: EntityId) -> Result<Typography> {
+        let current = snapshot.component::<koharu_scene::Typography>(element)?;
+        let mut value: Typography = if let Some(current) = current {
+            serde_json::from_value(serde_json::to_value(current)?)?
+        } else {
+            serde_json::from_value(json!({"auto_fit":true}))?
+        };
+        if self.preferred_font.is_none()
+            && self.font_weight.is_none()
+            && self.font_style.is_none()
+            && self.size.is_none()
+            && self.auto_fit.is_none()
+            && self.color.is_none()
+            && self.stroke_color.is_none()
+            && self.stroke_width.is_none()
+            && self.alignment.is_none()
+            && self.writing_mode.is_none()
+        {
+            bail!("Provide at least one typography property to change");
+        }
+        if let Some(v) = self.preferred_font {
+            value.preferred_font = v;
+        }
+        if let Some(v) = self.font_weight {
+            value.font_weight = v;
+        }
+        if let Some(v) = self.font_style {
+            value.font_style = v.map(Into::into);
+        }
+        if let Some(v) = self.size {
+            anyhow::ensure!(
+                v.is_none_or(|n| n.is_finite() && n > 0.0),
+                "size must be positive or null"
+            );
+            value.size = v;
+        }
+        if let Some(v) = self.auto_fit {
+            value.auto_fit = v;
+        }
+        if let Some(v) = self.color {
+            value.color = v;
+        }
+        if let Some(v) = self.stroke_color {
+            value.stroke_color = v;
+        }
+        if let Some(v) = self.stroke_width {
+            value.stroke_width = v;
+        }
+        if let Some(v) = self.alignment {
+            value.alignment = v.map(Into::into);
+        }
+        if let Some(v) = self.writing_mode {
+            value.writing_mode = v.map(Into::into);
+        }
+        Ok(value)
+    }
 }
 
 #[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct SetGeometry {
     element: String,
-    points: Vec<AgentPoint>,
+    #[serde(deserialize_with = "nullable")]
+    #[schemars(required)]
+    points: Option<Vec<AgentPoint>>,
 }
 
 #[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct AgentPoint {
     x: f64,
     y: f64,
 }
 
 #[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct SetVisibility {
     elements: Vec<String>,
     visible: Option<bool>,
@@ -859,12 +1254,14 @@ struct SetVisibility {
 }
 
 #[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct DeleteElements {
     elements: Vec<String>,
 }
 
 #[derive(Deserialize, JsonSchema)]
-struct MoveElement {
+#[serde(deny_unknown_fields)]
+struct ReorderElement {
     element: String,
     parent: String,
     index: usize,
@@ -899,18 +1296,27 @@ impl From<AgentPipelineOperation> for Operation {
 }
 
 #[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct RunPipeline {
     operation: AgentPipelineOperation,
     #[serde(default)]
     pages: Vec<String>,
     #[serde(default)]
     elements: Vec<String>,
+    #[serde(default = "resume_default")]
+    resume: bool,
+}
+
+fn resume_default() -> bool {
+    true
 }
 
 impl RunPipeline {
     fn scope(&self) -> Result<Scope> {
         match (self.pages.is_empty(), self.elements.is_empty()) {
-            (true, true) => Ok(Scope::Project),
+            (true, true) => bail!(
+                "Provide explicit page IDs or element IDs from inspection; an empty scope never means the whole project"
+            ),
             (false, true) => Ok(Scope::Pages(entities(&self.pages)?)),
             (true, false) => Ok(Scope::Entities(entities(&self.elements)?)),
             (false, false) => bail!("pipeline scope cannot contain both pages and elements"),

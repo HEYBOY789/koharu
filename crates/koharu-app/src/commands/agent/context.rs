@@ -14,6 +14,7 @@ fn default_limit() -> usize {
 }
 
 #[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub(super) struct Window {
     #[serde(default)]
     pub offset: usize,
@@ -32,6 +33,7 @@ impl Default for Window {
 }
 
 #[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub(super) struct InspectPage {
     pub page: String,
     #[serde(default)]
@@ -41,9 +43,130 @@ pub(super) struct InspectPage {
     pub limit: usize,
 }
 
+pub(super) struct Locations<'a> {
+    snapshot: &'a Snapshot,
+    pages: Vec<EntityId>,
+    chapters: koharu_scene::Chapters,
+}
+
+impl<'a> Locations<'a> {
+    pub fn new(snapshot: &'a Snapshot) -> Result<Self> {
+        Ok(Self {
+            snapshot,
+            pages: snapshot.pages().map(|p| p.id()).collect(),
+            chapters: snapshot.chapters()?,
+        })
+    }
+    pub fn get(&self, page: EntityId) -> Result<Value> {
+        let index = self
+            .pages
+            .iter()
+            .position(|id| *id == page)
+            .ok_or_else(|| anyhow::anyhow!("page does not exist"))?;
+        let chapter = self
+            .chapters
+            .entries
+            .iter()
+            .enumerate()
+            .find(|(_, c)| c.pages.contains(&page));
+        let chapter_pages = chapter
+            .map(|(_, c)| {
+                self.pages
+                    .iter()
+                    .filter(|id| c.pages.contains(id))
+                    .copied()
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        Ok(json!({
+            "id":page, "label":self.snapshot.page(page)?.page()?.label,
+            "project_page_number":index+1, "project_page_count":self.pages.len(),
+            "chapter":chapter.map(|(_, c)| c.id), "chapter_title":chapter.map(|(_, c)| &c.title),
+            "chapter_number":chapter.map(|(i,_)| i+1),
+            "chapter_page_number":chapter_pages.iter().position(|id| *id == page).map(|i| i+1),
+            "chapter_page_count":chapter_pages.len(),
+        }))
+    }
+    pub fn label(&self, page: EntityId) -> Result<String> {
+        let value = self.get(page)?;
+        let label = value["label"].as_str().unwrap_or_default();
+        Ok(if let Some(title) = value["chapter_title"].as_str() {
+            format!(
+                "{title} · {}/{} · {label}",
+                value["chapter_page_number"], value["chapter_page_count"]
+            )
+        } else {
+            format!(
+                "{}/{} · {label}",
+                value["project_page_number"], value["project_page_count"]
+            )
+        })
+    }
+}
+
+pub(super) fn location(snapshot: &Snapshot, page: EntityId) -> Result<Value> {
+    Locations::new(snapshot)?.get(page)
+}
+
+pub(super) fn chapters(snapshot: &Snapshot, query: &Window) -> Result<Value> {
+    validate(query.limit)?;
+    let positions = Locations::new(snapshot)?;
+    let chapters = &positions.chapters.entries;
+    let entries = chapters.iter().enumerate().skip(query.offset).take(query.limit).map(|(i, c)| {
+        let pages = positions.pages.iter().filter(|id| c.pages.contains(id)).copied().collect::<Vec<_>>();
+        Ok(json!({"id":c.id, "title":c.title, "chapter_number":i+1, "page_count":pages.len(), "first_page":pages.first(), "last_page":pages.last(), "summarize":c.summarize, "has_summary":c.summary.is_some(), "has_setting":c.setting.is_some()}))
+    }).collect::<Result<Vec<_>>>()?;
+    window(
+        json!({"revision":snapshot.revision()}),
+        "chapters",
+        entries,
+        chapters.len(),
+        query.offset,
+    )
+}
+
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub(super) struct InspectChapter {
+    pub chapter: String,
+    #[serde(default)]
+    pub offset: usize,
+    #[serde(default = "default_limit")]
+    pub limit: usize,
+}
+
+pub(super) fn chapter(snapshot: &Snapshot, query: &InspectChapter) -> Result<Value> {
+    validate(query.limit)?;
+    let id = serde_json::from_value(Value::String(query.chapter.clone()))?;
+    let chapter = snapshot.chapter(id)?.ok_or_else(|| {
+        anyhow::anyhow!("chapter does not exist; inspect_chapters returns chapter IDs")
+    })?;
+    let positions = Locations::new(snapshot)?;
+    let pages = positions
+        .pages
+        .iter()
+        .filter(|id| chapter.pages.contains(id))
+        .copied()
+        .collect::<Vec<_>>();
+    let entries = pages
+        .iter()
+        .skip(query.offset)
+        .take(query.limit)
+        .map(|id| positions.get(*id))
+        .collect::<Result<Vec<_>>>()?;
+    window(
+        json!({"chapter":{"id":id,"title":chapter.title,"summarize":chapter.summarize},"revision":snapshot.revision()}),
+        "pages",
+        entries,
+        pages.len(),
+        query.offset,
+    )
+}
+
 pub(super) fn overview(project: &Project, configuration: Value, query: &Window) -> Result<Value> {
     validate(query.limit)?;
     let snapshot = project.snapshot();
+    let positions = Locations::new(&snapshot)?;
     let total = snapshot.pages().len();
     let pages = snapshot
         .pages()
@@ -54,13 +177,18 @@ pub(super) fn overview(project: &Project, configuration: Value, query: &Window) 
             Ok(json!({
                 "id": page.id(),
                 "label": value.label,
-                "chapter": snapshot.chapter_for(page.id())?.map(|chapter| chapter.id),
+                "position": positions.get(page.id())?,
                 "size": {"width": value.width, "height": value.height},
             }))
         })
         .collect::<Result<Vec<_>>>()?;
     window(
-        json!({"project": project.info(), "configuration": configuration}),
+        json!({"project": project.info(), "configuration": configuration,
+            "chapter_count":positions.chapters.entries.len(),
+            "first_page":snapshot.pages().next().map(|p| p.id()),
+            "last_page":snapshot.pages().last().map(|p| p.id()),
+            "active_location":project.active_page().map(|id| positions.get(id)).transpose()?,
+        }),
         "pages",
         pages,
         total,
@@ -78,7 +206,7 @@ pub(super) fn page(
     let page = Project::page(snapshot, page)?;
     let total = page.layers.len() + page.regions.len();
     let metadata = json!({
-        "id": page.id, "label": page.label, "chapter": page.chapter, "size": page.size,
+        "id": page.id, "label": page.label, "position":location(snapshot, page.id)?, "size": page.size,
         "layer_count": page.layers.len(), "region_count": page.regions.len(),
     });
     let entries = page

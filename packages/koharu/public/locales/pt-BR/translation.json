@@ -115,6 +115,9 @@
       "newConversation": "Nova conversa"
     },
     "tools": {
+      "inspect_chapters": "Lendo capítulos",
+      "inspect_chapter": "Lendo páginas do capítulo",
+      "set_edit_scope": "Selecionando intervalo de edição",
       "inspect_project": "Lendo páginas do projeto",
       "inspect_page": "Lendo camadas da página",
       "list_fonts": "Verificando fontes disponíveis",
@@ -129,7 +132,7 @@
       "set_geometry": "Ajustando layout",
       "set_visibility": "Atualizando visibilidade",
       "delete_elements": "Removendo camadas",
-      "move_element": "Movendo camada",
+      "reorder_element": "Reordenando camadas",
       "run_pipeline": "Executando processamento"
     }
   },

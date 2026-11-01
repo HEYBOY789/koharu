@@ -115,6 +115,9 @@
       "newConversation": "新会话"
     },
     "tools": {
+      "inspect_chapters": "读取章节",
+      "inspect_chapter": "读取章节页面",
+      "set_edit_scope": "选择编辑范围",
       "inspect_project": "读取项目页面",
       "inspect_page": "读取页面图层",
       "list_fonts": "检查可用字体",
@@ -129,7 +132,7 @@
       "set_geometry": "调整布局",
       "set_visibility": "更新可见性",
       "delete_elements": "删除图层",
-      "move_element": "移动图层",
+      "reorder_element": "调整图层顺序",
       "run_pipeline": "运行处理流程"
     }
   },

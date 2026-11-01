@@ -115,6 +115,9 @@
       "newConversation": "Новый разговор"
     },
     "tools": {
+      "inspect_chapters": "Чтение глав",
+      "inspect_chapter": "Чтение страниц главы",
+      "set_edit_scope": "Выбор диапазона редактирования",
       "inspect_project": "Чтение страниц проекта",
       "inspect_page": "Чтение слоёв страницы",
       "list_fonts": "Проверка доступных шрифтов",
@@ -129,7 +132,7 @@
       "set_geometry": "Настройка расположения",
       "set_visibility": "Обновление видимости",
       "delete_elements": "Удаление слоёв",
-      "move_element": "Перемещение слоя",
+      "reorder_element": "Изменение порядка слоёв",
       "run_pipeline": "Запуск обработки"
     }
   },

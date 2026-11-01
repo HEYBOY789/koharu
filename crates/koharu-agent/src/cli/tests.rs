@@ -200,7 +200,8 @@ async fn public_progress_streams_report_thinking_without_inventing_agy_content()
 async fn cli_sends_the_complete_user_request_before_project_data() -> Result<()> {
     let source = tempfile::tempdir()?;
     let script = source.path().join("request.mjs");
-    let prompt = "Chỉnh lỗi font và xuống dòng cho toàn bộ project. Giữ nguyên nội dung. TASK_END_6817";
+    let prompt =
+        "Chỉnh lỗi font và xuống dòng cho toàn bộ project. Giữ nguyên nội dung. TASK_END_6817";
     tokio::fs::write(&script, format!(r#"
         import {{ createInterface }} from 'node:readline';
         createInterface({{ input: process.stdin }}).on('line', line => {{
@@ -223,7 +224,17 @@ async fn cli_sends_the_complete_user_request_before_project_data() -> Result<()>
     };
     for backend in [Backend::Agy, Backend::Pi] {
         let mut session = Session::default();
-        let result = run(&mut session, backend, &config, Arc::new(Fixture::default()), RunId::new(), prompt, &Control::default(), &mut |_| {}).await?;
+        let result = run(
+            &mut session,
+            backend,
+            &config,
+            Arc::new(Fixture::default()),
+            RunId::new(),
+            prompt,
+            &Control::default(),
+            &mut |_| {},
+        )
+        .await?;
         session.close().await;
         assert_eq!(result, "task preserved", "{backend:?}");
     }
@@ -231,7 +242,8 @@ async fn cli_sends_the_complete_user_request_before_project_data() -> Result<()>
 }
 
 #[tokio::test]
-async fn discovery_reads_both_help_streams_and_requires_a_successful_capability_check() -> Result<()> {
+async fn discovery_reads_both_help_streams_and_requires_a_successful_capability_check() -> Result<()>
+{
     let source = tempfile::tempdir()?;
     let script = source.path().join("discovery.mjs");
     let config = CliConfig {
@@ -239,15 +251,38 @@ async fn discovery_reads_both_help_streams_and_requires_a_successful_capability_
         ..CliConfig::default()
     };
     for (stdout, stderr, exit, supported) in [
-        ("--input-format --output-format --agent --settings", "", 0, true),
-        ("", "--input-format --output-format --agent --settings", 0, true),
-        ("--input-format --output-format", "--agent --settings", 0, true),
-        ("--input-format --output-format --agent --settings", "CLI startup failed", 2, false),
+        (
+            "--input-format --output-format --agent --settings",
+            "",
+            0,
+            true,
+        ),
+        (
+            "",
+            "--input-format --output-format --agent --settings",
+            0,
+            true,
+        ),
+        (
+            "--input-format --output-format",
+            "--agent --settings",
+            0,
+            true,
+        ),
+        (
+            "--input-format --output-format --agent --settings",
+            "CLI startup failed",
+            2,
+            false,
+        ),
         ("", "--input-format --output-format --agent", 0, false),
     ] {
         let stdout = serde_json::to_string(stdout)?;
         let stderr = serde_json::to_string(stderr)?;
-        tokio::fs::write(&script, format!(r#"
+        tokio::fs::write(
+            &script,
+            format!(
+                r#"
             if (process.argv.includes('--help')) {{
                 process.stdout.write({stdout});
                 process.stderr.write({stderr});
@@ -255,14 +290,20 @@ async fn discovery_reads_both_help_streams_and_requires_a_successful_capability_
             }} else if (process.argv.includes('models')) {{
                 console.log('fixture-model\tFixture model');
             }} else {{ process.exitCode = 3; }}
-        "#)).await?;
+        "#
+            ),
+        )
+        .await?;
         let result = inspect(Backend::Agy, &config).await;
         if supported {
             let (_, models) = result?;
             assert_eq!(models.len(), 1);
             assert_eq!(models[0].id, "fixture-model");
         } else {
-            assert!(result.is_err(), "accepted an unsuccessful or incomplete capability check");
+            assert!(
+                result.is_err(),
+                "accepted an unsuccessful or incomplete capability check"
+            );
         }
     }
     Ok(())
@@ -277,7 +318,10 @@ async fn installed_agy_discovers_editor_models() -> Result<()> {
     };
     let (executable, models) = inspect(Backend::Agy, &config).await?;
     assert!(!models.is_empty());
-    println!("Discovered {} editor models using {executable}", models.len());
+    println!(
+        "Discovered {} editor models using {executable}",
+        models.len()
+    );
     Ok(())
 }
 
@@ -383,5 +427,153 @@ async fn installed_cli_keeps_conversation_and_reconnects_project_tools() -> Resu
     assert!(message.contains("KOHARU_PRISM_6817"), "{message}");
     session.close().await;
     println!("Installed {backend:?}: image/edit tools and conversation continuity passed");
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "Manual AGY Gemini acceptance using exported native editor contracts and an isolated in-memory fixture"]
+async fn installed_agy_edits_layer_with_native_contracts_and_chapter_range() -> Result<()> {
+    struct EditorFixture {
+        tools: Vec<Tool>,
+        calls: std::sync::Mutex<Vec<(String, Value)>>,
+        scoped: std::sync::atomic::AtomicBool,
+        edited: AtomicUsize,
+    }
+    const FIRST: &str = "00000000-0000-4000-8000-000000000003";
+    const LAST: &str = "00000000-0000-4000-8000-000000000005";
+    const LAYER: &str = "00000000-0000-4000-8000-000000000013";
+    const CHAPTER: &str = "00000000-0000-4000-8000-000000000021";
+    #[async_trait]
+    impl Host for EditorFixture {
+        async fn bind(&self, _: RunId, _: Control) -> Result<Arc<dyn Host>> {
+            bail!("already bound fixture")
+        }
+        async fn context(&self) -> Result<Value> {
+            Ok(
+                json!({"project":{"name":"isolated chapter tool test","active_page":FIRST},"first_page":"00000000-0000-4000-8000-000000000001","last_page":LAST,"chapter_count":2,"pages":[],"pagination":{"next_offset":null}}),
+            )
+        }
+        fn tools(&self) -> Vec<Tool> {
+            self.tools.clone()
+        }
+        async fn invoke(&self, call: ToolCall, _: &Control) -> Result<Invocation> {
+            let args: Value = serde_json::from_str(&call.arguments)?;
+            self.calls
+                .lock()
+                .unwrap()
+                .push((call.name.clone(), args.clone()));
+            match call.name.as_str() {
+                "inspect_project" => Invocation::read(self.context().await?),
+                "inspect_chapters" => Invocation::read(
+                    json!({"chapters":[{"id":CHAPTER,"title":"Chapter 1","chapter_number":1,"page_count":3,"first_page":"00000000-0000-4000-8000-000000000001","last_page":FIRST},{"id":"00000000-0000-4000-8000-000000000022","title":"Chapter 2","chapter_number":2,"page_count":2,"last_page":LAST}],"pagination":{"next_offset":null}}),
+                ),
+                "inspect_chapter" => {
+                    anyhow::ensure!(args["chapter"] == CHAPTER, "inspect Chapter 1");
+                    Invocation::read(
+                        json!({"pages":[{"id":"00000000-0000-4000-8000-000000000001","label":"001","chapter_page_number":1},{"id":"00000000-0000-4000-8000-000000000002","label":"002","chapter_page_number":2},{"id":FIRST,"label":"003","chapter_page_number":3}],"pagination":{"next_offset":null}}),
+                    )
+                }
+                "inspect_page" => {
+                    anyhow::ensure!(
+                        args["page"] == FIRST,
+                        "only the requested page needs inspection"
+                    );
+                    Invocation::read(
+                        json!({"page":{"id":FIRST,"label":"003","position":{"chapter_title":"Chapter 1","chapter_page_number":3}},"entries":[{"layer":{"kind":"text","id":LAYER,"typography":{"preferred_font":"Old font","size":24,"auto_fit":false,"color":[1,2,3,255]},"translation":{"text":"Kiểm tra font chữ"}}}],"pagination":{"next_offset":null}}),
+                    )
+                }
+                "list_fonts" => Invocation::read(
+                    json!({"fonts":["Noto Sans"],"pagination":{"next_offset":null}}),
+                ),
+                "set_edit_scope" => {
+                    anyhow::ensure!(
+                        args["first_page"] == FIRST && args["last_page"] == LAST,
+                        "range must start at Chapter 1 page 3 and end at the project's last page"
+                    );
+                    self.scoped.store(true, Ordering::SeqCst);
+                    Invocation::read(json!({"page_count":3}))
+                }
+                "set_typography" => {
+                    anyhow::ensure!(
+                        self.scoped.load(Ordering::SeqCst),
+                        "select edit scope before editing"
+                    );
+                    anyhow::ensure!(
+                        args["element"] == LAYER && args["preferred_font"] == "Noto Sans",
+                        "missing or incorrect layer/font argument; read inspect_page for the element ID"
+                    );
+                    anyhow::ensure!(
+                        args.get("size").is_none()
+                            && args.get("auto_fit").is_none()
+                            && args.get("color").is_none(),
+                        "omit typography properties the user did not ask to change"
+                    );
+                    self.edited.fetch_add(1, Ordering::SeqCst);
+                    Invocation::changed(
+                        json!({"element":LAYER,"preferred_font":"Noto Sans","size":24,"auto_fit":false,"color":[1,2,3,255]}),
+                    )
+                }
+                _ => bail!("this isolated font task does not need {}", call.name),
+            }
+        }
+    }
+    let contracts: Vec<Value> = serde_json::from_slice(&std::fs::read(std::env::var(
+        "KOHARU_EDITOR_CONTRACT_FILE",
+    )?)?)?;
+    let tools = contracts
+        .into_iter()
+        .map(|v| {
+            Tool::new(
+                v["name"].as_str().unwrap(),
+                v["description"].as_str().unwrap(),
+                v["parameters"].clone(),
+            )
+        })
+        .collect();
+    let host = Arc::new(EditorFixture {
+        tools,
+        calls: Default::default(),
+        scoped: Default::default(),
+        edited: AtomicUsize::new(0),
+    });
+    let config = CliConfig {
+        binary: std::env::var("KOHARU_EDITOR_PROBE_BINARY").ok(),
+        model: Some(std::env::var("KOHARU_EDITOR_PROBE_MODEL")?),
+        node: None,
+        reasoning: None,
+    };
+    let mut session = Session::default();
+    let control = Control::default();
+    let task = "Đây là fixture kiểm tra tool, không phải truyện thật. Phạm vi cho phép chỉnh là từ trang thứ 3 của Chapter 1 tới hết project. Chỉ đổi font của layer chữ tại trang thứ 3 Chapter 1 sang Noto Sans; giữ nguyên cỡ chữ, màu, auto_fit và mọi thuộc tính khác. Dùng tool của Koharu và ID đọc từ tool, không dùng shell hay file. Không cần xem ảnh để đổi font. Hoàn tất sau khi tool sửa thành công.";
+    let result = tokio::time::timeout(
+        Duration::from_secs(180),
+        run(
+            &mut session,
+            Backend::Agy,
+            &config,
+            host.clone(),
+            RunId::new(),
+            task,
+            &control,
+            &mut |_| {},
+        ),
+    )
+    .await;
+    if result.is_err() {
+        control.cancel();
+    }
+    let diagnostic = session.close().await;
+    if (result.is_err() || host.edited.load(Ordering::SeqCst) != 1) && !diagnostic.is_empty() {
+        println!("AGY fixture failure: {}", redact(&diagnostic));
+    }
+    let message = result??;
+    for (name, args) in host.calls.lock().unwrap().iter() {
+        println!("Fixture tool {name}: {args}");
+    }
+    assert_eq!(host.edited.load(Ordering::SeqCst), 1, "{message}");
+    assert!(host.scoped.load(Ordering::SeqCst));
+    println!(
+        "AGY native-contract chapter range and nonempty typography arguments passed: {message}"
+    );
     Ok(())
 }

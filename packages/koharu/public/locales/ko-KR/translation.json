@@ -115,6 +115,9 @@
       "newConversation": "새 대화"
     },
     "tools": {
+      "inspect_chapters": "챕터 읽는 중",
+      "inspect_chapter": "챕터 페이지 읽는 중",
+      "set_edit_scope": "편집 범위 선택 중",
       "inspect_project": "프로젝트 페이지 읽는 중",
       "inspect_page": "페이지 레이어 읽는 중",
       "list_fonts": "사용 가능한 글꼴 확인 중",
@@ -129,7 +132,7 @@
       "set_geometry": "레이아웃 조정 중",
       "set_visibility": "표시 설정 변경 중",
       "delete_elements": "레이어 삭제 중",
-      "move_element": "레이어 이동 중",
+      "reorder_element": "레이어 순서 변경 중",
       "run_pipeline": "파이프라인 실행 중"
     }
   },
