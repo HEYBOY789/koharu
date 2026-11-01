@@ -30,6 +30,13 @@ Compatible requests explicitly set `stream: false` because the response reader
 expects one JSON completion; this also prevents proxies from choosing an SSE
 response when the field is omitted.
 
+Invalid OpenAI-compatible completions (including malformed JSON and invalid IDs)
+are discarded and use the pipeline's existing bounded, cancellable recovery
+schedule. No content is repaired or committed from that response. If retries are
+exhausted the page stays unfinished; the error reports the parse/validation reason
+without flooding Activity with the model's repeating output. Account/authentication
+failures remain terminal, and other providers' recovery policies are unchanged.
+
 The shared translation reader accepts bare JSON or a single complete `json`/unlabelled
 code fence around it, including a compact opening such as ` ```json{ `. Only that
 outer framing is removed. It still rejects malformed/truncated JSON, surrounding

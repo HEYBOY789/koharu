@@ -27,6 +27,14 @@ async fn automatic_recovery_is_bounded_and_stops_for_quota_or_invalid_output() {
             _: crate::stages::StageInput,
         ) -> anyhow::Result<koharu_scene::Patch> {
             self.calls.fetch_add(1, Ordering::SeqCst);
+            if self.status == 200 {
+                return Err(koharu_translator::Error::InvalidCompletion {
+                    provider: "openai-compatible",
+                    segments: 10,
+                    message: self.message.into(),
+                }
+                .into());
+            }
             Err(koharu_translator::Error::Api {
                 provider: "openai-compatible",
                 status: self.status,
@@ -43,6 +51,8 @@ async fn automatic_recovery_is_bounded_and_stops_for_quota_or_invalid_output() {
             false,
         ),
         (429, "insufficient_quota", 1, false),
+        (200, "trailing characters at line 45 column 1", 4, false),
+        (200, "trailing characters at line 45 column 1", 1, true),
         (
             502,
             r#"{"error":{"type":"koharu_proxy_error","code":"invalid_translation_json"}}"#,
@@ -142,6 +152,14 @@ async fn automatic_recovery_continues_the_failed_page_without_manual_resume() {
         ) -> anyhow::Result<koharu_scene::Patch> {
             let call = self.calls.fetch_add(1, Ordering::SeqCst);
             if call == 1 {
+                return Err(koharu_translator::Error::InvalidCompletion {
+                    provider: "openai-compatible",
+                    segments: 10,
+                    message: "trailing characters at line 45 column 1".into(),
+                }
+                .into());
+            }
+            if call == 2 {
                 return Err(koharu_translator::Error::Api {
                     provider: "openai-compatible",
                     status: 502,
@@ -208,8 +226,8 @@ async fn automatic_recovery_continues_the_failed_page_without_manual_resume() {
         result.is_ok(),
         "a temporary proxy failure must recover in the same job: {result:?}"
     );
-    assert_eq!(calls.load(Ordering::SeqCst), 4);
-    for (index, expected) in ["call 0", "call 2", "call 3"].iter().enumerate() {
+    assert_eq!(calls.load(Ordering::SeqCst), 5);
+    for (index, expected) in ["call 0", "call 3", "call 4"].iter().enumerate() {
         assert_eq!(
             session
                 .snapshot()

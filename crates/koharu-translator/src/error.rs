@@ -33,6 +33,14 @@ pub enum Error {
         provider: &'static str,
         segments: Vec<usize>,
     },
+    #[error(
+        "{provider} returned invalid translation output for {segments} segments ({message}); the page remains unfinished"
+    )]
+    InvalidCompletion {
+        provider: &'static str,
+        segments: usize,
+        message: String,
+    },
     #[error("{provider} API request failed with HTTP {status}: {message}")]
     Api {
         provider: &'static str,
@@ -45,11 +53,14 @@ pub enum Error {
 
 impl Error {
     /// Only the compatible LLM endpoint participates in automatic recovery.
-    /// Malformed output and account limits still require human action.
+    /// Invalid completions are discarded and retried; account limits are terminal.
     pub fn retry_delay(&self, backoff: Duration) -> Option<Duration> {
         if matches!(
             self,
             Self::EmptyTranslation {
+                provider: "openai-compatible",
+                ..
+            } | Self::InvalidCompletion {
                 provider: "openai-compatible",
                 ..
             }
@@ -107,6 +118,18 @@ mod tests {
     use std::time::Duration;
     #[test]
     fn empty_translation_retries_only_for_the_existing_compatible_recovery_path() {
+        for provider in ["openai-compatible", "openai", "deepl"] {
+            assert_eq!(
+                Error::InvalidCompletion {
+                    provider,
+                    segments: 10,
+                    message: "trailing characters".into(),
+                }
+                .retry_delay(Duration::from_secs(15))
+                .is_some(),
+                provider == "openai-compatible"
+            );
+        }
         assert!(
             Error::EmptyTranslation {
                 provider: "openai-compatible",

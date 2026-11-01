@@ -47,6 +47,10 @@ pub(super) async fn translate(
         None => http,
     };
     let response: ChatResponse = send_json("openai-compatible", http).await?;
+    decode_response(response, &request.segments)
+}
+
+fn decode_response(response: ChatResponse, segments: &[String]) -> Result<Vec<String>> {
     let text = response
         .choices
         .into_iter()
@@ -55,11 +59,13 @@ pub(super) async fn translate(
         .message
         .content
         .context("OpenAI-compatible backend returned no message content")?;
-    Ok(prompt::translations(
-        "openai-compatible",
-        &text,
-        &request.segments,
-    )?)
+    prompt::translations("openai-compatible", &text, segments).map_err(|error| {
+        crate::Error::InvalidCompletion {
+            provider: "openai-compatible",
+            segments: segments.len(),
+            message: error.root_cause().to_string(),
+        }
+    })
 }
 
 pub(super) async fn models(client: &Client, config: &OpenAiCompatibleConfig) -> Result<Vec<Model>> {
@@ -240,6 +246,32 @@ struct ListedModel {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn malformed_repeating_completion_is_rejected_and_enters_bounded_recovery() {
+        let segments = (0..10).map(|i| format!("Source {i}")).collect::<Vec<_>>();
+        let translations = (0..10).map(|id| serde_json::json!({
+            "id": id, "text": if id == 5 { "ÁI ".repeat(1000) } else { format!("Translation {id}") }
+        })).collect::<Vec<_>>();
+        let malformed = format!(
+            "{}\nextra output",
+            serde_json::json!({"translations": translations})
+        );
+        let response = serde_json::from_value(serde_json::json!({
+            "choices": [{"message": {"content": malformed}}]
+        }))
+        .unwrap();
+        let error = decode_response(response, &segments).unwrap_err();
+        assert_eq!(
+            error.retry_delay(std::time::Duration::from_secs(15)),
+            Some(std::time::Duration::from_secs(15)),
+            "invalid completion should retry without committing or repairing it: {error}"
+        );
+        assert!(
+            error.to_string().len() < 300,
+            "activity errors must not contain a long repeating model response"
+        );
+    }
 
     #[test]
     fn gemini_thinking_uses_supported_levels_in_the_outgoing_request() {
