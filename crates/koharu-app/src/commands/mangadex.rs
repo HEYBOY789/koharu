@@ -105,6 +105,39 @@ impl Default for MangaDex {
 }
 
 impl MangaDex {
+    pub(super) async fn inventory(
+        &self,
+        id: &str,
+        language: &str,
+        reset: bool,
+        refresh: bool,
+    ) -> Result<(BTreeSet<String>, Option<String>, u32)> {
+        let read = self
+            .api
+            .get(
+                &format!("manga/{id}/aggregate"),
+                &[
+                    ("includeUnavailable".into(), "0".into()),
+                    ("translatedLanguage[]".into(), language.into()),
+                ],
+                if refresh {
+                    MangaDexCacheMode::Refresh
+                } else {
+                    MangaDexCacheMode::Online
+                },
+            )
+            .await?;
+        let (keys, latest) = inventory_from_aggregate(&read.value, reset)?;
+        Ok((keys, latest, read.checked as u32))
+    }
+
+    #[cfg(test)]
+    pub(super) fn with_origin(origin: tauri::Url) -> Self {
+        let mut client = Self::default();
+        client.api.origin = origin;
+        client
+    }
+
     pub fn persistent() -> Result<Self> {
         let file = dirs::cache_dir()
             .context("local cache directory is unavailable")?
@@ -657,6 +690,35 @@ fn classify(source: &Chapters, vietnamese: &Chapters) -> Option<MangaDexFilter> 
         (Some(source), Some(vietnamese)) if source > vietnamese => Some(MangaDexFilter::Behind),
         _ => None,
     }
+}
+
+pub(super) fn inventory_from_aggregate(
+    value: &Value,
+    reset: bool,
+) -> Result<(BTreeSet<String>, Option<String>)> {
+    let chapters = Chapters::parse(value, reset)?;
+    let mut keys = chapters
+        .numbered
+        .iter()
+        .map(|entry| format!("number:{}:{}", entry.volume.label(), entry.chapter.label()))
+        .collect::<BTreeSet<_>>();
+    for volume in aggregate_entries(&value["volumes"]).context("invalid MangaDex volumes")? {
+        for entry in aggregate_entries(&volume["chapters"]).context("invalid MangaDex chapters")? {
+            if entry["isUnavailable"] == true {
+                continue;
+            }
+            if entry["chapter"].as_str().and_then(Number::parse).is_some()
+                && (!reset || volume["volume"].as_str().and_then(Number::parse).is_some())
+            {
+                continue;
+            }
+            let id = entry["id"]
+                .as_str()
+                .context("unnumbered MangaDex chapter has no ID")?;
+            keys.insert(format!("special:{}", uuid::Uuid::parse_str(id)?));
+        }
+    }
+    Ok((keys, chapters.latest(reset)))
 }
 
 #[cfg(test)]

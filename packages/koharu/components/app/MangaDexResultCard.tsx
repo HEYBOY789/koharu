@@ -2,11 +2,11 @@
 
 import { useQuery } from '@tanstack/react-query'
 import { openUrl } from '@tauri-apps/plugin-opener'
-import { BookOpen, ExternalLink, FolderPlus } from 'lucide-react'
+import { Bell, BellRing, BookOpen, ExternalLink, FolderPlus } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
-import { queryClient } from '@/lib/queries'
+import { followingKey, queryClient, useFollowing } from '@/lib/queries'
 import {
   commands,
   type MangaDexCacheMode,
@@ -129,6 +129,8 @@ export function MangaDexResultCard({
   const [seen, setSeen] = useState(false)
   const [imageFailed, setImageFailed] = useState(false)
   const [linkError, setLinkError] = useState('')
+  const [followingPending, setFollowingPending] = useState(false)
+  const following = useFollowing(active)
   useEffect(() => {
     if (!active || seen || !card.current || typeof IntersectionObserver === 'undefined') return
     const observer = new IntersectionObserver(
@@ -176,6 +178,18 @@ export function MangaDexResultCard({
     .filter(Boolean)
     .join(' · ')
   const comparison = chapters.data
+  const followLanguage =
+    reference === 'auto'
+      ? comparison?.reference_language
+      : reference === 'original'
+        ? manga.original_language
+        : reference
+  const followed = following.data?.some(
+    (entry) =>
+      entry.source.kind === 'manga_dex' &&
+      entry.source.id === manga.id &&
+      entry.language === followLanguage,
+  )
   const unavailable = t('mangadex.unknownMetadata')
   const dateLabel = (value: string | null | undefined) => {
     const date = value ? new Date(value) : null
@@ -339,6 +353,41 @@ export function MangaDexResultCard({
         <Button type='button' size='sm' onClick={onCreate}>
           <FolderPlus className='size-3' />
           {t('mangadex.createProject')}
+        </Button>
+        <Button
+          type='button'
+          size='sm'
+          variant='outline'
+          disabled={!followLanguage || followLanguage === 'auto' || followingPending || followed}
+          onClick={() => {
+            if (!followLanguage) return
+            setFollowingPending(true)
+            setLinkError('')
+            void commands
+              .followManga({
+                source: {
+                  kind: 'manga_dex',
+                  id: manga.id,
+                  chapter_numbers_reset: manga.chapter_numbers_reset,
+                },
+                title: manga.title,
+                language: followLanguage,
+                cover_url: manga.cover_url,
+              })
+              .then((entries) => queryClient.setQueryData(followingKey, entries))
+              .catch((error) => setLinkError(String(error)))
+              .finally(() => setFollowingPending(false))
+          }}
+        >
+          {followed ? <BellRing /> : <Bell />}
+          {t(
+            followingPending
+              ? 'following.adding'
+              : followed
+                ? 'following.followed'
+                : 'following.followLanguage',
+            { language: followLanguage ? languageName(followLanguage) : '' },
+          )}
         </Button>
         <Button
           type='button'

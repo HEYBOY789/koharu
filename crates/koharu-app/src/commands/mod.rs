@@ -3,6 +3,7 @@ pub(crate) mod canvas;
 pub(crate) mod chapter;
 pub(crate) mod editing;
 pub(crate) mod fonts;
+pub(crate) mod following;
 pub(crate) mod import;
 pub(crate) mod lifecycle;
 pub(crate) mod mangadex;
@@ -66,6 +67,11 @@ pub fn bindings() -> tauri_specta::Builder<tauri_runtime_cef::CefRuntime> {
             mangadex::get_mangadex_options,
             mangadex::get_mangadex_chapters,
             mangadex::get_mangadex_metadata,
+            following::get_following,
+            following::follow_manga,
+            following::check_follow,
+            following::mark_follow_seen,
+            following::unfollow_manga,
             agent::get_agent_status,
             agent::login_agent,
             agent::logout_agent,

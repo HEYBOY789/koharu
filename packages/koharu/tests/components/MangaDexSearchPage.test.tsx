@@ -12,6 +12,7 @@ vi.mock('@tauri-apps/plugin-opener', () => ({ openUrl }))
 afterEach(cleanup)
 const tag = { id: '00000000-0000-0000-0000-000000000002', name: 'Action', group: 'genre' }
 beforeEach(() => {
+  vi.spyOn(commands, 'getFollowing').mockResolvedValue([])
   vi.spyOn(commands, 'getMangadexMetadata').mockImplementation(async (input) => ({
     manga: input.map(({ id }) => ({
       id,
@@ -74,6 +75,24 @@ const match: MangaDexPage = {
     },
   ],
 }
+
+it('follows the selected chapter language from a result without creating a project', async () => {
+  vi.spyOn(commands, 'searchMangadex').mockResolvedValue(match)
+  const follow = vi.spyOn(commands, 'followManga').mockResolvedValue([])
+  const create = vi.spyOn(commands, 'importSourceUrl')
+  render(<MangaDexSearchPage active />)
+  fireEvent.click(screen.getByRole('button', { name: 'Search' }))
+  fireEvent.click(await screen.findByRole('button', { name: 'Follow English' }))
+  await waitFor(() =>
+    expect(follow).toHaveBeenCalledWith({
+      source: { kind: 'manga_dex', id: match.manga[0].id, chapter_numbers_reset: false },
+      title: match.manga[0].title,
+      language: 'en',
+      cover_url: match.manga[0].cover_url,
+    }),
+  )
+  expect(create).not.toHaveBeenCalled()
+})
 
 it('lists all titles on demand and encodes tag logic, sort, year and multiple original languages', async () => {
   const search = vi.spyOn(commands, 'searchMangadex').mockResolvedValue(empty)

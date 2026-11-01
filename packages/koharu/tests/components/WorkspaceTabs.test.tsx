@@ -24,6 +24,7 @@ vi.mock('@/components/preferences/SettingsPage', () => ({ SettingsPage: () => <p
 
 afterEach(cleanup)
 beforeEach(() => {
+  vi.spyOn(commands, 'getFollowing').mockResolvedValue([])
   vi.spyOn(commands, 'getProject').mockResolvedValue(null)
   vi.spyOn(commands, 'listProjects').mockResolvedValue([])
   vi.spyOn(commands, 'getPages').mockResolvedValue([])
@@ -114,6 +115,8 @@ it('keeps the open editor state, selected layer and running job while visiting M
   })
   await user.click(screen.getByRole('tab', { name: 'MangaDex' }))
   expect(screen.getByRole('heading', { name: 'Find manga on MangaDex' })).toBeVisible()
+  await user.click(screen.getByRole('tab', { name: 'Following' }))
+  expect(screen.getByRole('heading', { name: 'Following' })).toBeVisible()
   await user.click(screen.getByRole('tab', { name: 'Projects' }))
   expect(screen.getByRole('textbox', { name: 'Editor draft' })).toHaveValue('unsaved text')
   await user.click(screen.getByRole('button', { name: 'Project library' }))

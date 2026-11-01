@@ -1,16 +1,17 @@
 'use client'
 
-import { BookOpen, Folder } from 'lucide-react'
+import { Bell, BookOpen, Folder } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
+import { FollowingPage } from '@/components/app/FollowingPage'
 import { MangaDexSearchPage } from '@/components/app/MangaDexSearchPage'
 import { TitleBar } from '@/components/app/TitleBar'
 import { ActivityCenter } from '@/components/editor/ActivityCenter'
 import { Editor } from '@/components/editor/Editor'
 import { SettingsPage } from '@/components/preferences/SettingsPage'
 import { StartView } from '@/components/start/StartView'
-import { useProject } from '@/lib/queries'
+import { useFollowing, useProject } from '@/lib/queries'
 import { useKoharuStore } from '@/lib/store'
 import { Button } from '@koharu/ui/components/button'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@koharu/ui/components/tabs'
@@ -20,6 +21,8 @@ export function KoharuApp() {
   const { t } = useTranslation()
   const [libraryOpen, setLibraryOpen] = useState(false)
   const project = useProject().data
+  const following = useFollowing().data ?? []
+  const updated = following.filter((entry) => entry.new_chapters > 0).length
   const selectedPages = useKoharuStore((state) => state.selectedPages)
   const selectPages = useKoharuStore((state) => state.selectPages)
   const selectLayers = useKoharuStore((state) => state.selectLayers)
@@ -54,7 +57,8 @@ export function KoharuApp() {
       <Tabs
         value={workspaceTab}
         onValueChange={(value) => {
-          if (value === 'projects' || value === 'mangadex') setWorkspaceTab(value)
+          if (value === 'projects' || value === 'mangadex' || value === 'following')
+            setWorkspaceTab(value)
         }}
         className={cn('min-h-0 flex-1 gap-0', settingsOpen && 'hidden')}
       >
@@ -71,6 +75,15 @@ export function KoharuApp() {
             <TabsTrigger value='mangadex' className='px-3'>
               <BookOpen />
               {t('mangadex.tab')}
+            </TabsTrigger>
+            <TabsTrigger value='following' className='px-3'>
+              <Bell />
+              {t('following.title')}
+              {updated > 0 && (
+                <span className='rounded-full bg-primary/15 px-1.5 text-[10px] tabular-nums'>
+                  {updated}
+                </span>
+              )}
             </TabsTrigger>
           </TabsList>
           {project && (
@@ -119,6 +132,9 @@ export function KoharuApp() {
         </TabsContent>
         <TabsContent value='mangadex' keepMounted className='min-h-0 data-[hidden]:hidden'>
           <MangaDexSearchPage active={!settingsOpen && workspaceTab === 'mangadex'} />
+        </TabsContent>
+        <TabsContent value='following' keepMounted className='min-h-0 data-[hidden]:hidden'>
+          <FollowingPage active={!settingsOpen && workspaceTab === 'following'} />
         </TabsContent>
       </Tabs>
       {settingsOpen && <SettingsPage />}

@@ -10,6 +10,11 @@ export const commands = {
         getMangadexOptions: (kind: MangaDexOptionsKind, name: string, cache: MangaDexCacheMode) => __TAURI_INVOKE<MangaDexOptions>("get_mangadex_options", { kind, name, cache }),
         getMangadexChapters: (input: MangaDexChapterRequest) => __TAURI_INVOKE<MangaDexComparison>("get_mangadex_chapters", { input }),
         getMangadexMetadata: (input: MangaDexMetadataRequest[], cache: MangaDexCacheMode) => __TAURI_INVOKE<MangaDexMetadataPage>("get_mangadex_metadata", { input, cache }).then((v) => (({...v,manga:v.manga.map(i=>({...i,rating:i.rating==null?i.rating:i.rating}))}) as typeof v)),
+        getFollowing: () => __TAURI_INVOKE<FollowedManga[]>("get_following"),
+        followManga: (input: FollowInput) => __TAURI_INVOKE<FollowedManga[]>("follow_manga", { input }),
+        checkFollow: (key: string, refresh: boolean) => __TAURI_INVOKE<FollowedManga[]>("check_follow", { key, refresh }),
+        markFollowSeen: (key: string) => __TAURI_INVOKE<FollowedManga[]>("mark_follow_seen", { key }),
+        unfollowManga: (key: string) => __TAURI_INVOKE<FollowedManga[]>("unfollow_manga", { key }),
         getAgentStatus: () => __TAURI_INVOKE<AgentStatus>("get_agent_status"),
         loginAgent: (onEvent: Channel<LoginEvent>) => __TAURI_INVOKE<AgentStatus>("login_agent", { onEvent }),
         logoutAgent: () => __TAURI_INVOKE<AgentStatus>("logout_agent"),
@@ -308,6 +313,28 @@ export type ExportFormat = "png" | "psd" | "cbz";
 
 export type Flux2KleinConfig = {
         prompt?: string,
+};
+
+export type FollowInput = {
+        source: FollowSource,
+        title: string,
+        language: string,
+        cover_url: string | null,
+};
+
+export type FollowSource = { kind: "manga_dex"; id: string; chapter_numbers_reset: boolean } | { kind: "website"; url: string };
+
+export type FollowedManga = {
+        key: string,
+        source: FollowSource,
+        title: string,
+        language: string,
+        cover_url: string | null,
+        latest: string | null,
+        chapters: number,
+        new_chapters: number,
+        checked_at: number | null,
+        error: string | null,
 };
 
 export type FontFace = {

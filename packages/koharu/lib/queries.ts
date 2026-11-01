@@ -15,6 +15,14 @@ import { call } from './backend'
 import { useKoharuStore } from './store'
 
 export const projectKey = ['project'] as const
+export const followingKey = ['following'] as const
+
+export function useFollowing(enabled = true) {
+  return useQuery(
+    { queryKey: followingKey, queryFn: () => call(commands.getFollowing), enabled },
+    queryClient,
+  )
+}
 export const pagesKey = ['pages'] as const
 export const pageKey = ['page'] as const
 export const chaptersKey = ['chapters'] as const

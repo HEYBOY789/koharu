@@ -65,7 +65,7 @@ interface KoharuStore {
   processingScope: PipelineScope
   processingStages: Stage[]
   settingsOpen: boolean
-  workspaceTab: 'projects' | 'mangadex'
+  workspaceTab: 'projects' | 'mangadex' | 'following'
   shortcuts: Shortcuts
   selectPages: (pages: EntityId[]) => void
   showInspector: (section: InspectorSection) => void
@@ -73,7 +73,7 @@ interface KoharuStore {
   setProcessingScope: (scope: PipelineScope) => void
   setProcessingStages: (stages: Stage[]) => void
   setSettingsOpen: (open: boolean) => void
-  setWorkspaceTab: (tab: 'projects' | 'mangadex') => void
+  setWorkspaceTab: (tab: 'projects' | 'mangadex' | 'following') => void
   selectLayers: (layers: EntityId[]) => void
   setTool: (tool: CanvasTool) => void
   setBrush: (brush: CanvasBrush) => void
