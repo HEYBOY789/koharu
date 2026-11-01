@@ -18,3 +18,17 @@ configuration of its translation processor.
 `GenerationConfig`, and `TranslationRequest` for each operation. The engine
 keeps the selected local model resident when possible and reads live provider
 connection settings without owning workflow configuration.
+
+For Gemini model IDs on an OpenAI-compatible endpoint (including provider-prefixed
+IDs such as `ag/gemini-3.8-flash-high`), the reasoning toggle sends `low` when off
+and `high` when on. Gemini 3.8 requires thinking, so off reduces it rather than
+disabling it. This also avoids `medium` on older Gemini Pro models that only accept
+`low` and `high`. An unspecified setting omits `reasoning_effort`, leaving the
+endpoint's model preset in control. Other model IDs keep the existing
+`none`/`medium` mapping. The selected model ID itself is not rewritten.
+Compatible requests explicitly set `stream: false` because the response reader
+expects one JSON completion; this also prevents proxies from choosing an SSE
+response when the field is omitted.
+
+References: [Google thinking levels](https://ai.google.dev/gemini-api/docs/thinking)
+and [Gemini 3 thinking controls](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/start/get-started-with-gemini-3).

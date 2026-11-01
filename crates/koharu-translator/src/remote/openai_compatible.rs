@@ -38,47 +38,7 @@ pub(super) async fn translate(
     request: &TranslationRequest,
 ) -> Result<Vec<String>> {
     let api_key = koharu_secrets::get("openai-compatible")?;
-    let (system, user) = prompt::prompts(request)?;
-    let user_content = match request.image.as_deref() {
-        Some(image) => MessageContent::Parts(vec![
-            ContentPart::Text { text: user },
-            ContentPart::ImageUrl {
-                image_url: ImageUrl {
-                    url: encode_image(image)?.data_url(),
-                },
-            },
-        ]),
-        None => MessageContent::Text(user),
-    };
-    let body = ChatRequest {
-        model,
-        messages: [
-            Message {
-                role: "system",
-                content: MessageContent::Text(system),
-            },
-            Message {
-                role: "user",
-                content: user_content,
-            },
-        ],
-        temperature: generation.temperature,
-        top_p: generation.top_p,
-        max_tokens: generation.max_tokens,
-        frequency_penalty: generation.frequency_penalty,
-        presence_penalty: generation.presence_penalty,
-        reasoning_effort: generation
-            .reasoning
-            .map(|enabled| if enabled { "medium" } else { "none" }),
-        response_format: ResponseFormat {
-            kind: "json_schema",
-            json_schema: JsonSchema {
-                name: "manga_translation",
-                strict: true,
-                schema: prompt::output_schema(request.segments.len()),
-            },
-        },
-    };
+    let body = ChatRequest::new(model, generation, request)?;
     let http = client
         .post(endpoint(config.base_url.as_ref(), "chat/completions"))
         .json(&body);
@@ -136,6 +96,7 @@ fn endpoint(base_url: Option<&Url>, suffix: &str) -> String {
 #[derive(Serialize)]
 struct ChatRequest<'a> {
     model: &'a str,
+    stream: bool,
     messages: [Message; 2],
     #[serde(skip_serializing_if = "Option::is_none")]
     temperature: Option<f32>,
@@ -150,6 +111,66 @@ struct ChatRequest<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     reasoning_effort: Option<&'static str>,
     response_format: ResponseFormat,
+}
+
+impl<'a> ChatRequest<'a> {
+    fn new(
+        model: &'a str,
+        generation: &GenerationConfig,
+        request: &TranslationRequest,
+    ) -> Result<Self> {
+        let (system, user) = prompt::prompts(request)?;
+        let user_content = match request.image.as_deref() {
+            Some(image) => MessageContent::Parts(vec![
+                ContentPart::Text { text: user },
+                ContentPart::ImageUrl {
+                    image_url: ImageUrl {
+                        url: encode_image(image)?.data_url(),
+                    },
+                },
+            ]),
+            None => MessageContent::Text(user),
+        };
+        Ok(Self {
+            model,
+            stream: false,
+            messages: [
+                Message {
+                    role: "system",
+                    content: MessageContent::Text(system),
+                },
+                Message {
+                    role: "user",
+                    content: user_content,
+                },
+            ],
+            temperature: generation.temperature,
+            top_p: generation.top_p,
+            max_tokens: generation.max_tokens,
+            frequency_penalty: generation.frequency_penalty,
+            presence_penalty: generation.presence_penalty,
+            reasoning_effort: generation.reasoning.map(|enabled| {
+                let id = model.rsplit('/').next().unwrap_or(model);
+                if id.starts_with("gemini-") {
+                    // Gemini 3.8 cannot disable thinking, and older Pro models reject medium.
+                    // Use levels shared by both, including provider-prefixed proxy model IDs.
+                    if enabled { "high" } else { "low" }
+                } else if enabled {
+                    "medium"
+                } else {
+                    "none"
+                }
+            }),
+            response_format: ResponseFormat {
+                kind: "json_schema",
+                json_schema: JsonSchema {
+                    name: "manga_translation",
+                    strict: true,
+                    schema: prompt::output_schema(request.segments.len()),
+                },
+            },
+        })
+    }
 }
 
 #[derive(Serialize)]
@@ -221,6 +242,92 @@ mod tests {
     use super::*;
 
     #[test]
+    fn gemini_thinking_uses_supported_levels_in_the_outgoing_request() {
+        let request = TranslationRequest::new(["Hello"], crate::Language::Vietnamese);
+        for model in [
+            "gemini-3.8-flash",
+            "ag/gemini-3.8-flash-high",
+            "ag/gemini-3.7-flash-low",
+            "google/gemini-3-pro-preview",
+            "ag/gemini-4-argon-medium",
+        ] {
+            for (reasoning, expected) in [
+                (Some(false), Some("low")),
+                (Some(true), Some("high")),
+                (None, None),
+            ] {
+                let generation = GenerationConfig {
+                    reasoning,
+                    ..GenerationConfig::default()
+                };
+                let body =
+                    serde_json::to_value(ChatRequest::new(model, &generation, &request).unwrap())
+                        .unwrap();
+                assert_eq!(
+                    body.get("reasoning_effort")
+                        .and_then(serde_json::Value::as_str),
+                    expected,
+                    "{model} reasoning={reasoning:?}"
+                );
+                assert_eq!(body["model"], model);
+                assert_eq!(body["response_format"]["json_schema"]["strict"], true);
+            }
+        }
+        for (reasoning, expected) in [
+            (Some(false), Some("none")),
+            (Some(true), Some("medium")),
+            (None, None),
+        ] {
+            let generation = GenerationConfig {
+                reasoning,
+                ..GenerationConfig::default()
+            };
+            let body = serde_json::to_value(
+                ChatRequest::new("another-model", &generation, &request).unwrap(),
+            )
+            .unwrap();
+            assert_eq!(
+                body.get("reasoning_effort")
+                    .and_then(serde_json::Value::as_str),
+                expected
+            );
+        }
+    }
+
+    #[tokio::test]
+    #[ignore = "manual acceptance: sends one synthetic translation through the configured OS credential to a local proxy"]
+    async fn local_gemini_proxy_accepts_disabled_reasoning() {
+        let base = Url::parse(
+            &std::env::var("KOHARU_COMPATIBLE_SMOKE_URL").expect("set the local proxy base URL"),
+        )
+        .unwrap();
+        assert!(matches!(
+            base.host_str(),
+            Some("localhost" | "127.0.0.1" | "::1")
+        ));
+        let model =
+            std::env::var("KOHARU_COMPATIBLE_SMOKE_MODEL").expect("set the Gemini model ID");
+        let client = Client::builder()
+            .timeout(std::time::Duration::from_secs(90))
+            .build()
+            .unwrap();
+        let request = TranslationRequest::new(["Hello."], crate::Language::Vietnamese);
+        let output = translate(
+            &client,
+            &OpenAiCompatibleConfig {
+                base_url: Some(base),
+            },
+            &model,
+            &GenerationConfig::default(),
+            &request,
+        )
+        .await
+        .unwrap();
+        assert_eq!(output.len(), 1);
+        assert!(!output[0].trim().is_empty());
+    }
+
+    #[test]
     fn endpoint_preserves_base_path() {
         let url = Url::parse("http://localhost:1234/v1").unwrap();
         assert_eq!(
@@ -231,36 +338,16 @@ mod tests {
 
     #[test]
     fn serializes_compatible_request_contract() {
-        let body = ChatRequest {
-            model: "model",
-            messages: [
-                Message {
-                    role: "system",
-                    content: MessageContent::Text("system".to_owned()),
-                },
-                Message {
-                    role: "user",
-                    content: MessageContent::Text("user".to_owned()),
-                },
-            ],
-            temperature: None,
-            top_p: None,
+        let generation = GenerationConfig {
             max_tokens: Some(1024),
-            frequency_penalty: None,
-            presence_penalty: None,
-            reasoning_effort: Some("none"),
-            response_format: ResponseFormat {
-                kind: "json_schema",
-                json_schema: JsonSchema {
-                    name: "manga_translation",
-                    strict: true,
-                    schema: prompt::output_schema(2),
-                },
-            },
+            ..GenerationConfig::default()
         };
+        let request = TranslationRequest::new(["Hello", "World"], crate::Language::Vietnamese);
+        let body = ChatRequest::new("model", &generation, &request).unwrap();
         let value = serde_json::to_value(body).unwrap();
 
         assert_eq!(value["max_tokens"], 1024);
+        assert_eq!(value["stream"], false);
         assert_eq!(value["reasoning_effort"], "none");
         assert_eq!(value["response_format"]["type"], "json_schema");
         assert_eq!(value["response_format"]["json_schema"]["strict"], true);
@@ -272,23 +359,26 @@ mod tests {
 
     #[test]
     fn serializes_text_before_an_attached_image() {
-        let content = MessageContent::Parts(vec![
-            ContentPart::Text {
-                text: "translate".to_owned(),
-            },
-            ContentPart::ImageUrl {
-                image_url: ImageUrl {
-                    url: "data:image/jpeg;base64,image".to_owned(),
-                },
-            },
-        ]);
-        let value = serde_json::to_value(content).unwrap();
-
-        assert_eq!(
-            value[0],
-            serde_json::json!({ "type": "text", "text": "translate" })
+        let request = TranslationRequest::new(["Hello"], crate::Language::Vietnamese)
+            .with_image(std::sync::Arc::new(image::DynamicImage::new_rgb8(1, 1)));
+        let body = ChatRequest::new(
+            "ag/gemini-3.8-flash-high",
+            &GenerationConfig::default(),
+            &request,
+        )
+        .unwrap();
+        let value = serde_json::to_value(body).unwrap();
+        let parts = &value["messages"][1]["content"];
+        assert_eq!(parts[0]["type"], "text");
+        let input: serde_json::Value =
+            serde_json::from_str(parts[0]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(input["segments"][0]["text"], "Hello");
+        assert_eq!(parts[1]["type"], "image_url");
+        assert!(
+            parts[1]["image_url"]["url"]
+                .as_str()
+                .unwrap()
+                .starts_with("data:image/jpeg;base64,")
         );
-        assert_eq!(value[1]["type"], "image_url");
-        assert_eq!(value[1]["image_url"]["url"], "data:image/jpeg;base64,image");
     }
 }
