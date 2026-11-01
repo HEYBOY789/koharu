@@ -30,7 +30,10 @@ export function AgentProgress({ run }: { run: AgentRun }) {
     >
       <span className='break-words'>{agentProgressLabel(t, run)}</span>
       {run.state === 'running' && run.error && (
-        <span className='break-words text-destructive'>{run.error}</span>
+        <div role='note' className='grid gap-1 break-words text-amber-700 dark:text-amber-400'>
+          <span>{t('agent.progress.toolRejected')}</span>
+          <span className='text-muted-foreground'>{run.error}</span>
+        </div>
       )}
       {run.changes > 0 && (
         <span className='text-[10px]'>{t('agent.progress.changes', { count: run.changes })}</span>

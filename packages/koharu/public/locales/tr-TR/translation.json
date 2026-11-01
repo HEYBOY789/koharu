@@ -110,6 +110,7 @@
       "responding": "Yanıt yazılıyor…",
       "waiting": "İşleme sırası bekleniyor…",
       "summary": "Akıl yürütme özeti",
+      "toolRejected": "Bir araç çağrısı reddedildi. Ajan çalışmaya devam ediyor ve yeniden deneyebilir.",
       "changes": "Tamamlanan düzenleme: {{count}}",
       "background": "Ajan “{{name}}” üzerinde çalışıyor.",
       "newConversation": "Yeni konuşma"

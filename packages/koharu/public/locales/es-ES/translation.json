@@ -110,6 +110,7 @@
       "responding": "Redactando respuesta…",
       "waiting": "Esperando procesamiento…",
       "summary": "Resumen del razonamiento",
+      "toolRejected": "Se rechazó una llamada a una herramienta. El agente sigue activo y puede reintentar.",
       "changes": "Ediciones completadas: {{count}}",
       "background": "El agente trabaja en «{{name}}».",
       "newConversation": "Nueva conversación"

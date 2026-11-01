@@ -704,7 +704,13 @@ fn arguments<T: for<'de> Deserialize<'de> + JsonSchema>(call: &ToolCall) -> Resu
             .as_array()
             .map(|fields| fields.iter().filter_map(Value::as_str).collect::<Vec<_>>().join(", "))
             .unwrap_or_default();
-        anyhow!("Invalid arguments for {}: {error}. No edit was applied. Required fields: {required}. Read the tool definition and retry with explicit values and inspected IDs; do not repeat an empty call.", call.name)
+        let accepted = schema.as_value()["properties"].as_object().map(|fields| fields.keys().map(String::as_str).collect::<Vec<_>>().join(", ")).unwrap_or_default();
+        let requirement = if required.is_empty() {
+            "All fields are optional; {} is valid".to_owned()
+        } else {
+            format!("Required fields: {required}")
+        };
+        anyhow!("Invalid arguments for {}: {error}. No edit was applied. {requirement}. Accepted fields: {accepted}. Correct the arguments using the tool definition and retry.", call.name)
     })
 }
 
@@ -834,6 +840,22 @@ mod tests {
             "validation error leaked the full schema: {message}"
         );
         assert!(!message.contains("$defs") && !message.contains("$schema"));
+    }
+
+    #[test]
+    fn editor_contract_optional_inspection_arguments_have_consistent_recovery_guidance() {
+        let error = arguments::<Window>(&call("inspect_project", json!({"unknown":true})))
+            .err()
+            .unwrap();
+        let message = format!("{error:#}");
+        assert!(message.contains("offset") && message.contains("limit"));
+        assert!(
+            message.contains("{} is valid"),
+            "optional inspection recovery must allow its valid empty query: {message}"
+        );
+        assert!(!message.contains("do not repeat an empty call"));
+        assert!(arguments::<Window>(&call("inspect_project", json!({}))).is_ok());
+        assert!(arguments::<RunPipeline>(&call("run_pipeline", json!({}))).is_err());
     }
 
     #[tokio::test]
@@ -979,7 +1001,14 @@ mod tests {
     #[ignore = "Manual contract export for the installed AGY test; requires KOHARU_EDITOR_CONTRACT_FILE"]
     fn export_editor_contracts_for_installed_cli() -> Result<()> {
         let path = std::env::var("KOHARU_EDITOR_CONTRACT_FILE")?;
-        std::fs::write(path, serde_json::to_vec_pretty(&editor_tools())?)?;
+        std::fs::write(&path, serde_json::to_vec_pretty(&editor_tools())?)?;
+        let error = arguments::<Window>(&call("inspect_project", json!({"unknown":true})))
+            .err()
+            .unwrap();
+        std::fs::write(
+            std::path::Path::new(&path).with_extension("errors.json"),
+            serde_json::to_vec(&json!({"inspect_project_unknown":format!("{error:#}")}))?,
+        )?;
         Ok(())
     }
 

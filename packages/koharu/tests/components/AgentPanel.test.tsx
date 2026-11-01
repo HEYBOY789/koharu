@@ -138,6 +138,37 @@ it('switches to AGY without Codex login and reads edits from the native conversa
   expect(login).not.toHaveBeenCalled()
 })
 
+it('keeps a rejected read visibly running and clears its note after recovery', async () => {
+  vi.spyOn(commands, 'getAgentStatus').mockResolvedValue({
+    ...initial,
+    config: { ...config, backend: 'agy' },
+    ready: true,
+  })
+  render(<AgentPanel />)
+  await screen.findByRole('combobox', { name: 'Agent backend' })
+  const error = 'inspect_project: unknown field `unknown`; accepted fields are offset and limit'
+  act(() => receiveAgent(snapshot(1, { ...run, phase: 'tool', tool: 'inspect_project', error })))
+  expect(screen.getByRole('note')).toHaveTextContent(error)
+  expect(screen.getByRole('button', { name: 'Stop' })).toBeEnabled()
+  act(() =>
+    receiveAgent(
+      snapshot(2, { ...run, phase: 'tool', tool: 'set_typography', error: null, changes: 1 }),
+    ),
+  )
+  expect(screen.queryByRole('note')).not.toBeInTheDocument()
+  act(() =>
+    receiveAgent(
+      snapshot(
+        3,
+        { ...run, state: 'finished', error: null, changes: 1 },
+        'Recovered and adjusted the text',
+      ),
+    ),
+  )
+  expect(screen.getByText('Recovered and adjusted the text')).toBeVisible()
+  expect(screen.queryByRole('button', { name: 'Stop' })).not.toBeInTheDocument()
+})
+
 it('keeps project A running across unmount and shows a background banner in B without leaking A messages', async () => {
   vi.spyOn(commands, 'getAgentStatus').mockResolvedValue({
     ...initial,

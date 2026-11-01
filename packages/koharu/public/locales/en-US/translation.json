@@ -110,6 +110,7 @@
       "responding": "Writing response…",
       "waiting": "Waiting for processing…",
       "summary": "Reasoning summary",
+      "toolRejected": "A tool call was rejected. The agent is still running and can retry.",
       "changes": "Completed edits: {{count}}",
       "background": "Agent is working on “{{name}}”.",
       "newConversation": "New conversation"

@@ -110,6 +110,7 @@
       "responding": "撰寫回覆…",
       "waiting": "等待處理空閒…",
       "summary": "思考摘要",
+      "toolRejected": "工具呼叫遭拒。代理仍在執行，可以重試。",
       "changes": "已完成修改：{{count}}",
       "background": "代理程式正在處理「{{name}}」。",
       "newConversation": "新對話"

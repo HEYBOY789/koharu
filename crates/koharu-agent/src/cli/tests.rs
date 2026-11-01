@@ -435,6 +435,8 @@ async fn installed_cli_keeps_conversation_and_reconnects_project_tools() -> Resu
 async fn installed_agy_edits_layer_with_native_contracts_and_chapter_range() -> Result<()> {
     struct EditorFixture {
         tools: Vec<Tool>,
+        recovery_error: Option<String>,
+        inspection_attempts: AtomicUsize,
         readability: bool,
         images: Option<(String, String)>,
         calls: std::sync::Mutex<Vec<(String, Value)>>,
@@ -470,7 +472,23 @@ async fn installed_agy_edits_layer_with_native_contracts_and_chapter_range() -> 
                 .unwrap()
                 .push((call.name.clone(), args.clone()));
             match call.name.as_str() {
-                "inspect_project" => Invocation::read(self.context().await?),
+                "inspect_project" => {
+                    let attempt = self.inspection_attempts.fetch_add(1, Ordering::SeqCst);
+                    if let Some(error) = &self.recovery_error {
+                        if attempt == 0 {
+                            println!(
+                                "Fixture injected inspect_project arguments: {{\"unknown\":true}}"
+                            );
+                            bail!("{error}");
+                        }
+                        anyhow::ensure!(
+                            args.as_object()
+                                .is_some_and(|v| v.keys().all(|k| k == "offset" || k == "limit")),
+                            "{error}"
+                        );
+                    }
+                    Invocation::read(self.context().await?)
+                }
                 "inspect_chapters" if self.readability => Invocation::read(
                     json!({"chapters":[{"id":CHAPTER,"title":"Chapter 1","page_count":1,"first_page":FIRST,"last_page":FIRST}],"pagination":{"next_offset":null}}),
                 ),
@@ -584,9 +602,21 @@ async fn installed_agy_edits_layer_with_native_contracts_and_chapter_range() -> 
             }
         }
     }
-    let contracts: Vec<Value> = serde_json::from_slice(&std::fs::read(std::env::var(
-        "KOHARU_EDITOR_CONTRACT_FILE",
-    )?)?)?;
+    let contract_path = std::path::PathBuf::from(std::env::var("KOHARU_EDITOR_CONTRACT_FILE")?);
+    let contracts: Vec<Value> = serde_json::from_slice(&std::fs::read(&contract_path)?)?;
+    let recovery = std::env::var("KOHARU_EDITOR_PROBE_TASK").as_deref() == Ok("recovery");
+    let recovery_error = if recovery {
+        let errors: Value =
+            serde_json::from_slice(&std::fs::read(contract_path.with_extension("errors.json"))?)?;
+        Some(
+            errors["inspect_project_unknown"]
+                .as_str()
+                .context("exported native recovery error missing")?
+                .to_owned(),
+        )
+    } else {
+        None
+    };
     let tools = contracts
         .into_iter()
         .map(|v| {
@@ -614,6 +644,8 @@ async fn installed_agy_edits_layer_with_native_contracts_and_chapter_range() -> 
     };
     let host = Arc::new(EditorFixture {
         tools,
+        recovery_error,
+        inspection_attempts: AtomicUsize::new(0),
         readability,
         images,
         calls: Default::default(),
@@ -640,6 +672,13 @@ async fn installed_agy_edits_layer_with_native_contracts_and_chapter_range() -> 
     } else {
         task
     };
+    let recovery_task = format!("Trước tiên đọc lại tổng quan bằng inspect_project. {task}");
+    let task = if recovery {
+        recovery_task.as_str()
+    } else {
+        task
+    };
+    let mut events = Vec::new();
     let result = tokio::time::timeout(
         Duration::from_secs(180),
         run(
@@ -650,7 +689,7 @@ async fn installed_agy_edits_layer_with_native_contracts_and_chapter_range() -> 
             RunId::new(),
             task,
             &control,
-            &mut |_| {},
+            &mut |event| events.push(event),
         ),
     )
     .await;
@@ -678,6 +717,21 @@ async fn installed_agy_edits_layer_with_native_contracts_and_chapter_range() -> 
         );
     } else {
         assert_eq!(host.edited.load(Ordering::SeqCst), 1, "{message}");
+    }
+    if recovery {
+        assert!(
+            host.inspection_attempts.load(Ordering::SeqCst) >= 2,
+            "agent did not retry rejected inspection"
+        );
+        let rejected=events.iter().position(|event|matches!(event,Event::ToolFinished{name,changed:false,output,..} if name=="inspect_project" && output.contains("unknown field") && output.contains("{} is valid"))).context("native validation feedback did not reach the model bridge")?;
+        let read=events.iter().enumerate().skip(rejected+1).find(|(_,event)|matches!(event,Event::ToolFinished{name,changed:false,output,..} if name=="inspect_project" && serde_json::from_str::<Value>(output).is_ok())).map(|(i,_)|i).context("corrected inspection did not succeed")?;
+        assert!(
+            events
+                .iter()
+                .skip(read + 1)
+                .any(|event| matches!(event, Event::ToolFinished { changed: true, .. })),
+            "no edit after recovery"
+        );
     }
     assert!(host.scoped.load(Ordering::SeqCst));
     println!("AGY native-contract scoped editor task passed: {message}");

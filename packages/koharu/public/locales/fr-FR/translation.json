@@ -110,6 +110,7 @@
       "responding": "Rédaction de la réponse…",
       "waiting": "En attente du traitement…",
       "summary": "Résumé du raisonnement",
+      "toolRejected": "Un appel d’outil a été refusé. L’agent fonctionne toujours et peut réessayer.",
       "changes": "Modifications terminées : {{count}}",
       "background": "L’agent travaille sur « {{name}} ».",
       "newConversation": "Nouvelle conversation"

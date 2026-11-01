@@ -110,6 +110,7 @@
       "responding": "编写回复…",
       "waiting": "等待处理空闲…",
       "summary": "思考摘要",
+      "toolRejected": "工具调用被拒绝。代理仍在运行，可以重试。",
       "changes": "已完成修改：{{count}}",
       "background": "智能体正在处理“{{name}}”。",
       "newConversation": "新会话"

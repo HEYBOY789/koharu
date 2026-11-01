@@ -110,6 +110,7 @@
       "responding": "Escrevendo resposta…",
       "waiting": "Aguardando processamento…",
       "summary": "Resumo do raciocínio",
+      "toolRejected": "Uma chamada de ferramenta foi rejeitada. O agente continua em execução e pode tentar novamente.",
       "changes": "Edições concluídas: {{count}}",
       "background": "O agente está trabalhando em “{{name}}”.",
       "newConversation": "Nova conversa"
