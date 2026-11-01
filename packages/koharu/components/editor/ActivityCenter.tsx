@@ -111,6 +111,11 @@ export function ActivityCenter() {
           <ChevronUp className={`size-3 shrink-0 ${expanded ? 'rotate-180' : ''}`} />
           <span className='shrink-0 text-muted-foreground'>{t('activity.title')}</span>
           <span className='truncate'>{label}</span>
+          {!agentPrimary && primary?.chapter_progress && (
+            <span className='ml-auto shrink-0 text-muted-foreground tabular-nums'>
+              {t('activity.chapterProgress', primary.chapter_progress)}
+            </span>
+          )}
           {errors > 0 ? (
             <span
               className='ml-auto flex shrink-0 items-center gap-1 text-destructive'
@@ -405,12 +410,18 @@ function JobItem({ job }: { job: Job }) {
 }
 
 function JobProjectHeader({ job }: { job: Job }) {
+  const { t } = useTranslation()
   const active = useProject().data
   return job.project ? (
     <div className='flex min-w-0 items-center gap-2 px-3 pt-2 text-[11px] font-semibold'>
       <span className='truncate' title={job.project}>
         {job.project}
       </span>
+      {job.chapter_progress && (
+        <span className='shrink-0 text-[10px] font-normal text-muted-foreground tabular-nums'>
+          {t('activity.chapterProgress', job.chapter_progress)}
+        </span>
+      )}
       {job.project !== active?.name &&
       job.state !== 'queued' &&
       !(job.state === 'running' && job.phase === 'import') ? (

@@ -6,6 +6,7 @@
     "version": "版本"
   },
   "activity": {
+    "chapterProgress": "已完成 {{completed}}/{{total}} 章",
     "retrying": "翻譯暫時出錯。{{seconds}} 秒後重試（{{attempt}}/{{max}}）。已儲存的內容會保留。",
     "dismiss": "關閉",
     "downloadFailed": "下載失敗。",
@@ -332,6 +333,8 @@
     "useModel": "使用 {{provider}} 的 {{model}}"
   },
   "navigator": {
+    "expandChapters": "全部展開",
+    "collapseChapters": "全部摺疊",
     "actionsFor": "{{page}} 的操作",
     "delete": "刪除",
     "emptyDescription": "匯入影像檔案或資料夾以新增頁面。",

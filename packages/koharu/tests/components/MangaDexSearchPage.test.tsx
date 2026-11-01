@@ -167,6 +167,7 @@ it('keeps a background translation and selection intact on offline errors and do
     page: null,
     chapter: null,
     chapter_title: null,
+    chapter_progress: null,
     phase: null,
     stage: null,
     model: null,

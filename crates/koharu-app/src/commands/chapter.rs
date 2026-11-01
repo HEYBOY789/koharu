@@ -13,8 +13,8 @@ use super::{
     ChannelExt as _, Error,
     canvas::CanvasChannel,
     processing::{
-        ChapterPhase, Job, JobChannel, JobId, JobState, PipelineCommitter, Processing,
-        progress_sink,
+        ChapterPhase, ChapterProgress, Job, JobChannel, JobId, JobState, PipelineCommitter,
+        Processing, progress_sink,
     },
     project::{CurrentProject, ProjectLease, ProjectOwner},
     summarizer::{self, SummarizerConfig},
@@ -397,6 +397,10 @@ async fn start(
         page: None,
         chapter: chapters.first().copied(),
         chapter_title: Some(first_title),
+        chapter_progress: Some(ChapterProgress {
+            completed: 0,
+            total: chapters.len(),
+        }),
         phase: if needs_summary {
             Some(ChapterPhase::Summarize)
         } else {
@@ -501,6 +505,10 @@ pub(super) async fn run_bound(
             update(&task, id, |job| {
                 job.chapter = Some(chapter);
                 job.chapter_title = Some(title.clone());
+                job.chapter_progress = Some(ChapterProgress {
+                    completed: index,
+                    total: chapters.len(),
+                });
                 job.completed = index;
                 job.total = chapters.len();
                 job.page = None;
@@ -509,7 +517,14 @@ pub(super) async fn run_bound(
                 job.retry = None;
             });
             if resume && pages.is_empty() {
-                update(&task, id, |job| job.completed = index + 1);
+                update(&task, id, |job| {
+                    job.completed = index + 1;
+                    job.total = chapters.len();
+                    job.chapter_progress = Some(ChapterProgress {
+                        completed: index + 1,
+                        total: chapters.len(),
+                    });
+                });
                 continue;
             }
             let do_summary = summarize.unwrap_or(toggle) && !(resume && summarized);
@@ -528,7 +543,14 @@ pub(super) async fn run_bound(
                 }
             }
             if !translate {
-                update(&task, id, |job| job.completed = index + 1);
+                update(&task, id, |job| {
+                    job.completed = index + 1;
+                    job.total = chapters.len();
+                    job.chapter_progress = Some(ChapterProgress {
+                        completed: index + 1,
+                        total: chapters.len(),
+                    });
+                });
                 continue;
             }
             update(&task, id, |job| {
@@ -551,7 +573,14 @@ pub(super) async fn run_bound(
                 pages
             };
             if pages.is_empty() {
-                update(&task, id, |job| job.completed = index + 1);
+                update(&task, id, |job| {
+                    job.completed = index + 1;
+                    job.total = chapters.len();
+                    job.chapter_progress = Some(ChapterProgress {
+                        completed: index + 1,
+                        total: chapters.len(),
+                    });
+                });
                 continue;
             }
             let request = Request {
@@ -574,7 +603,14 @@ pub(super) async fn run_bound(
                     break;
                 }
             }
-            update(&task, id, |job| job.completed = index + 1);
+            update(&task, id, |job| {
+                job.completed = index + 1;
+                job.total = chapters.len();
+                job.chapter_progress = Some(ChapterProgress {
+                    completed: index + 1,
+                    total: chapters.len(),
+                });
+            });
         }
         Ok(())
     }

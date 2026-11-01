@@ -6,6 +6,7 @@
     "version": "Version"
   },
   "activity": {
+    "chapterProgress": "{{completed}}/{{total}} chapters complete",
     "retrying": "Temporary translation error. Retrying in {{seconds}} s ({{attempt}}/{{max}}). Saved work is kept.",
     "dismiss": "Dismiss",
     "downloadFailed": "Download failed.",
@@ -332,6 +333,8 @@
     "useModel": "Use {{model}} from {{provider}}"
   },
   "navigator": {
+    "expandChapters": "Expand all",
+    "collapseChapters": "Collapse all",
     "actionsFor": "Actions for {{page}}",
     "delete": "Delete",
     "emptyDescription": "Import image files or a folder to add pages.",

@@ -20,6 +20,7 @@ it('keeps a recovering job visible and lets Stop cancel the wait through the exi
     page: null,
     chapter: 'chapter-6',
     chapter_title: 'Chapter 6',
+    chapter_progress: null,
     phase: 'translate',
     stage: 'translation',
     model: 'openai-compatible',

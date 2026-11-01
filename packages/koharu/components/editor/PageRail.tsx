@@ -318,6 +318,11 @@ export function PageRail() {
   }
 
   const openChapter = (chapter: ChapterInfo) => {
+    setCollapsed((current) => {
+      const next = new Set(current)
+      next.delete(chapter.id)
+      return next
+    })
     const first = pages.findIndex((page) => page.id === chapter.pages[0])
     if (first >= 0) select(first, false, false)
     setInspectorPanel('chapter')
@@ -402,6 +407,34 @@ export function PageRail() {
                 onChange={(event) => setQuery(event.currentTarget.value)}
               />
             </label>
+          </div>
+        )}
+
+        {chapters.length > 0 && (
+          <div className='flex shrink-0 flex-wrap gap-1 border-b px-2 py-1.5'>
+            <Button
+              variant='ghost'
+              size='sm'
+              className='h-6 px-2 text-[10px]'
+              disabled={
+                Boolean(normalized) || chapters.every((chapter) => collapsed.has(chapter.id))
+              }
+              onClick={() => {
+                setCollapsed(new Set(chapters.map((chapter) => chapter.id)))
+                pageVirtualizer.scrollToOffset(0)
+              }}
+            >
+              {t('navigator.collapseChapters')}
+            </Button>
+            <Button
+              variant='ghost'
+              size='sm'
+              className='h-6 px-2 text-[10px]'
+              disabled={collapsed.size === 0}
+              onClick={() => setCollapsed(new Set())}
+            >
+              {t('navigator.expandChapters')}
+            </Button>
           </div>
         )}
 

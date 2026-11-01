@@ -6,6 +6,7 @@
     "version": "版本"
   },
   "activity": {
+    "chapterProgress": "已完成 {{completed}}/{{total}} 章",
     "retrying": "翻译暂时出错。{{seconds}}秒后重试（{{attempt}}/{{max}}），已保存个内容会保留。",
     "dismiss": "关闭",
     "downloadFailed": "下载失败哉。",
@@ -332,6 +333,8 @@
     "useModel": "用 {{provider}} 个 {{model}}"
   },
   "navigator": {
+    "expandChapters": "全部展开",
+    "collapseChapters": "全部收拢",
     "actionsFor": "{{page}} 个操作",
     "delete": "删除",
     "emptyDescription": "要添加页面，先导入图像文件或者文件夹。",

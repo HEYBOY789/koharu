@@ -24,6 +24,7 @@ import { ToolBar } from '@/components/editor/ToolBar'
 import { ProviderPreferences } from '@/components/preferences/ProviderPreferences'
 import { SettingsPage } from '@/components/preferences/SettingsPage'
 import {
+  chaptersKey,
   fontsKey,
   pageKey,
   pagesKey,
@@ -478,6 +479,52 @@ describe('greenfield editor', () => {
       'blob:koharu-thumbnail',
     )
     expect(screen.queryByText('01')).not.toBeInTheDocument()
+  })
+
+  it('collapses all chapter pages without changing selection, then opens just the selected chapter', async () => {
+    installProject()
+    const base = queryClient.getQueryData<Awaited<ReturnType<typeof commands.getPage>>>(pageKey)!
+    const chapters = [1, 2, 3].map((index) => ({
+      id: `chapter-${index}`,
+      title: `Chapter ${index}`,
+      pages: [index === 1 ? 'page' : `page-${index}`],
+      summarize: true,
+      has_summary: false,
+      has_setting: false,
+    }))
+    queryClient.setQueryData(chaptersKey, chapters)
+    queryClient.setQueryData(
+      pagesKey,
+      chapters.map((chapter, index) => ({
+        id: chapter.pages[0],
+        label: `Page ${index + 1}`,
+        chapter: chapter.id,
+        size: base.size,
+        source_asset: null,
+        layer_count: 0,
+      })),
+    )
+    const select = vi.spyOn(commands, 'selectPage').mockImplementation(async (id) => ({
+      project: { name: 'Book', revision: 1, active_page: id, can_undo: true, can_redo: false },
+      page: { ...base, id },
+    }))
+    render(<PageRail />)
+    expect(screen.getByRole('button', { name: 'Open Page 1' })).toBeVisible()
+    fireEvent.click(screen.getByRole('button', { name: 'Collapse all' }))
+    expect(screen.queryByRole('button', { name: /Open Page/ })).not.toBeInTheDocument()
+    expect(screen.getAllByRole('button', { name: 'Expand chapter' })).toHaveLength(3)
+    expect(select).not.toHaveBeenCalled()
+    expect(useKoharuStore.getState().selectedPages).toEqual(['page'])
+    fireEvent.click(screen.getByRole('button', { name: 'Chapter 1' }))
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Open Page 1' })).toBeVisible())
+    fireEvent.click(screen.getByRole('button', { name: 'Collapse all' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Chapter 2' }))
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Open Page 2' })).toBeVisible())
+    expect(select).toHaveBeenCalledWith('page-2')
+    expect(screen.queryByRole('button', { name: 'Open Page 1' })).not.toBeInTheDocument()
+    expect(useKoharuStore.getState().inspectorPanel).toBe('chapter')
+    fireEvent.click(screen.getByRole('button', { name: 'Expand all' }))
+    expect(screen.getAllByRole('button', { name: /Open Page/ })).toHaveLength(3)
   })
 
   it('opens a page with keyboard focus navigation and Enter', async () => {
@@ -1878,6 +1925,7 @@ describe('greenfield editor', () => {
           page: 'page',
           chapter: null,
           chapter_title: null,
+          chapter_progress: null,
           phase: null,
           detail: null,
           retry: null,

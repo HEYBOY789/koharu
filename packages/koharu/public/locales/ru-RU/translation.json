@@ -6,6 +6,7 @@
     "version": "Версия"
   },
   "activity": {
+    "chapterProgress": "Завершено глав: {{completed}}/{{total}}",
     "retrying": "Временная ошибка перевода. Повтор через {{seconds}} с ({{attempt}}/{{max}}). Сохранённая работа остаётся.",
     "dismiss": "Закрыть",
     "downloadFailed": "Не удалось скачать.",
@@ -332,6 +333,8 @@
     "useModel": "Использовать {{model}} от {{provider}}"
   },
   "navigator": {
+    "expandChapters": "Развернуть всё",
+    "collapseChapters": "Свернуть всё",
     "actionsFor": "Действия для {{page}}",
     "delete": "Удалить",
     "emptyDescription": "Импортируйте изображения или папку, чтобы добавить страницы.",

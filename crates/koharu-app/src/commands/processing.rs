@@ -52,12 +52,21 @@ pub struct Job {
     pub page: Option<koharu_scene::EntityId>,
     pub chapter: Option<koharu_scene::ChapterId>,
     pub chapter_title: Option<String>,
+    pub chapter_progress: Option<ChapterProgress>,
     pub phase: Option<ChapterPhase>,
     pub stage: Option<koharu_pipeline::Stage>,
     pub model: Option<String>,
     pub detail: Option<String>,
     pub retry: Option<koharu_pipeline::RetryStatus>,
     pub error: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Type)]
+pub struct ChapterProgress {
+    #[specta(type = f64)]
+    pub completed: usize,
+    #[specta(type = f64)]
+    pub total: usize,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Type)]
@@ -257,6 +266,7 @@ pub(crate) async fn process(
         page: None,
         chapter: None,
         chapter_title: None,
+        chapter_progress: None,
         phase: None,
         stage: None,
         model: None,

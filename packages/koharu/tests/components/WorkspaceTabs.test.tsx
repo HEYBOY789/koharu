@@ -92,6 +92,7 @@ it('keeps the open editor state, selected layer and running job while visiting M
     page: null,
     chapter: null,
     chapter_title: null,
+    chapter_progress: null,
     phase: null,
     stage: null,
     model: null,

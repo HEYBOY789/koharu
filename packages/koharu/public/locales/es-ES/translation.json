@@ -6,6 +6,7 @@
     "version": "Versión"
   },
   "activity": {
+    "chapterProgress": "{{completed}}/{{total}} capítulos completados",
     "retrying": "Error temporal de traducción. Reintentando en {{seconds}} s ({{attempt}}/{{max}}). El trabajo guardado se conserva.",
     "dismiss": "Descartar",
     "downloadFailed": "Error en la descarga.",
@@ -332,6 +333,8 @@
     "useModel": "Usar {{model}} de {{provider}}"
   },
   "navigator": {
+    "expandChapters": "Expandir todo",
+    "collapseChapters": "Contraer todo",
     "actionsFor": "Acciones para {{page}}",
     "delete": "Eliminar",
     "emptyDescription": "Importa archivos de imagen o una carpeta para añadir páginas.",

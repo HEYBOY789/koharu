@@ -148,6 +148,7 @@ it('queues a MangaDex project with chosen language and automatic workflow using 
     page: null,
     chapter: null,
     chapter_title: null,
+    chapter_progress: null,
     phase: null,
     stage: null,
     model: null,

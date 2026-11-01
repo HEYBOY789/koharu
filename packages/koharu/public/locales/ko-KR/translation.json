@@ -6,6 +6,7 @@
     "version": "버전"
   },
   "activity": {
+    "chapterProgress": "{{completed}}/{{total}}장 완료",
     "retrying": "일시적인 번역 오류입니다. {{seconds}}초 후 재시도합니다({{attempt}}/{{max}}). 저장된 작업은 유지됩니다.",
     "dismiss": "닫기",
     "downloadFailed": "다운로드에 실패했습니다.",
@@ -332,6 +333,8 @@
     "useModel": "{{provider}}의 {{model}} 사용"
   },
   "navigator": {
+    "expandChapters": "모두 펼치기",
+    "collapseChapters": "모두 접기",
     "actionsFor": "{{page}} 작업",
     "delete": "삭제",
     "emptyDescription": "이미지 파일이나 폴더를 가져와 페이지를 추가하세요.",

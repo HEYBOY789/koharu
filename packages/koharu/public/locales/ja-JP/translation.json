@@ -6,6 +6,7 @@
     "version": "バージョン"
   },
   "activity": {
+    "chapterProgress": "{{completed}}/{{total}}章完了",
     "retrying": "一時的な翻訳エラー。{{seconds}}秒後に再試行（{{attempt}}/{{max}}）。保存済みの作業は保持されます。",
     "dismiss": "閉じる",
     "downloadFailed": "ダウンロードに失敗しました。",
@@ -332,6 +333,8 @@
     "useModel": "{{provider}}の{{model}}を使用"
   },
   "navigator": {
+    "expandChapters": "すべて展開",
+    "collapseChapters": "すべて折りたたむ",
     "actionsFor": "{{page}}の操作",
     "delete": "削除",
     "emptyDescription": "画像ファイルまたはフォルダーを読み込んでページを追加します。",

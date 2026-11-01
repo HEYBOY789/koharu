@@ -6,6 +6,7 @@
     "version": "Sürüm"
   },
   "activity": {
+    "chapterProgress": "{{completed}}/{{total}} bölüm tamamlandı",
     "retrying": "Geçici çeviri hatası. {{seconds}} sn sonra yeniden denenecek ({{attempt}}/{{max}}). Kaydedilen çalışma korunur.",
     "dismiss": "Kapat",
     "downloadFailed": "İndirme başarısız oldu.",
@@ -332,6 +333,8 @@
     "useModel": "{{provider}} sağlayıcısından {{model}} kullan"
   },
   "navigator": {
+    "expandChapters": "Tümünü genişlet",
+    "collapseChapters": "Tümünü daralt",
     "actionsFor": "{{page}} için eylemler",
     "delete": "Sil",
     "emptyDescription": "Sayfa eklemek için görüntü dosyalarını veya bir klasörü içe aktarın.",

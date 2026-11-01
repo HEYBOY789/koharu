@@ -345,6 +345,7 @@ pub(crate) async fn prepare_publication(
         page: None,
         chapter: None,
         chapter_title: Some(name.clone()),
+        chapter_progress: None,
         phase: None,
         stage: None,
         model: config.model.clone(),

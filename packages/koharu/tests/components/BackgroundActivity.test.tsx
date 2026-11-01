@@ -56,6 +56,7 @@ const job: Job = {
   page: 'b-page',
   chapter: 'b-chapter',
   chapter_title: 'Chapter 8',
+  chapter_progress: null,
   phase: 'translate',
   stage: 'translation',
   model: 'openai-compatible',
@@ -63,6 +64,41 @@ const job: Job = {
   error: null,
   retry: null,
 }
+
+it('keeps the run chapter counter independent of page progress and the currently open project', () => {
+  setup()
+  act(() =>
+    useKoharuStore.setState({
+      jobs: {
+        [job.id]: { ...job, chapter_progress: { completed: 28, total: 50 } },
+      },
+    }),
+  )
+  expect(screen.getByText('28/50 chapters complete')).toBeVisible()
+  fireEvent.click(screen.getByRole('button', { name: 'Activity details' }))
+  expect(screen.getAllByText('28/50 chapters complete')).toHaveLength(2)
+  act(() =>
+    useKoharuStore.setState({
+      jobs: {
+        [job.id]: {
+          ...job,
+          completed: 95,
+          total: 100,
+          chapter_progress: { completed: 28, total: 50 },
+        },
+      },
+    }),
+  )
+  expect(screen.getAllByText('28/50 chapters complete')).toHaveLength(2)
+  act(() =>
+    useKoharuStore.setState({
+      jobs: {
+        [job.id]: { ...job, state: 'stopped', chapter_progress: { completed: 28, total: 50 } },
+      },
+    }),
+  )
+  expect(screen.getAllByText('28/50 chapters complete')).toHaveLength(2)
+})
 
 function EditingState() {
   const busy = useProjectBusy()
