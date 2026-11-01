@@ -682,7 +682,7 @@ fn editor_tools() -> Vec<Tool> {
                     ),
                     definition::<RunPipeline>(
                         "run_pipeline",
-                        "Run the configured page pipeline on explicit pages OR text elements inside the edit scope. resume defaults to true to preserve completed work. This is page processing, not chapter summarization; use the Chapter workflow UI for summarize/wiki generation.",
+                        "Only for explicitly requested detection/OCR/translation/inpainting, never for readability, font, outline, size, rendering or canvas refresh. Requires operation (full/detection/ocr/translation/inpainting) and nonempty pages OR elements within edit scope; resume defaults to true. Direct layer edits already save/render. Chapter summary/wiki uses the Chapter workflow UI.",
                     ),
                 ]
             })
@@ -698,8 +698,14 @@ fn definition<T: JsonSchema>(name: &str, description: &str) -> Tool {
 }
 
 fn arguments<T: for<'de> Deserialize<'de> + JsonSchema>(call: &ToolCall) -> Result<T> {
-    serde_json::from_str(&call.arguments)
-        .with_context(|| format!("Invalid arguments for {}. No edit was applied. Read the tool schema and retry with IDs from inspect_page/inspect_project. Required contract: {}", call.name, schema_for!(T).as_value()))
+    serde_json::from_str(&call.arguments).map_err(|error| {
+        let schema = schema_for!(T);
+        let required = schema.as_value()["required"]
+            .as_array()
+            .map(|fields| fields.iter().filter_map(Value::as_str).collect::<Vec<_>>().join(", "))
+            .unwrap_or_default();
+        anyhow!("Invalid arguments for {}: {error}. No edit was applied. Required fields: {required}. Read the tool definition and retry with explicit values and inspected IDs; do not repeat an empty call.", call.name)
+    })
 }
 
 fn nullable<'de, D: serde::Deserializer<'de>, T: Deserialize<'de>>(
@@ -813,6 +819,21 @@ mod tests {
                 .iter()
                 .any(|v| v == "text")
         );
+    }
+
+    #[test]
+    fn editor_contract_missing_pipeline_operation_has_a_compact_recovery_message() {
+        let error = arguments::<RunPipeline>(&call("run_pipeline", json!({})))
+            .err()
+            .unwrap();
+        let message = format!("{error:#}");
+        assert!(message.contains("operation"));
+        assert!(message.contains("No edit was applied"));
+        assert!(
+            message.len() < 500,
+            "validation error leaked the full schema: {message}"
+        );
+        assert!(!message.contains("$defs") && !message.contains("$schema"));
     }
 
     #[tokio::test]
@@ -1298,6 +1319,8 @@ impl From<AgentPipelineOperation> for Operation {
 #[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct RunPipeline {
+    /// Required processing operation: full, detection, ocr, translation or inpainting.
+    /// This generates page content; it does not render, refresh or format existing layers.
     operation: AgentPipelineOperation,
     #[serde(default)]
     pages: Vec<String>,

@@ -435,6 +435,8 @@ async fn installed_cli_keeps_conversation_and_reconnects_project_tools() -> Resu
 async fn installed_agy_edits_layer_with_native_contracts_and_chapter_range() -> Result<()> {
     struct EditorFixture {
         tools: Vec<Tool>,
+        readability: bool,
+        images: Option<(String, String)>,
         calls: std::sync::Mutex<Vec<(String, Value)>>,
         scoped: std::sync::atomic::AtomicBool,
         edited: AtomicUsize,
@@ -449,6 +451,11 @@ async fn installed_agy_edits_layer_with_native_contracts_and_chapter_range() -> 
             bail!("already bound fixture")
         }
         async fn context(&self) -> Result<Value> {
+            if self.readability {
+                return Ok(
+                    json!({"project":{"name":"isolated readability fixture","active_page":FIRST},"first_page":FIRST,"last_page":FIRST,"chapter_count":1,"pages":[{"id":FIRST,"label":"003","position":{"chapter_title":"Chapter 1","chapter_page_number":1,"chapter_page_count":1}}],"pagination":{"next_offset":null}}),
+                );
+            }
             Ok(
                 json!({"project":{"name":"isolated chapter tool test","active_page":FIRST},"first_page":"00000000-0000-4000-8000-000000000001","last_page":LAST,"chapter_count":2,"pages":[],"pagination":{"next_offset":null}}),
             )
@@ -464,6 +471,49 @@ async fn installed_agy_edits_layer_with_native_contracts_and_chapter_range() -> 
                 .push((call.name.clone(), args.clone()));
             match call.name.as_str() {
                 "inspect_project" => Invocation::read(self.context().await?),
+                "inspect_chapters" if self.readability => Invocation::read(
+                    json!({"chapters":[{"id":CHAPTER,"title":"Chapter 1","page_count":1,"first_page":FIRST,"last_page":FIRST}],"pagination":{"next_offset":null}}),
+                ),
+                "inspect_chapter" if self.readability => Invocation::read(
+                    json!({"pages":[{"id":FIRST,"label":"003","chapter_page_number":1}],"pagination":{"next_offset":null}}),
+                ),
+                "inspect_page" if self.readability => Invocation::read(
+                    json!({"page":{"id":FIRST,"label":"003","size":{"width":1000,"height":1400}},"entries":[{"layer":{"kind":"text","id":LAYER,"geometry":{"points":[{"x":150,"y":200},{"x":850,"y":200},{"x":850,"y":700},{"x":150,"y":700}]},"typography":{"preferred_font":"Segoe UI","size":70,"auto_fit":false,"color":[0,0,0,255],"stroke_color":[0,0,0,255],"stroke_width":8},"translation":{"text":"Tôi sẽ tiếp tục bước về phía trước. Không ai có thể ngăn cản tôi."}}}],"pagination":{"next_offset":null}}),
+                ),
+                "view_page" if self.readability => {
+                    anyhow::ensure!(args["page"] == FIRST, "unknown fixture page");
+                    let images = self.images.as_ref().unwrap();
+                    let image = if self.edited.load(Ordering::SeqCst) == 0 {
+                        &images.0
+                    } else {
+                        &images.1
+                    };
+                    Ok(Invocation::read(json!({"page":FIRST}))?
+                        .with_image("Readability fixture", image.clone()))
+                }
+                "set_typography" if self.readability => {
+                    anyhow::ensure!(
+                        self.scoped.load(Ordering::SeqCst) && args["element"] == LAYER,
+                        "read the layer ID and select its page scope first"
+                    );
+                    anyhow::ensure!(
+                        args.as_object().is_some_and(|v| v.len() > 1),
+                        "provide typography properties to change"
+                    );
+                    self.edited.fetch_add(1, Ordering::SeqCst);
+                    Invocation::changed(json!({"element":LAYER,"saved":true}))
+                }
+                "set_geometry" if self.readability => {
+                    anyhow::ensure!(
+                        self.scoped.load(Ordering::SeqCst)
+                            && args["element"] == LAYER
+                            && args["points"].is_array(),
+                        "provide inspected layer ID and page-space points"
+                    );
+                    self.edited.fetch_add(1, Ordering::SeqCst);
+                    Invocation::changed(json!({"element":LAYER,"saved":true}))
+                }
+
                 "inspect_chapters" => Invocation::read(
                     json!({"chapters":[{"id":CHAPTER,"title":"Chapter 1","chapter_number":1,"page_count":3,"first_page":"00000000-0000-4000-8000-000000000001","last_page":FIRST},{"id":"00000000-0000-4000-8000-000000000022","title":"Chapter 2","chapter_number":2,"page_count":2,"last_page":LAST}],"pagination":{"next_offset":null}}),
                 ),
@@ -487,11 +537,28 @@ async fn installed_agy_edits_layer_with_native_contracts_and_chapter_range() -> 
                 ),
                 "set_edit_scope" => {
                     anyhow::ensure!(
-                        args["first_page"] == FIRST && args["last_page"] == LAST,
+                        args["first_page"] == FIRST
+                            && args["last_page"] == if self.readability { FIRST } else { LAST },
                         "range must start at Chapter 1 page 3 and end at the project's last page"
                     );
                     self.scoped.store(true, Ordering::SeqCst);
                     Invocation::read(json!({"page_count":3}))
+                }
+                "run_pipeline" => {
+                    anyhow::ensure!(
+                        self.scoped.load(Ordering::SeqCst),
+                        "select edit scope before editing"
+                    );
+                    anyhow::ensure!(
+                        args["operation"] == "ocr",
+                        "run_pipeline requires operation=ocr for this task"
+                    );
+                    anyhow::ensure!(
+                        args["pages"] == json!([FIRST]),
+                        "the page pipeline must target only the requested page ID"
+                    );
+                    self.edited.fetch_add(1, Ordering::SeqCst);
+                    Invocation::changed(json!({"completed":1,"total":1,"operation":"ocr"}))
                 }
                 "set_typography" => {
                     anyhow::ensure!(
@@ -530,8 +597,25 @@ async fn installed_agy_edits_layer_with_native_contracts_and_chapter_range() -> 
             )
         })
         .collect();
+    let readability = std::env::var("KOHARU_EDITOR_PROBE_TASK").as_deref() == Ok("readability");
+    let images = if readability {
+        use base64::Engine as _;
+        let directory = std::path::PathBuf::from(std::env::var("KOHARU_EDITOR_PROBE_IMAGES")?);
+        let read = |name: &str| -> Result<String> {
+            Ok(format!(
+                "data:image/png;base64,{}",
+                base64::engine::general_purpose::STANDARD
+                    .encode(std::fs::read(directory.join(name))?)
+            ))
+        };
+        Some((read("before.png")?, read("after.png")?))
+    } else {
+        None
+    };
     let host = Arc::new(EditorFixture {
         tools,
+        readability,
+        images,
         calls: Default::default(),
         scoped: Default::default(),
         edited: AtomicUsize::new(0),
@@ -545,6 +629,17 @@ async fn installed_agy_edits_layer_with_native_contracts_and_chapter_range() -> 
     let mut session = Session::default();
     let control = Control::default();
     let task = "Đây là fixture kiểm tra tool, không phải truyện thật. Phạm vi cho phép chỉnh là từ trang thứ 3 của Chapter 1 tới hết project. Chỉ đổi font của layer chữ tại trang thứ 3 Chapter 1 sang Noto Sans; giữ nguyên cỡ chữ, màu, auto_fit và mọi thuộc tính khác. Dùng tool của Koharu và ID đọc từ tool, không dùng shell hay file. Không cần xem ảnh để đổi font. Hoàn tất sau khi tool sửa thành công.";
+    let pipeline_task = "Đây là fixture kiểm tra hợp đồng tool, không phải truyện thật. Chọn phạm vi từ trang thứ 3 Chapter 1 đến hết project, sau đó chạy OCR bằng run_pipeline chỉ cho trang thứ 3 Chapter 1. Chỉ OCR, không dịch, không inpaint hay đổi font. Đọc ID trang qua tool Koharu và gửi tham số đúng schema. Không chạy shell/file. Hoàn tất sau khi tool pipeline thành công.";
+    let task = if std::env::var("KOHARU_EDITOR_PROBE_TASK").as_deref() == Ok("pipeline") {
+        pipeline_task
+    } else {
+        task
+    };
+    let task = if readability {
+        "chỉnh lại các layer bị lỗi chồng chữ sai format chữ, sao cho nó readable đi. làm nguyên project này luôn. Sửa border chữ và font size cho dễ đọc, giữ nguyên nội dung."
+    } else {
+        task
+    };
     let result = tokio::time::timeout(
         Duration::from_secs(180),
         run(
@@ -570,10 +665,21 @@ async fn installed_agy_edits_layer_with_native_contracts_and_chapter_range() -> 
     for (name, args) in host.calls.lock().unwrap().iter() {
         println!("Fixture tool {name}: {args}");
     }
-    assert_eq!(host.edited.load(Ordering::SeqCst), 1, "{message}");
+    if readability {
+        let calls = host.calls.lock().unwrap();
+        assert!(host.edited.load(Ordering::SeqCst) > 0, "{message}");
+        assert!(
+            !calls.iter().any(|(name, _)| name == "run_pipeline"),
+            "layout repair must not reprocess page content: {calls:?}"
+        );
+        assert!(
+            calls.iter().filter(|(name, _)| name == "view_page").count() >= 2,
+            "inspect before/after readability edits"
+        );
+    } else {
+        assert_eq!(host.edited.load(Ordering::SeqCst), 1, "{message}");
+    }
     assert!(host.scoped.load(Ordering::SeqCst));
-    println!(
-        "AGY native-contract chapter range and nonempty typography arguments passed: {message}"
-    );
+    println!("AGY native-contract scoped editor task passed: {message}");
     Ok(())
 }
