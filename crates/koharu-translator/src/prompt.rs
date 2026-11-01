@@ -28,7 +28,17 @@ pub(crate) fn translations(
     text: &str,
     source_segments: &[String],
 ) -> anyhow::Result<Vec<String>> {
-    let output = serde_json::from_str::<TranslationOutput>(text).with_context(|| {
+    let response = text.trim();
+    // Unwrap only one complete response fence; never search for a JSON substring
+    // or repair its contents. ID and schema validation still run on the entire body.
+    let document = response
+        .strip_prefix("```json")
+        .or_else(|| response.strip_prefix("```JSON"))
+        .or_else(|| response.strip_prefix("```"))
+        .and_then(|body| body.strip_suffix("```"))
+        .map(str::trim)
+        .unwrap_or(response);
+    let output = serde_json::from_str::<TranslationOutput>(document).with_context(|| {
         format!(
             "{provider} returned invalid translation JSON for {} segments; response was: {}",
             source_segments.len(),
@@ -142,6 +152,7 @@ fn translation_system_prompt(request: &TranslationRequest) -> String {
             Output requirements:
             - Each input segment has a numeric `id`.
             - Return only a JSON object whose `translations` array contains one object with `id` and translated `text` for every input segment.
+            - Do not wrap the JSON in Markdown code fences or add introductory or trailing prose.
             - Copy every input ID exactly once; order does not matter.
             - Never merge, split, omit, duplicate, or add segments.
         "},
@@ -265,13 +276,51 @@ mod tests {
     }
 
     #[test]
-    fn rejects_wrapped_and_malformed_json() {
+    fn parses_one_complete_fenced_document_without_changing_its_eleven_translations() {
+        let expected = [
+            "Xin chào!",
+            "Đợi một chút.",
+            "Sao lại thế?",
+            "Ha ha ha!",
+            "ĐÙNG!",
+            "Đi bên này.",
+            "Cậu ổn chứ?",
+            "Tôi đang nghĩ…",
+            "Nhìn lên kìa!",
+            "Đừng đổi chuỗi `code` hay ```json trong câu.",
+            "Cậu ấy nói \"đi thôi\".\nĐược rồi!",
+        ];
+        let source = (0..expected.len())
+            .map(|id| format!("source {id}"))
+            .collect::<Vec<_>>();
+        let body = serde_json::to_string_pretty(&json!({"translations": expected.iter().enumerate().map(|(id, text)| json!({"id":id,"text":text})).collect::<Vec<_>>()})).unwrap();
+        // The reported response starts with ```json{, without a newline after the label.
+        for wrapped in [
+            format!("```json{body}\n```"),
+            format!("```json\n{body}\n```"),
+            format!(" \r\n```JSON\r\n{body}\r\n```\r\n "),
+            format!("```\n{body}\n```"),
+        ] {
+            assert_eq!(
+                translations("openai-compatible", &wrapped, &source).unwrap(),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_prose_incomplete_fences_and_malformed_json() {
         let source = ["one".to_owned(), "two".to_owned()];
         for response in [
-            "```json\n{\"translations\":[{\"id\":0,\"text\":\"hello\"},{\"id\":1,\"text\":\"world\"}]}\n```",
             r#"{translations: [{id: 0, text: 'hello'}, {id: 1, text: 'world'},],}"#,
             r#"Here is the result: {"translations": [{"id": 0, "text": "hello"}, {"id": 1, "text": "world"},]}"#,
             "{\"translations\":[{\"id\":0,\"text\":\"hello\"},{\"id\":1,\"text\":\"world\"",
+            "```json\n{\"translations\":[{\"id\":0,\"text\":\"hello\"},{\"id\":1,\"text\":\"world\"}]}",
+            "```json\n{translations: [{id: 0, text: 'hello'}, {id: 1, text: 'world'}]}\n```",
+            "Here is the result:\n```json\n{\"translations\":[{\"id\":0,\"text\":\"hello\"},{\"id\":1,\"text\":\"world\"}]}\n```",
+            "```json\n{\"translations\":[{\"id\":0,\"text\":\"hello\"},{\"id\":1,\"text\":\"world\"}]}\n```\nMore explanation",
+            "```javascript\n{\"translations\":[{\"id\":0,\"text\":\"hello\"},{\"id\":1,\"text\":\"world\"}]}\n```",
+            "```json\n{\"translations\":[{\"id\":0,\"text\":\"hello\"}]}\n```\n```json\n{\"translations\":[{\"id\":1,\"text\":\"world\"}]}\n```",
         ] {
             assert!(
                 translations("test", response, &source).is_err(),
@@ -322,6 +371,9 @@ mod tests {
         assert!(translations("test", response, &source).is_err());
         let extra = r#"{"translations":[{"id":0,"text":"hello"},{"id":1,"text":"world"},{"id":9,"text":"extra"}]}"#;
         assert!(translations("test", extra, &source).is_err());
+        for invalid in [short, response, extra] {
+            assert!(translations("test", &format!("```json\n{invalid}\n```"), &source).is_err());
+        }
     }
 
     #[test]

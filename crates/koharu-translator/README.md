@@ -30,5 +30,12 @@ Compatible requests explicitly set `stream: false` because the response reader
 expects one JSON completion; this also prevents proxies from choosing an SSE
 response when the field is omitted.
 
+The shared translation reader accepts bare JSON or a single complete `json`/unlabelled
+code fence around it, including a compact opening such as ` ```json{ `. Only that
+outer framing is removed. It still rejects malformed/truncated JSON, surrounding
+explanations, multiple documents and missing/duplicate/out-of-range segment IDs;
+translated strings are preserved exactly. Strict structured-output requests remain
+enabled, and the prompt explicitly prohibits Markdown framing.
+
 References: [Google thinking levels](https://ai.google.dev/gemini-api/docs/thinking)
 and [Gemini 3 thinking controls](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/start/get-started-with-gemini-3).

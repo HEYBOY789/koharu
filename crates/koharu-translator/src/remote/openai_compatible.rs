@@ -295,8 +295,8 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "manual acceptance: sends one synthetic translation through the configured OS credential to a local proxy"]
-    async fn local_gemini_proxy_accepts_disabled_reasoning() {
+    #[ignore = "manual acceptance: sends eleven synthetic dialogue segments and reference context through the configured OS credential to a local proxy"]
+    async fn local_gemini_proxy_translates_eleven_segments_with_context() {
         let base = Url::parse(
             &std::env::var("KOHARU_COMPATIBLE_SMOKE_URL").expect("set the local proxy base URL"),
         )
@@ -311,7 +311,27 @@ mod tests {
             .timeout(std::time::Duration::from_secs(90))
             .build()
             .unwrap();
-        let request = TranslationRequest::new(["Hello."], crate::Language::Vietnamese);
+        let request = TranslationRequest::new(
+            [
+                "Wait for me!",
+                "Why are there so many rocks here?",
+                "Splash!",
+                "Splash, splash!",
+                "Ha ha ha!",
+                "We should keep an eye on him.",
+                "Wear a life jacket if you swim farther out.",
+                "Kaoru!",
+                "Hey, look over here!",
+                "Don't go near the dangerous waves.",
+                "Okay!",
+            ],
+            crate::Language::Vietnamese,
+        )
+        .with_context([crate::TranslationContext::new(
+            "Let's go to the beach.",
+            "Mình ra bãi biển đi.",
+        )])
+        .with_instructions("Use casual Vietnamese dialogue and concise sound effects.");
         let output = translate(
             &client,
             &OpenAiCompatibleConfig {
@@ -323,8 +343,8 @@ mod tests {
         )
         .await
         .unwrap();
-        assert_eq!(output.len(), 1);
-        assert!(!output[0].trim().is_empty());
+        assert_eq!(output.len(), 11);
+        assert!(output.iter().all(|text| !text.trim().is_empty()));
     }
 
     #[test]
