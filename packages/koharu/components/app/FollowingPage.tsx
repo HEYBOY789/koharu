@@ -388,22 +388,20 @@ export function FollowingPage({ active }: { active: boolean }) {
           </nav>
         )}
       </div>
-      <SourceImportDialog
-        open={creating !== null}
-        onOpenChange={(open) => {
-          if (!open) setCreating(null)
-        }}
-        manga={
-          creating
-            ? {
-                title: creating.title,
-                url: sourceUrl(creating),
-                language: creating.language,
-                tags: [],
-              }
-            : undefined
-        }
-      />
+      {creating && (
+        <SourceImportDialog
+          open
+          onOpenChange={(open) => {
+            if (!open) setCreating(null)
+          }}
+          manga={{
+            title: creating.title,
+            url: sourceUrl(creating),
+            language: creating.language,
+            tags: [],
+          }}
+        />
+      )}
     </main>
   )
 }

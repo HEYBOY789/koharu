@@ -2,9 +2,9 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 
 import { FollowingPage } from '@/components/app/FollowingPage'
+import en from '@/public/locales/en-US/translation.json'
 import { commands, type FollowedManga } from '@koharu/bridge/protocol'
 
-vi.mock('@/components/app/SourceImportDialog', () => ({ SourceImportDialog: () => null }))
 const openUrl = vi.hoisted(() => vi.fn(async () => undefined))
 vi.mock('@tauri-apps/plugin-opener', () => ({ openUrl }))
 afterEach(cleanup)
@@ -29,6 +29,62 @@ const website: FollowedManga = {
 }
 beforeEach(() => {
   vi.spyOn(commands, 'getFollowing').mockResolvedValue([manga, website])
+})
+
+it('opens each followed title with its own source URL and a fresh editable import form', async () => {
+  vi.spyOn(commands, 'getSourceImportSettings').mockResolvedValue({
+    node: 'node',
+    script: '/publisher/main.ts',
+    catalog_url: '',
+    backend: 'agy',
+    binary: null,
+    model: null,
+    offline: false,
+  })
+  vi.spyOn(commands, 'inspectPublication').mockResolvedValue({
+    node: '/node',
+    script: '/publisher/main.ts',
+    binary: '/agy',
+    missing: [],
+    catalog: null,
+    catalogError: null,
+  })
+  const preview = vi.spyOn(commands, 'previewSourceUrl').mockImplementation(async (url) => ({
+    title: 'Preview',
+    source_url: url,
+    chapters: [{ url: 'https://reader.example/chapter-1', number: 1, title: 'Chapter 1' }],
+  }))
+  vi.spyOn(commands, 'importSourceUrl').mockResolvedValue('queued-import')
+  render(<FollowingPage active />)
+  const tracked = (await screen.findByRole('heading', { name: manga.title })).closest('article')!
+  fireEvent.click(within(tracked).getByRole('button', { name: en.mangadex.createProject }))
+  const input = await screen.findByRole('textbox', { name: en.sourceImport.url })
+  const mangaDexURL = `https://mangadex.org/title/${manga.source.kind === 'manga_dex' ? manga.source.id : ''}`
+  expect(input).toHaveValue(mangaDexURL)
+  expect(input).not.toHaveAttribute('readonly')
+  const inspect = screen.getByRole('button', { name: en.sourceImport.preview })
+  await waitFor(() => expect(inspect).toBeEnabled())
+  fireEvent.click(inspect)
+  await waitFor(() =>
+    expect(preview).toHaveBeenCalledWith(
+      mangaDexURL,
+      expect.anything(),
+      expect.objectContaining({ language: 'en', download_url: null }),
+    ),
+  )
+  const start = screen.getByRole('button', { name: en.sourceImport.start })
+  await waitFor(() => expect(start).toBeEnabled())
+  fireEvent.click(start)
+  await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+  const other = screen.getByRole('heading', { name: website.title }).closest('article')!
+  fireEvent.click(within(other).getByRole('button', { name: en.mangadex.createProject }))
+  expect(await screen.findByRole('textbox', { name: en.sourceImport.url })).toHaveValue(
+    'https://reader.example/book',
+  )
+  expect(screen.getByRole('textbox', { name: en.sourceImport.projectName })).toHaveValue(
+    `${website.title} [en]`,
+  )
+  expect(screen.getByRole('button', { name: en.sourceImport.start })).toBeDisabled()
 })
 
 it('uses native image bytes for followed MangaDex covers instead of a direct CDN image request', async () => {

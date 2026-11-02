@@ -1,4 +1,5 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 
 import { SourceImportDialog } from '@/components/app/SourceImportDialog'
@@ -166,6 +167,10 @@ it('queues a MangaDex project with chosen language and automatic workflow using 
     />,
   )
   const button = await screen.findByRole('button', { name: en.sourceImport.start })
+  const mangaURL = screen.getByRole('textbox', { name: en.sourceImport.url })
+  await userEvent.clear(mangaURL)
+  await userEvent.type(mangaURL, url)
+  expect(mangaURL).toHaveValue(url)
   await waitFor(() =>
     expect(screen.getByRole('button', { name: en.sourceImport.preview })).toBeEnabled(),
   )

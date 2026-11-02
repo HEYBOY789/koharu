@@ -235,7 +235,6 @@ export function SourceImportDialog({
                     type='url'
                     autoFocus
                     value={url}
-                    readOnly={Boolean(manga)}
                     onChange={(event) => setURL(event.target.value)}
                     onBlur={() => setURLTouched(true)}
                     aria-invalid={(urlTouched && !validURL) || undefined}
