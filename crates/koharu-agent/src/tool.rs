@@ -1,7 +1,7 @@
 use anyhow::Result;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{Value, json};
 
 use crate::Control;
 
@@ -39,6 +39,20 @@ pub struct ToolCall {
     pub call_id: String,
     pub name: String,
     pub arguments: String,
+}
+
+impl ToolCall {
+    pub(crate) fn rejected(&self, tools: &[Tool], error: &anyhow::Error) -> Value {
+        json!({
+            "ok": false,
+            "error": format!("{error:#}"),
+            "tool": self.name,
+            "received_arguments": serde_json::from_str::<Value>(&self.arguments)
+                .unwrap_or_else(|_| Value::String(self.arguments.clone())),
+            "input_schema": tools.iter().find(|tool| tool.name == self.name)
+                .map(|tool| &tool.parameters),
+        })
+    }
 }
 
 #[derive(Clone, Debug)]

@@ -655,8 +655,8 @@ fn editor_tools() -> Vec<Tool> {
                         "Read the current project overview and a batch of page IDs. Follow pagination.next_offset until null to list every page. Layer content is read separately with inspect_page.",
                     ),
                     definition::<Window>("inspect_chapters", "List ordered chapter IDs, titles and page counts, including empty chapters. Follow pagination.next_offset. Page labels repeat across chapters: never use a label as an ID."),
-                    definition::<InspectChapter>("inspect_chapter", "Read the ordered page IDs and 1-based page numbers of one chapter. Use this to resolve requests such as page 3 of Chapter 1. Follow pagination.next_offset."),
-                    definition::<EditRange>("set_edit_scope", "Before editing, select the user's inclusive range with first_page and last_page IDs from inspection. Native rejects every mutation outside it. For the whole project use overview.first_page and overview.last_page; for a single page use the same ID twice. Never expand the range to work around an error."),
+                    definition::<InspectChapter>("inspect_chapter", "Read ordered page IDs and 1-based positions of one chapter. Required argument: chapter = an ID from inspect_chapters.chapters[].id. Optional offset and limit control pagination. Use this to resolve requests such as page 16 of Chapter 1. Follow pagination.next_offset."),
+                    definition::<EditRange>("set_edit_scope", "Before editing, supply BOTH required arguments first_page and last_page: actual page IDs read through inspection. Empty arguments are invalid. The range is inclusive. Native rejects mutations outside it. For the whole project use overview.first_page and overview.last_page; for a single page use the same ID twice. Never expand the range to work around an error."),
                     definition::<InspectPage>(
                         "inspect_page",
                         "Read one page's semantic layer and analysis-region entries, including text, font and geometry. Follow pagination.next_offset until null for all entries. No image rendering is performed.",

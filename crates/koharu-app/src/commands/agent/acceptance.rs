@@ -20,6 +20,10 @@ fn call(name: &str, args: Value) -> ToolCall {
 
 impl Fixture {
     async fn new() -> Result<Self> {
+        Self::with_chapter_pages(3).await
+    }
+
+    async fn with_chapter_pages(count: usize) -> Result<Self> {
         let directory = tempfile::tempdir()?;
         let mut project = Project::create(
             "native editor acceptance".into(),
@@ -28,19 +32,22 @@ impl Fixture {
         .await?;
         let mut pages = vec![];
         let patch = project.snapshot().patch(|edit| {
-            for _ in 0..4 {
-                pages.push(edit.add_page(PageDraft::new("003", 1000.0, 1600.0), At::End)?);
+            for index in 0..=count {
+                pages.push(edit.add_page(
+                    PageDraft::new(format!("{:03}", index % count + 1), 1000.0, 1600.0),
+                    At::End,
+                )?);
             }
             Ok(())
         })?;
         project.session.commit(patch).await?;
         let (_, chapter) = project.create_chapter("Chapter 1".into(), false).await?;
-        for page in &pages[..3] {
+        for page in &pages[..count] {
             project.assign_page(*page, chapter).await?;
         }
         let (_, chapter) = project.create_chapter("Chapter 2".into(), false).await?;
-        project.assign_page(pages[3], chapter).await?;
-        let page = pages[2];
+        project.assign_page(pages[count], chapter).await?;
+        let page = pages[count - 1];
         let add = LayerEdit::parse(&call(
             "add_text_box",
             json!({"page":page,"x":10,"y":20,"width":200,"height":100}),
@@ -323,6 +330,7 @@ struct NativeHost {
     binding: Option<Binding>,
     renderer: koharu_renderer::Renderer,
     calls: Arc<parking_lot::Mutex<Vec<Value>>>,
+    argument_faults: Arc<parking_lot::Mutex<Vec<&'static str>>>,
 }
 
 #[async_trait]
@@ -354,6 +362,27 @@ impl Host for NativeHost {
 
     async fn invoke(&self, call: ToolCall, control: &Control) -> Result<Invocation> {
         anyhow::ensure!(!control.is_cancelled(), "Agent request was cancelled");
+        let inject = {
+            let mut faults = self.argument_faults.lock();
+            faults
+                .iter()
+                .position(|name| *name == call.name)
+                .map(|index| faults.remove(index))
+        };
+        if let Some(name) = inject {
+            let error = match name {
+                "inspect_chapter" => {
+                    arguments::<InspectChapter>(&self::call(name, json!({"chapter_id":"fixture"})))
+                        .err()
+                }
+                "set_edit_scope" => arguments::<EditRange>(&self::call(name, json!({}))).err(),
+                _ => unreachable!(),
+            }
+            .context("expected native validation rejection")?;
+            bail!(
+                "Controlled native validation fault in this isolated fixture; the submitted call was not executed. Retry this same tool using its input_schema. Sample rejected payload error: {error:#}"
+            );
+        }
         let mut project = self.project.lock().await;
         let binding = self.binding.as_ref().context("bound test host")?;
         binding.check(&project)?;
@@ -432,7 +461,9 @@ async fn installed_agy_applies_real_native_layer_settings() -> Result<()> {
     let store = std::env::var("KOHARU_NATIVE_ACCEPTANCE_STORE")
         .context("provide an isolated copy of the font package cache for this manual test")?;
     koharu_runtime::Store::configure(std::path::PathBuf::from(store))?;
-    let f = Fixture::new().await?;
+    let recovery = std::env::var_os("KOHARU_NATIVE_ARGUMENT_RECOVERY").is_some();
+    let page_number = if recovery { 16 } else { 3 };
+    let f = Fixture::with_chapter_pages(page_number).await?;
     let renderer = koharu_renderer::Renderer::new()?;
     let families = renderer.available_fonts().await?;
     let family = families
@@ -451,6 +482,11 @@ async fn installed_agy_applies_real_native_layer_settings() -> Result<()> {
         "stroke_width":1.5,"alignment":"Center","writing_mode":"Horizontal"});
     let page = f.page;
     let layer = f.layer;
+    let last_page = if recovery {
+        f.project.snapshot().pages().last().unwrap().id()
+    } else {
+        page
+    };
     let _directory = f.directory;
     let calls = Arc::new(parking_lot::Mutex::new(Vec::new()));
     let project = Arc::new(tokio::sync::Mutex::new(f.project));
@@ -459,6 +495,11 @@ async fn installed_agy_applies_real_native_layer_settings() -> Result<()> {
         binding: None,
         renderer: renderer.clone(),
         calls: calls.clone(),
+        argument_faults: Arc::new(parking_lot::Mutex::new(if recovery {
+            vec!["inspect_chapter", "set_edit_scope"]
+        } else {
+            vec![]
+        })),
     };
     let agent = koharu_agent::Agent::new(koharu_agent::Codex::new()?, host)?;
     let config = agent.config()?;
@@ -475,10 +516,20 @@ async fn installed_agy_applies_real_native_layer_settings() -> Result<()> {
         "select the intended AGY Flash model before this manual test"
     );
     let prompt = format!(
-        "Native editor property acceptance test on an ISOLATED temporary project. Resolve Chapter 1 page 3 through inspect_chapters/inspect_chapter; edit ONLY that one page. Inspect its existing text layer. Apply exactly these typography properties: {expected}. Set that layer's geometry to page-space points [{{\"x\":40,\"y\":60}},{{\"x\":280,\"y\":60}},{{\"x\":280,\"y\":190}},{{\"x\":40,\"y\":190}}]. Set visibility=true and opacity=0.4. Preserve all original words and all other pages. Use the real layer tools, no pipeline. Inspect the page before and after, including its native rendered image, and verify the saved properties. You must call view_page again AFTER the last edit, not just twice before editing. Reply briefly in Vietnamese."
+        "Native editor property acceptance test on an ISOLATED temporary project. Resolve Chapter 1 page {page_number} through inspect_chapters/inspect_chapter; select the inclusive edit scope from that page to page ID {last_page}. Inspect its existing text layer and edit only that layer; other pages are blank. Apply exactly these typography properties: {expected}. Set that layer's geometry to page-space points [{{\"x\":40,\"y\":60}},{{\"x\":280,\"y\":60}},{{\"x\":280,\"y\":190}},{{\"x\":40,\"y\":190}}]. Set visibility=true and opacity=0.4. Preserve all original words and all other pages. Use the real layer tools, no pipeline. Inspect the page before and after, including its native rendered image, and verify the saved properties. You must call view_page again AFTER the last edit, not just twice before editing. Reply briefly in Vietnamese."
     );
+    let prompt = if recovery {
+        format!(
+            "This is an explicit tool-error recovery test in a disposable fixture. You must call inspect_chapters, then inspect_chapter to resolve Chapter 1 page 16 even when the overview already contains its ID; next call set_edit_scope. The test host will inject ONE controlled native validation error on the first inspect_chapter and on the first set_edit_scope call. No mutation occurs for those rejected attempts. Read each returned error and input_schema and retry the same tool successfully before proceeding. Always send valid arguments obtained from inspection, do not simulate errors or stop at a warning. After both recoveries, complete this task: {prompt}"
+        )
+    } else {
+        prompt
+    };
     let control = Control::default();
-    let future = agent.run(RunId::new(), prompt, control.clone(), |_| {});
+    let mut events = Vec::new();
+    let future = agent.run(RunId::new(), prompt, control.clone(), |event| {
+        events.push(event)
+    });
     let result = match tokio::time::timeout(std::time::Duration::from_secs(180), future).await {
         Ok(result) => result?,
         Err(_) => {
@@ -488,6 +539,41 @@ async fn installed_agy_applies_real_native_layer_settings() -> Result<()> {
         }
     };
     agent.clear().await;
+    let mut recoveries = Vec::new();
+    if recovery {
+        for tool in ["inspect_chapter", "set_edit_scope"] {
+            let rejected = events.iter().position(|event| matches!(event,
+                koharu_agent::Event::ToolFinished { name, changed: false, output, .. }
+                if name == tool && serde_json::from_str::<Value>(output).is_ok_and(|value|value["ok"] == false)))
+                .with_context(||format!("model did not reproduce the rejected {tool} call"))?;
+            let koharu_agent::Event::ToolFinished { output, .. } = &events[rejected] else {
+                unreachable!()
+            };
+            let feedback: Value = serde_json::from_str(output)?;
+            assert_eq!(feedback["tool"], tool);
+            assert!(feedback["input_schema"]["required"].is_array());
+            if tool == "inspect_chapter" {
+                assert!(feedback["error"].as_str().unwrap().contains("chapter_id"));
+                assert!(feedback["received_arguments"]["chapter"].is_string());
+            } else {
+                assert!(feedback["error"].as_str().unwrap().contains("first_page"));
+                assert!(feedback["received_arguments"]["first_page"].is_string());
+                assert!(feedback["received_arguments"]["last_page"].is_string());
+            }
+            let success = events.iter().enumerate().skip(rejected + 1).find(|(_,event)| matches!(event,
+                koharu_agent::Event::ToolFinished { name, changed: false, output, .. }
+                if name == tool && serde_json::from_str::<Value>(output).is_ok_and(|value|value["ok"] != false)))
+                .map(|(index,_)| index).with_context(||format!("no corrected {tool} invocation after rejection"))?;
+            assert!(
+                events.iter().skip(success + 1).any(|event| matches!(
+                    event,
+                    koharu_agent::Event::ToolFinished { changed: true, .. }
+                )),
+                "no saved edit after {tool} recovery"
+            );
+            recoveries.push(feedback);
+        }
+    }
     let snapshot = project.lock().await.snapshot();
     let view = serde_json::to_value(Project::page(&snapshot, page)?)?;
     let value = view["layers"]
@@ -541,15 +627,15 @@ async fn installed_agy_applies_real_native_layer_settings() -> Result<()> {
             .iter()
             .filter(|call| call["tool"] == "set_edit_scope")
             .all(|call| call["arguments"]["first_page"] == page.to_string()
-                && call["arguments"]["last_page"] == page.to_string()),
-        "model must select only Chapter 1 page 3"
+                && call["arguments"]["last_page"] == last_page.to_string()),
+        "model must select the requested chapter range"
     );
     if let Ok(path) = std::env::var("KOHARU_NATIVE_ACCEPTANCE_DIR") {
         std::fs::create_dir_all(&path)?;
         std::fs::write(
             std::path::Path::new(&path).join("native-acceptance.json"),
             serde_json::to_vec_pretty(
-                &json!({"model":config.agy.model,"layer":value,"calls":*calls,"message":result.message}),
+                &json!({"model":config.agy.model,"layer":value,"calls":*calls,"recoveries":recoveries,"message":result.message}),
             )?,
         )?;
         let rasterizer = Arc::new(koharu_rasterizer::Rasterizer::new()?);

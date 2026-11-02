@@ -2,6 +2,18 @@
 
 Ngày: 31/10/2026. Source đã kiểm tra: `b4ce18dcbedc0f805145d8d2940e0189abd2349d`.
 
+## Phục hồi lời gọi tool sai tham số — 02/11/2026
+
+Hai ảnh tiếp theo ghi nhận `inspect_chapter` nhận `chapter_id` thay vì `chapter`, và `set_edit_scope` thiếu `first_page`/`last_page`. Đây là lời gọi bị validator từ chối trước khi thay đổi dữ liệu. Kiểm tra giao thức xác nhận `tools/list` chuyển nguyên schema, gồm các field bắt buộc; chưa có bằng chứng schema bị mất khi bridge chuyển cho AGY. Việc model tiếp tục điền sai không được xem là đã hết chỉ vì một lượt nghiệm thu trước đó thành công.
+
+Phản hồi lỗi nay kèm `tool`, `received_arguments` nguyên nghĩa và `input_schema` lấy trực tiếp từ định nghĩa tool đang dùng, cùng `ok:false` và lỗi native. AGY/Pi qua MCP và Codex dùng chung cách tạo phản hồi này. Chuỗi JSON không hợp lệ được giữ nguyên dưới dạng chuỗi, không tự sửa thành một payload khác. Không đoán ID, chấp nhận alias `chapter_id`, chọn phạm vi mặc định hoặc tự rộng phạm vi để qua lỗi. UI tiếp tục lấy riêng trường `error` cho cảnh báo ngắn và không hiển thị nguyên schema.
+
+Mô tả `inspect_chapter` nêu rõ key `chapter` chứa ID từ `inspect_chapters.chapters[].id`; mô tả `set_edit_scope` nêu rõ cần cả hai ID trang và `{}` không hợp lệ. Kiểm tra bridge tái hiện hai payload sai, xác minh lỗi không tính là chỉnh sửa, schema/arguments không bị đổi và các lời gọi đã sửa được chuyển đúng tới host. Kiểm tra model dùng fixture native gồm 16 trang ở Chapter 1 và một trang Chapter 2, với lỗi validator được tiêm rõ ràng trong host thử nghiệm để xác minh khả năng gọi lại sau khi bị từ chối. Lượt yêu cầu model tự tạo payload sai trước đó không kích hoạt lỗi cần thử, nên không được tính là nghiệm thu phục hồi.
+
+Lượt AGY `gemini-3.8-flash-high` có tiêm lỗi đã qua: từng tool bị từ chối rồi được gọi lại thành công, phạm vi bắt đầu đúng trang 016 của Chapter 1 và kết thúc ở trang cuối project. Sau đó native xác minh đủ thuộc tính đã lưu và có render sau chỉnh sửa. Đây là kiểm tra phục hồi lỗi được tiêm có kiểm soát, không phải khẳng định model tự tái tạo hai payload sai trong ảnh.
+
+Giới hạn: đây là tăng chất lượng phản hồi để model phục hồi. Nó không bảo đảm model không bao giờ gọi sai hoặc tự hoàn thành mọi lượt thực tế. Kết quả build và bàn giao được ghi trong validation của workspace website. Không chỉnh hay dừng lượt agent/project đang chạy của người dùng để làm bài thử.
+
 ## Kiểm tra thuộc tính layer và vị trí agent — 02/11/2026
 
 Lần kiểm tra này đối chiếu trực tiếp `TypeInspector`, `LayerEditor`, cây Layers và các tool native. Layer mutations dùng chung một bộ lệnh đã parse cho ứng dụng và fixture nghiệm thu; fixture không còn giả lập thành công bằng cách tăng bộ đếm. Các thay đổi vẫn giữ project lease, revision check, phạm vi trang, patch native, Undo và đồng bộ canvas của ứng dụng.

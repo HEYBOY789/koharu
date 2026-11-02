@@ -128,6 +128,7 @@ pub(super) fn chapters(snapshot: &Snapshot, query: &Window) -> Result<Value> {
 #[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub(super) struct InspectChapter {
+    /// Chapter ID from inspect_chapters.chapters[].id, supplied under the key chapter.
     pub chapter: String,
     #[serde(default)]
     pub offset: usize,

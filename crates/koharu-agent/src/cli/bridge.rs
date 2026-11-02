@@ -139,7 +139,8 @@ async fn dispatch(
         "tools/call" => {
             let params = &request["params"];
             let name = params["name"].as_str().unwrap_or_default().to_owned();
-            if !context.host.tools().iter().any(|tool| tool.name == name) {
+            let tools = context.host.tools();
+            if !tools.iter().any(|tool| tool.name == name) {
                 return Json(json!({"jsonrpc":"2.0","id":id,"error":{"code":-32602,"message":"Unknown Koharu tool"}})).into_response();
             }
             let call_id = Uuid::new_v4().to_string();
@@ -151,21 +152,16 @@ async fn dispatch(
                     name: name.clone(),
                 })
                 .await;
-            let result = context
-                .host
-                .invoke(
-                    ToolCall {
-                        call_id: call_id.clone(),
-                        name: name.clone(),
-                        arguments: params
-                            .get("arguments")
-                            .cloned()
-                            .unwrap_or_else(|| json!({}))
-                            .to_string(),
-                    },
-                    &context.control,
-                )
-                .await;
+            let call = ToolCall {
+                call_id: call_id.clone(),
+                name: name.clone(),
+                arguments: params
+                    .get("arguments")
+                    .cloned()
+                    .unwrap_or_else(|| json!({}))
+                    .to_string(),
+            };
+            let result = context.host.invoke(call.clone(), &context.control).await;
             let (content, changed, error, output) = match result {
                 Ok(invocation) => {
                     let output = invocation.value.to_string();
@@ -180,7 +176,7 @@ async fn dispatch(
                     (content, invocation.changed, false, output)
                 }
                 Err(error) => {
-                    let message = format!("{error:#}");
+                    let message = call.rejected(&tools, &error).to_string();
                     (
                         vec![json!({"type":"text","text":message})],
                         false,

@@ -8,7 +8,7 @@ use tokio::sync::Mutex;
 use uuid::Uuid;
 
 use crate::{
-    AgentModel, Backend, Codex, Config, Control, Host, ToolCall, cli,
+    AgentModel, Backend, Codex, Config, Control, Host, cli,
     codex::{Delta, Request, function_output, message, project_context},
 };
 
@@ -302,27 +302,14 @@ where
                     call_id: call.call_id.clone(),
                     name: call.name.clone(),
                 });
-                let invocation = host
-                    .invoke(
-                        ToolCall {
-                            call_id: call.call_id.clone(),
-                            name: call.name.clone(),
-                            arguments: call.arguments,
-                        },
-                        control,
-                    )
-                    .await;
+                let invocation = host.invoke(call.clone(), control).await;
                 let (output, changed, images) = match invocation {
                     Ok(invocation) => (
                         json!({ "ok": true, "value": invocation.value }),
                         invocation.changed,
                         invocation.images,
                     ),
-                    Err(error) => (
-                        json!({ "ok": false, "error": format!("{error:#}") }),
-                        false,
-                        Vec::new(),
-                    ),
+                    Err(error) => (call.rejected(&tools, &error), false, Vec::new()),
                 };
                 publish(Event::ToolFinished {
                     run,

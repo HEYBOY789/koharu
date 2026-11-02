@@ -8,6 +8,134 @@ use crate::{Invocation, Tool, ToolCall};
 #[derive(Clone, Default)]
 struct Fixture(Arc<AtomicUsize>);
 
+#[derive(Default)]
+struct RequiredArgumentsFixture(AtomicUsize);
+
+#[async_trait]
+impl Host for RequiredArgumentsFixture {
+    async fn bind(&self, _: RunId, _: Control) -> Result<Arc<dyn Host>> {
+        unreachable!()
+    }
+    async fn context(&self) -> Result<Value> {
+        Ok(json!({}))
+    }
+    fn tools(&self) -> Vec<Tool> {
+        vec![
+            Tool::new(
+                "inspect_chapter",
+                "Read chapter",
+                json!({"type":"object","additionalProperties":false,"properties":{"chapter":{"type":"string"},"offset":{"type":"integer"},"limit":{"type":"integer"}},"required":["chapter"]}),
+            ),
+            Tool::new(
+                "set_edit_scope",
+                "Select explicit range",
+                json!({"type":"object","additionalProperties":false,"properties":{"first_page":{"type":"string"},"last_page":{"type":"string"}},"required":["first_page","last_page"]}),
+            ),
+        ]
+    }
+    async fn invoke(&self, call: ToolCall, _: &Control) -> Result<Invocation> {
+        #[derive(serde::Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Chapter {
+            chapter: String,
+            #[serde(default)]
+            offset: usize,
+            #[serde(default)]
+            limit: Option<usize>,
+        }
+        #[derive(serde::Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Range {
+            first_page: String,
+            last_page: String,
+        }
+        let result = match call.name.as_str() {
+            "inspect_chapter" => {
+                let args: Chapter = serde_json::from_str(&call.arguments)?;
+                json!({"chapter":args.chapter,"offset":args.offset,"limit":args.limit})
+            }
+            "set_edit_scope" => {
+                let args: Range = serde_json::from_str(&call.arguments)?;
+                json!({"first_page":args.first_page,"last_page":args.last_page})
+            }
+            _ => bail!("unknown test tool"),
+        };
+        self.0.fetch_add(1, Ordering::SeqCst);
+        Invocation::read(result)
+    }
+}
+
+#[tokio::test]
+async fn bridge_rejected_arguments_return_original_input_and_authoritative_schema() -> Result<()> {
+    let host = Arc::new(RequiredArgumentsFixture::default());
+    let tools = host.tools();
+    let (events, mut receiver) = mpsc::channel(32);
+    let bridge =
+        bridge::Bridge::start(host.clone(), Control::default(), events, RunId::new()).await?;
+    let client = reqwest::Client::builder().no_proxy().build()?;
+    let list: Value = client
+        .post(&bridge.url)
+        .json(&json!({"jsonrpc":"2.0","id":1,"method":"tools/list"}))
+        .send()
+        .await?
+        .json()
+        .await?;
+    for (i, tool) in tools.iter().enumerate() {
+        assert_eq!(list["result"]["tools"][i]["inputSchema"], tool.parameters);
+    }
+    for (i, bad_args) in [json!({"chapter_id":"chapter-1"}), json!({})]
+        .into_iter()
+        .enumerate()
+    {
+        let tool = &tools[i];
+        let reply: Value = client.post(&bridge.url).json(&json!({"jsonrpc":"2.0","id":i+2,"method":"tools/call","params":{"name":tool.name,"arguments":bad_args}})).send().await?.json().await?;
+        assert_eq!(reply["result"]["isError"], true);
+        let feedback =
+            serde_json::from_str::<Value>(reply["result"]["content"][0]["text"].as_str().unwrap())
+                .unwrap_or(Value::Null);
+        assert_eq!(
+            feedback["input_schema"], tool.parameters,
+            "recovery must include the authoritative contract, not just an error sentence"
+        );
+        assert_eq!(
+            feedback["received_arguments"], bad_args,
+            "do not rewrite model arguments"
+        );
+        assert_eq!(feedback["tool"], tool.name);
+        assert_eq!(feedback["ok"], false);
+        assert!(feedback["error"].is_string());
+        assert_eq!(host.0.load(Ordering::SeqCst), 0);
+        assert!(matches!(
+            receiver.recv().await,
+            Some(Event::ToolStarted { .. })
+        ));
+        let Some(Event::ToolFinished {
+            changed, output, ..
+        }) = receiver.recv().await
+        else {
+            bail!("missing rejected-call event")
+        };
+        assert!(!changed);
+        assert_eq!(
+            serde_json::from_str::<Value>(&output)?["error"],
+            feedback["error"]
+        );
+    }
+    for (name, args) in [
+        ("inspect_chapter", json!({"chapter":"chapter-1"})),
+        (
+            "set_edit_scope",
+            json!({"first_page":"page-16","last_page":"page-32"}),
+        ),
+    ] {
+        let reply: Value = client.post(&bridge.url).json(&json!({"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":name,"arguments":args}})).send().await?.json().await?;
+        assert_eq!(reply["result"]["isError"], false);
+    }
+    assert_eq!(host.0.load(Ordering::SeqCst), 2);
+    bridge.close().await;
+    Ok(())
+}
+
 #[async_trait]
 impl Host for Fixture {
     async fn bind(&self, _: RunId, _: Control) -> Result<Arc<dyn Host>> {
@@ -724,7 +852,7 @@ async fn installed_agy_edits_layer_with_native_contracts_and_chapter_range() -> 
             "agent did not retry rejected inspection"
         );
         let rejected=events.iter().position(|event|matches!(event,Event::ToolFinished{name,changed:false,output,..} if name=="inspect_project" && output.contains("unknown field") && output.contains("{} is valid"))).context("native validation feedback did not reach the model bridge")?;
-        let read=events.iter().enumerate().skip(rejected+1).find(|(_,event)|matches!(event,Event::ToolFinished{name,changed:false,output,..} if name=="inspect_project" && serde_json::from_str::<Value>(output).is_ok())).map(|(i,_)|i).context("corrected inspection did not succeed")?;
+        let read=events.iter().enumerate().skip(rejected+1).find(|(_,event)|matches!(event,Event::ToolFinished{name,changed:false,output,..} if name=="inspect_project" && serde_json::from_str::<Value>(output).is_ok_and(|value| value["ok"] != false))).map(|(i,_)|i).context("corrected inspection did not succeed")?;
         assert!(
             events
                 .iter()
