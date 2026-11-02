@@ -56,7 +56,36 @@ const run: AgentRun = {
   last_page: null,
   changes: 0,
   error: null,
+  failures: [],
 }
+
+it('keeps failed page details visible while another page succeeds, then removes only resolved entries', () => {
+  const failure = {
+    id: 'failed-016',
+    tool: 'set_typography',
+    page: 'Chapter 1 · 16/38 · 016',
+    error: 'invalid font weight',
+    attempts: 1,
+  }
+  const current: AgentRun = {
+    ...run,
+    phase: 'tool',
+    tool: 'inspect_page',
+    page: 'Chapter 1 · 17/38 · 017',
+    last_page: 'Chapter 1 · 17/38 · 017',
+    changes: 2,
+    failures: [failure],
+  }
+  const view = render(<AgentProgress run={current} />)
+  expect(screen.getByRole('note')).toHaveTextContent('16/38 · 016')
+  expect(screen.getByRole('note')).toHaveTextContent('invalid font weight')
+  view.rerender(<AgentProgress run={{ ...current, phase: 'thinking', error: null }} />)
+  expect(screen.getByRole('note')).toHaveTextContent('16/38 · 016')
+  view.rerender(<AgentProgress run={{ ...current, state: 'failed', error: 'Incomplete' }} />)
+  expect(screen.getByRole('note')).toHaveTextContent('invalid font weight')
+  view.rerender(<AgentProgress run={{ ...current, failures: [] }} />)
+  expect(screen.queryByRole('note')).not.toBeInTheDocument()
+})
 
 it('distinguishes the current chapter/page from the last target during queries and thinking', () => {
   const page = 'Chapter 12 — A very long chapter title · 3/50 · 003'

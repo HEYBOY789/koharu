@@ -144,6 +144,14 @@ export type AgentConversation = {
         messages: AgentMessage[],
 };
 
+export type AgentFailure = {
+        id: string,
+        tool: string,
+        page: string | null,
+        error: string,
+        attempts: number,
+};
+
 export type AgentMessage = {
         id: string,
         role: Role,
@@ -173,6 +181,7 @@ export type AgentRun = {
         stage: Stage | null,
         changes: number,
         error: string | null,
+        failures: AgentFailure[],
 };
 
 export type AgentRunState = "running" | "finished" | "failed" | "stopped";

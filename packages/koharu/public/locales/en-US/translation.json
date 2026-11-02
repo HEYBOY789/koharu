@@ -110,6 +110,8 @@
       "responding": "Writing response…",
       "waiting": "Waiting for processing…",
       "summary": "Reasoning summary",
+      "pendingFailures": "Unresolved tool calls: {{count}}",
+      "projectTool": "Project-level tool call",
       "targetPage": "Target page: {{page}}",
       "lastPage": "Last targeted page: {{page}}",
       "toolRejected": "A tool call was rejected. The agent is still running and can retry.",

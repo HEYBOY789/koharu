@@ -5,6 +5,19 @@ use serde_json::{Value, json};
 
 use crate::Control;
 
+#[derive(Debug)]
+pub struct ToolRejection {
+    pub failure_id: String,
+    pub message: String,
+}
+
+impl std::fmt::Display for ToolRejection {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+impl std::error::Error for ToolRejection {}
+
 #[derive(Clone, Debug)]
 pub struct ToolImage {
     pub label: String,
@@ -47,6 +60,7 @@ impl ToolCall {
             "ok": false,
             "error": format!("{error:#}"),
             "tool": self.name,
+            "retry_of": error.downcast_ref::<ToolRejection>().map(|error| &error.failure_id),
             "received_arguments": serde_json::from_str::<Value>(&self.arguments)
                 .unwrap_or_else(|_| Value::String(self.arguments.clone())),
             "input_schema": tools.iter().find(|tool| tool.name == self.name)
@@ -100,4 +114,9 @@ pub trait Host: Send + Sync + 'static {
     fn tools(&self) -> Vec<Tool>;
 
     async fn invoke(&self, call: ToolCall, control: &Control) -> Result<Invocation>;
+
+    /// A model's terminal response is not success while native work remains unresolved.
+    async fn ensure_complete(&self) -> Result<()> {
+        Ok(())
+    }
 }

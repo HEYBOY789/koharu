@@ -333,6 +333,115 @@ struct NativeHost {
     argument_faults: Arc<parking_lot::Mutex<Vec<&'static str>>>,
 }
 
+#[tokio::test]
+async fn native_failed_layer_is_not_cleared_by_other_page_edits_or_wrong_target_retry() -> Result<()>
+{
+    let mut f = Fixture::new().await?;
+    let (_, other_layer) = f
+        .project
+        .add_text_box(
+            f.other,
+            Frame {
+                x: 10.0,
+                y: 10.0,
+                width: 100.0,
+                height: 100.0,
+                angle_degrees: 0.0,
+            },
+        )
+        .await?;
+    let _directory = f.directory;
+    let project = Arc::new(tokio::sync::Mutex::new(f.project));
+    let raw = NativeHost {
+        project: project.clone(),
+        binding: None,
+        renderer: koharu_renderer::Renderer::new()?,
+        calls: Default::default(),
+        argument_faults: Default::default(),
+    };
+    let control = Control::default();
+    let host = raw.bind(RunId::new(), control.clone()).await?;
+    host.context().await?;
+    host.invoke(
+        call(
+            "set_edit_scope",
+            json!({"first_page":f.other,"last_page":f.page}),
+        ),
+        &control,
+    )
+    .await?;
+    let error = host
+        .invoke(
+            call(
+                "set_typography",
+                json!({"element":f.layer,"font_weight":"bold"}),
+            ),
+            &control,
+        )
+        .await
+        .unwrap_err();
+    let id = error
+        .downcast_ref::<koharu_agent::ToolRejection>()
+        .context("native rejection ID")?
+        .failure_id
+        .clone();
+    host.invoke(call("inspect_page", json!({"page":f.other})), &control)
+        .await?;
+    host.invoke(
+        call(
+            "set_typography",
+            json!({"element":other_layer,"size":28,"auto_fit":false}),
+        ),
+        &control,
+    )
+    .await?;
+    assert!(host.ensure_complete().await.is_err());
+    let before = project.lock().await.revision();
+    assert!(
+        host.invoke(
+            call(
+                "set_typography",
+                json!({"element":other_layer,"font_weight":700,"retry_of":id})
+            ),
+            &control
+        )
+        .await
+        .is_err()
+    );
+    assert_eq!(
+        project.lock().await.revision(),
+        before,
+        "wrong-target retry must not reach the native mutation"
+    );
+    host.invoke(
+        call(
+            "set_typography",
+            json!({"element":f.layer,"font_weight":700}),
+        ),
+        &control,
+    )
+    .await?;
+    assert!(
+        host.ensure_complete().await.is_err(),
+        "unlinked successful calls cannot erase a failed request"
+    );
+    let retry = host
+        .invoke(
+            call(
+                "set_typography",
+                json!({"element":f.layer,"font_weight":700,"retry_of":id}),
+            ),
+            &control,
+        )
+        .await?;
+    assert!(
+        !retry.changed,
+        "a confirmed no-op can resolve a retry without inflating edits"
+    );
+    host.ensure_complete().await?;
+    Ok(())
+}
+
 #[async_trait]
 impl Host for NativeHost {
     async fn bind(&self, run: RunId, control: Control) -> Result<Arc<dyn Host>> {
@@ -343,6 +452,7 @@ impl Host for NativeHost {
             control,
             observed: Arc::new(parking_lot::Mutex::new(None)),
             pages: Arc::new(parking_lot::Mutex::new(None)),
+            failures: Arc::default(),
         };
         Ok(Arc::new(Self {
             binding: Some(binding),
@@ -361,6 +471,43 @@ impl Host for NativeHost {
     }
 
     async fn invoke(&self, call: ToolCall, control: &Control) -> Result<Invocation> {
+        let binding = self.binding.as_ref().context("bound test host")?;
+        let (attempt, parse_error) = match Attempt::parse(call.clone()) {
+            Ok(attempt) => (attempt, None),
+            Err(error) => (Attempt::raw(call), Some(error)),
+        };
+        let target = Target::capture(&self.project.lock().await.snapshot(), &attempt.call)?;
+        let ready = match parse_error {
+            Some(error) => Err(error),
+            None => binding.failures.lock().validate(&attempt, &target),
+        };
+        let result = match ready {
+            Ok(()) => self.execute_tool(attempt.call.clone(), control).await,
+            Err(error) => Err(error),
+        };
+        let (result, exhausted) = {
+            let mut failures = binding.failures.lock();
+            let result = failures.finish(&attempt, target, result);
+            (result, failures.exhausted())
+        };
+        if exhausted {
+            binding.control.cancel();
+        }
+        result
+    }
+
+    async fn ensure_complete(&self) -> Result<()> {
+        self.binding
+            .as_ref()
+            .context("bound test host")?
+            .failures
+            .lock()
+            .ensure_complete()
+    }
+}
+
+impl NativeHost {
+    async fn execute_tool(&self, call: ToolCall, control: &Control) -> Result<Invocation> {
         anyhow::ensure!(!control.is_cancelled(), "Agent request was cancelled");
         let inject = {
             let mut faults = self.argument_faults.lock();

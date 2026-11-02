@@ -110,6 +110,8 @@
       "responding": "Redactando respuesta…",
       "waiting": "Esperando procesamiento…",
       "summary": "Resumen del razonamiento",
+      "pendingFailures": "Llamadas de herramientas pendientes: {{count}}",
+      "projectTool": "Llamada de herramienta del proyecto",
       "targetPage": "Página de destino: {{page}}",
       "lastPage": "Última página de destino: {{page}}",
       "toolRejected": "Se rechazó una llamada a una herramienta. El agente sigue activo y puede reintentar.",

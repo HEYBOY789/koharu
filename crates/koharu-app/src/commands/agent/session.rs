@@ -1,3 +1,4 @@
+use super::failures::AgentFailure;
 use koharu_agent::{Event, Role, RunId};
 use parking_lot::Mutex;
 use serde::Serialize;
@@ -65,6 +66,7 @@ pub struct AgentRun {
     pub stage: Option<koharu_pipeline::Stage>,
     pub changes: u32,
     pub error: Option<String>,
+    pub failures: Vec<AgentFailure>,
 }
 
 pub(super) struct SessionStore {
@@ -186,6 +188,7 @@ impl SessionStore {
                 stage: None,
                 changes: 0,
                 error: None,
+                failures: Vec::new(),
             });
         });
     }
@@ -253,10 +256,18 @@ impl SessionStore {
                     }
                 }
                 Event::Completed { message: text, .. } => {
-                    message.text = capped(&text);
-                    run.state = AgentRunState::Finished;
-                    run.error = None;
-                    message.state = Some(AgentRunState::Finished);
+                    if !run.failures.is_empty() || run.error.is_some() {
+                        let error = if run.failures.is_empty() { run.error.clone().unwrap() }
+                            else { format!("Agent stopped with {} unresolved tool calls; the request is not complete.",run.failures.len()) };
+                        run.state = AgentRunState::Failed;
+                        run.error = Some(error.clone());
+                        message.text = error; message.error = true;
+                        message.state = Some(AgentRunState::Failed);
+                    } else {
+                        message.text = capped(&text);
+                        run.state = AgentRunState::Finished;
+                        message.state = Some(AgentRunState::Finished);
+                    }
                 }
                 Event::Failed { message: text, .. } => {
                     message.text = capped(&text);
@@ -304,6 +315,18 @@ impl SessionStore {
             snapshot.run = None;
         });
     }
+
+    pub fn failures(&self, id: RunId, failures: Vec<AgentFailure>) {
+        self.update(|snapshot| {
+            if let Some(run) = snapshot
+                .run
+                .as_mut()
+                .filter(|run| run.id == id && run.state == AgentRunState::Running)
+            {
+                run.failures = failures;
+            }
+        });
+    }
     pub fn dismiss(&self) {
         self.update(|snapshot| {
             if snapshot
@@ -320,6 +343,87 @@ impl SessionStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pending_pages_survive_successful_other_page_calls_and_block_false_completion() {
+        let store = SessionStore::default();
+        let id = RunId::new();
+        store.begin(id, "A".into(), "repair the project");
+        store.failures(
+            id,
+            vec![AgentFailure {
+                id: "failure-016".into(),
+                tool: "set_typography".into(),
+                page: Some("Chapter 1 · 16/38 · 016".into()),
+                error: "invalid weight".into(),
+                attempts: 1,
+            }],
+        );
+        store.event(Event::ToolStarted {
+            run: id,
+            call_id: "other".into(),
+            name: "inspect_page".into(),
+        });
+        store.progress(
+            id,
+            AgentPhase::Tool,
+            Some("Chapter 1 · 17/38 · 017".into()),
+            None,
+            None,
+        );
+        store.event(Event::ToolFinished {
+            run: id,
+            call_id: "other".into(),
+            name: "inspect_page".into(),
+            changed: false,
+            output: "{}".into(),
+        });
+        assert_eq!(store.snapshot().run.as_ref().unwrap().failures.len(), 1);
+        store.event(Event::Completed {
+            run: id,
+            message: "Everything fixed".into(),
+        });
+        assert_eq!(store.snapshot().run.unwrap().state, AgentRunState::Failed);
+        let next = RunId::new();
+        store.begin(next, "B".into(), "edit B");
+        store.failures(id, vec![]);
+        assert!(store.snapshot().run.as_ref().unwrap().failures.is_empty());
+        store.event(Event::Completed {
+            run: next,
+            message: "B finished".into(),
+        });
+        assert_eq!(store.snapshot().run.unwrap().state, AgentRunState::Finished);
+    }
+
+    #[test]
+    fn a_rejected_tool_cannot_be_reported_as_completed_without_recovery() {
+        let store = SessionStore::default();
+        let id = RunId::new();
+        store.begin(id, "A".into(), "repair pages 016 onward");
+        store.progress(
+            id,
+            AgentPhase::Tool,
+            Some("Chapter 1 · 16/38 · 016".into()),
+            None,
+            None,
+        );
+        store.event(Event::ToolFinished {
+            run: id,
+            call_id: "failed-edit".into(),
+            name: "set_typography".into(),
+            changed: false,
+            output: r#"{"ok":false,"error":"invalid font weight"}"#.into(),
+        });
+        store.event(Event::Completed {
+            run: id,
+            message: "All pages fixed".into(),
+        });
+        let snapshot = store.snapshot();
+        assert_eq!(snapshot.run.unwrap().state, AgentRunState::Failed);
+        let message = snapshot.conversations[0].messages.last().unwrap();
+        assert!(message.error);
+        assert!(!message.text.contains("All pages fixed"));
+    }
 
     #[test]
     fn chapter_target_survives_non_page_tools_without_leaking_into_a_new_run() {
@@ -366,6 +470,18 @@ mod tests {
             Some("stale revision")
         );
         assert_eq!(snapshot.run.unwrap().changes, 0);
+        store.event(Event::ToolStarted {
+            run: id,
+            call_id: "fresh-read".into(),
+            name: "inspect_page".into(),
+        });
+        store.event(Event::ToolFinished {
+            run: id,
+            call_id: "fresh-read".into(),
+            name: "inspect_page".into(),
+            changed: false,
+            output: "{}".into(),
+        });
         store.event(Event::Completed {
             run: id,
             message: "Recovered after a fresh read".into(),

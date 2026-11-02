@@ -19,6 +19,7 @@ use tauri_runtime_cef::CefRuntime;
 
 use super::{
     context::{self, InspectChapter, InspectPage, Window},
+    failures::{Attempt, Failures, Target},
     scope::{self, EditRange},
 };
 
@@ -46,6 +47,7 @@ struct Binding {
     run: RunId,
     observed: Arc<parking_lot::Mutex<Option<Revision>>>,
     pages: Arc<parking_lot::Mutex<Option<Vec<EntityId>>>>,
+    failures: Arc<parking_lot::Mutex<Failures>>,
 }
 
 impl Binding {
@@ -282,6 +284,7 @@ impl Host for KoharuHost {
                 run,
                 observed: Arc::new(parking_lot::Mutex::new(None)),
                 pages: Arc::new(parking_lot::Mutex::new(None)),
+                failures: Arc::default(),
             }),
         }))
     }
@@ -295,41 +298,65 @@ impl Host for KoharuHost {
     }
 
     async fn invoke(&self, call: ToolCall, control: &Control) -> Result<Invocation> {
-        if control.is_cancelled() {
-            bail!("Agent request was cancelled");
-        }
-        {
-            let args: Value = serde_json::from_str(&call.arguments)?;
-            let element = args["element"]
-                .as_str()
-                .map(str::to_owned)
-                .or_else(|| args["elements"][0].as_str().map(str::to_owned));
-            let requested = args["page"]
-                .as_str()
-                .or_else(|| args["pages"][0].as_str())
-                .map(str::to_owned)
-                .or_else(|| element.clone());
+        let binding = self.binding.as_ref().context("Agent host is unbound")?;
+        let (attempt, parse_error) = match Attempt::parse(call.clone()) {
+            Ok(attempt) => (attempt, None),
+            Err(error) => (Attempt::raw(call), Some(error)),
+        };
+        let captured = async {
             let projects = self.handle.state::<CurrentProject>();
             let (project, _) = projects.project.target(self.target()?).await?;
             self.check_project(&project)?;
-            let snapshot = project.snapshot();
-            let page = requested
-                .and_then(|id| entity(&id).ok())
-                .and_then(|mut id| {
-                    loop {
-                        if let Ok(page) = snapshot.page(id).and_then(|page| page.page()) {
-                            break context::Locations::new(&snapshot)
-                                .and_then(|positions| positions.label(id))
-                                .ok()
-                                .or(Some(page.label));
-                        }
-                        match snapshot.parent(id) {
-                            Ok(Some(parent)) => id = parent,
-                            _ => break None,
-                        }
-                    }
-                });
-            self.progress(super::AgentPhase::Tool, page, element, None);
+            Target::capture(&project.snapshot(), &attempt.call)
+        }
+        .await;
+        let (target, capture_error) = match captured {
+            Ok(target) => (target, None),
+            Err(error) => (Target::default(), Some(error)),
+        };
+        let args: Value = serde_json::from_str(&attempt.call.arguments).unwrap_or(Value::Null);
+        let element = args["element"]
+            .as_str()
+            .or_else(|| args["elements"][0].as_str())
+            .map(str::to_owned);
+        self.progress(super::AgentPhase::Tool, target.page.clone(), element, None);
+        let ready = match parse_error.or(capture_error) {
+            Some(error) => Err(error),
+            None => binding.failures.lock().validate(&attempt, &target),
+        };
+        let result = match ready {
+            Ok(()) => self.execute_tool(attempt.call.clone(), control).await,
+            Err(error) => Err(error),
+        };
+        let (result, pending, exhausted) = {
+            let mut failures = binding.failures.lock();
+            let result = failures.finish(&attempt, target, result);
+            (result, failures.snapshot(), failures.exhausted())
+        };
+        self.handle
+            .state::<super::AgentState>()
+            .store
+            .failures(binding.run, pending);
+        if exhausted {
+            binding.control.cancel();
+        }
+        result
+    }
+
+    async fn ensure_complete(&self) -> Result<()> {
+        self.binding
+            .as_ref()
+            .context("Agent host is unbound")?
+            .failures
+            .lock()
+            .ensure_complete()
+    }
+}
+
+impl KoharuHost {
+    async fn execute_tool(&self, call: ToolCall, control: &Control) -> Result<Invocation> {
+        if control.is_cancelled() {
+            bail!("Agent request was cancelled");
         }
         if let Some(edit) = LayerEdit::parse(&call)? {
             return self
@@ -705,11 +732,10 @@ fn editor_tools() -> Vec<Tool> {
 }
 
 fn definition<T: JsonSchema>(name: &str, description: &str) -> Tool {
-    Tool::new(
-        name,
-        description,
-        serde_json::to_value(schema_for!(T)).expect("tool argument schema must serialize"),
-    )
+    let mut parameters =
+        serde_json::to_value(schema_for!(T)).expect("tool argument schema must serialize");
+    parameters["properties"]["retry_of"] = json!({"type":"string","description":"When retrying a rejected call, use its exact retry_of ID. Keep the original tool and page/layer targets; unrelated successes do not resolve failures."});
+    Tool::new(name, description, parameters)
 }
 
 fn arguments<T: for<'de> Deserialize<'de> + JsonSchema>(call: &ToolCall) -> Result<T> {
@@ -719,7 +745,9 @@ fn arguments<T: for<'de> Deserialize<'de> + JsonSchema>(call: &ToolCall) -> Resu
             .as_array()
             .map(|fields| fields.iter().filter_map(Value::as_str).collect::<Vec<_>>().join(", "))
             .unwrap_or_default();
-        let accepted = schema.as_value()["properties"].as_object().map(|fields| fields.keys().map(String::as_str).collect::<Vec<_>>().join(", ")).unwrap_or_default();
+        let mut accepted = schema.as_value()["properties"].as_object().map(|fields| fields.keys().map(String::as_str).collect::<Vec<_>>()).unwrap_or_default();
+        accepted.push("retry_of");
+        let accepted = accepted.join(", ");
         let requirement = if required.is_empty() {
             "All fields are optional; {} is valid".to_owned()
         } else {
@@ -1040,6 +1068,7 @@ mod tests {
             run: RunId::new(),
             observed: Arc::new(parking_lot::Mutex::new(None)),
             pages: Arc::new(parking_lot::Mutex::new(None)),
+            failures: Arc::default(),
         };
         let mut page = None;
         let patch = project.snapshot().patch(|edit| {
@@ -1094,6 +1123,7 @@ mod tests {
             run: RunId::new(),
             observed: Arc::new(parking_lot::Mutex::new(None)),
             pages: Arc::new(parking_lot::Mutex::new(None)),
+            failures: Arc::default(),
         };
         drop(project);
         let reopened = Project::open("fixture".into(), path).await?;
@@ -1338,7 +1368,7 @@ struct ReorderElement {
 
 #[derive(Clone, Copy, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
-enum AgentPipelineOperation {
+pub(super) enum AgentPipelineOperation {
     Full,
     Detection,
     Ocr,

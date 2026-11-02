@@ -66,7 +66,7 @@ export function ActivityCenter() {
   const errors =
     visibleJobs.filter((job) => job.state === 'failed').length +
     failedDownloads.length +
-    Number(agent?.state === 'failed')
+    Number(agent?.state === 'failed' || Boolean(agent?.failures.length))
   const label = agentPrimary
     ? `${agent.project} · ${t('agent.title')} · ${agentProgressLabel(t, agent)}`
     : primary

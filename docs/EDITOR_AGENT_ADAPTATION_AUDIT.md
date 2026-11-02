@@ -2,6 +2,20 @@
 
 Ngày: 31/10/2026. Source đã kiểm tra: `b4ce18dcbedc0f805145d8d2940e0189abd2349d`.
 
+## Giữ lỗi theo target và kiểm tra hoàn tất — 03/11/2026
+
+Nguyên nhân cảnh báo biến mất: trạng thái tiến độ cũ chỉ giữ lỗi của tool gần nhất, rồi xóa khi tool tiếp theo bắt đầu. Thành công ở trang khác và câu trả lời kết thúc của model chưa được đối chiếu với những lời gọi vẫn thất bại.
+
+Native binding của từng run nay giữ danh sách lời gọi bị từ chối, ID phục hồi, tool, target trang/layer đã xác minh và số lần thất bại. UI chiếu danh sách này riêng với trang đang được nhắm tới; đổi tool, chuyển trang, suy luận hoặc kết thúc thất bại không làm mất cảnh báo. Activity giữ dấu cần chú ý. Metadata `retry_of` được khai báo trong schema; native chỉ bóc metadata này trước validator nghiệp vụ nghiêm ngặt. Không chấp nhận alias, đoán ID hoặc sửa JSON của model.
+
+Chỉ lời gọi thành công có `retry_of` trỏ đúng lỗi, giữ tool và các target gốc mới gỡ được lỗi. Một thao tác thành công không gắn ID phục hồi cũng không tự xóa lỗi, kể cả khi cùng trang. Native từ chối retry đổi target trước khi mutation chạy; giữ chapter, offset, operation và ranh giới phạm vi đã biết. Retry không đổi dữ liệu vẫn có thể xác nhận phục hồi mà không tăng bộ đếm chỉnh sửa. Agent vẫn được đọc font, đọc và chỉnh trang khác để tiếp tục công việc; điều đó không chứng minh trang lỗi đã được xử lý.
+
+AGY/Pi và Codex cùng kiểm tra `Host::ensure_complete` trước khi phát sự kiện hoàn tất. Còn lỗi thì tiếp tục trên cùng host/session/phạm vi, tối đa hai lượt nhắc phục hồi sau câu trả lời kết thúc. Ba lần thất bại của cùng lời gọi hoặc danh sách vượt giới hạn khiến run dừng với yêu cầu chú ý. Nếu đã gọi nhầm một tool không phù hợp, không chạy processing ngoài ý muốn chỉ để xóa lỗi: báo chưa hoàn tất. Dừng nội bộ dùng lease của run, không hủy control của người dùng hoặc job project khác. Native session có thêm chốt phòng thủ để không đổi lỗi còn tồn tại thành Finished.
+
+Các kiểm tra hồi quy bao gồm lỗi trang 016 còn nguyên sau khi đọc/chỉnh trang khác, retry sai layer không thay đổi revision, retry no-op gỡ đúng lỗi, giữ phạm vi và model cố báo xong trước khi phục hồi. Fixture giao thức model có cả trường hợp biết sửa và tiếp tục bỏ qua; trường hợp bỏ qua phải kết thúc Failed. Đây là kiểm tra giao thức tổng hợp, không phải nghiệm thu tài khoản Pi. Giao diện được chụp ở cả trạng thái đang làm trang 017 và không phục hồi xong, kèm tên chapter dài. Kết quả AGY thực tế, build, commit và EXE được ghi tại validation của workspace website.
+
+Giới hạn: danh sách thuộc run hiện tại trong bộ nhớ, giữ qua reconnect nhưng không phải hàng đợi phục hồi bền vững sau khởi động lại hoặc yêu cầu mới. Chốt này ngăn báo xong khi còn lời gọi lỗi; nó không tự đánh giá chất lượng hình ảnh hay chứng minh model đã rà từng trang của toàn bộ truyện. Không dừng hay chỉnh project đang chạy của người dùng để kiểm thử.
+
 ## Phục hồi lời gọi tool sai tham số — 02/11/2026
 
 Hai ảnh tiếp theo ghi nhận `inspect_chapter` nhận `chapter_id` thay vì `chapter`, và `set_edit_scope` thiếu `first_page`/`last_page`. Đây là lời gọi bị validator từ chối trước khi thay đổi dữ liệu. Kiểm tra giao thức xác nhận `tools/list` chuyển nguyên schema, gồm các field bắt buộc; chưa có bằng chứng schema bị mất khi bridge chuyển cho AGY. Việc model tiếp tục điền sai không được xem là đã hết chỉ vì một lượt nghiệm thu trước đó thành công.

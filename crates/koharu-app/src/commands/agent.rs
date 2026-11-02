@@ -1,4 +1,5 @@
 mod context;
+mod failures;
 mod host;
 mod scope;
 mod session;

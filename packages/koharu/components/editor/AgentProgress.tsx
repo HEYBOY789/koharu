@@ -7,7 +7,17 @@ import type { AgentRun } from '@koharu/bridge/protocol'
 
 export function agentProgressLabel(t: TFunction, run: AgentRun, includePage = true): string {
   const phase = agentPhaseLabel(t, run)
-  return includePage ? [phase, agentPageLabel(t, run)].filter(Boolean).join(' · ') : phase
+  return includePage
+    ? [
+        phase,
+        agentPageLabel(t, run),
+        run.failures.length
+          ? t('agent.progress.pendingFailures', { count: run.failures.length })
+          : null,
+      ]
+        .filter(Boolean)
+        .join(' · ')
+    : phase
 }
 
 function agentPageLabel(t: TFunction, run: AgentRun): string | null {
@@ -40,7 +50,29 @@ export function AgentProgress({ run }: { run: AgentRun }) {
       {agentPageLabel(t, run) && (
         <span className='font-medium break-words text-foreground'>{agentPageLabel(t, run)}</span>
       )}
-      {run.state === 'running' && run.error && (
+      {run.failures.length > 0 && (
+        <details
+          open
+          role='note'
+          className='min-w-0 rounded-lg border border-amber-700/30 p-2 text-amber-700 dark:text-amber-400'
+        >
+          <summary className='cursor-pointer font-medium'>
+            {t('agent.progress.pendingFailures', { count: run.failures.length })}
+          </summary>
+          <ul className='mt-2 grid gap-3'>
+            {run.failures.map((failure) => (
+              <li key={failure.id} className='grid min-w-0 gap-1 break-words'>
+                <span className='font-medium'>
+                  {failure.page ?? t('agent.progress.projectTool')}
+                </span>
+                <span>{t(`agent.tools.${failure.tool}`, { defaultValue: failure.tool })}</span>
+                <span className='text-muted-foreground'>{failure.error}</span>
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
+      {run.state === 'running' && run.error && run.failures.length === 0 && (
         <div role='note' className='grid gap-1 break-words text-amber-700 dark:text-amber-400'>
           <span>{t('agent.progress.toolRejected')}</span>
           <span className='text-muted-foreground'>{run.error}</span>

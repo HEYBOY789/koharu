@@ -110,6 +110,8 @@
       "responding": "Rédaction de la réponse…",
       "waiting": "En attente du traitement…",
       "summary": "Résumé du raisonnement",
+      "pendingFailures": "Appels d’outils non résolus : {{count}}",
+      "projectTool": "Appel d’outil du projet",
       "targetPage": "Page ciblée : {{page}}",
       "lastPage": "Dernière page ciblée : {{page}}",
       "toolRejected": "Un appel d’outil a été refusé. L’agent fonctionne toujours et peut réessayer.",

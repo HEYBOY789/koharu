@@ -28,6 +28,15 @@ it('shows an agent on A alongside a pipeline on B and stops only the selected ru
           element: null,
           stage: null,
           last_page: null,
+          failures: [
+            {
+              id: 'failed-016',
+              tool: 'set_typography',
+              page: '016',
+              error: 'invalid weight',
+              attempts: 1,
+            },
+          ],
           changes: 3,
           error: null,
         },
@@ -46,6 +55,12 @@ it('shows an agent on A alongside a pipeline on B and stops only the selected ru
   expect(stopAgent).toHaveBeenCalledWith('agent-a')
   expect(stopPipeline).not.toHaveBeenCalled()
   expect(useKoharuStore.getState().jobs[job.id].state).toBe('running')
+  expect(screen.getByLabelText('Needs attention: 1')).toBeVisible()
+  act(() => {
+    const agent = useKoharuStore.getState().agent!
+    useKoharuStore.setState({ agent: { ...agent, run: { ...agent.run!, failures: [] } } })
+  })
+  expect(screen.queryByLabelText('Needs attention: 1')).not.toBeInTheDocument()
 })
 
 const job: Job = {

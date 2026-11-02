@@ -110,6 +110,8 @@
       "responding": "Yanıt yazılıyor…",
       "waiting": "İşleme sırası bekleniyor…",
       "summary": "Akıl yürütme özeti",
+      "pendingFailures": "Çözülmemiş araç çağrıları: {{count}}",
+      "projectTool": "Proje düzeyinde araç çağrısı",
       "targetPage": "Hedef sayfa: {{page}}",
       "lastPage": "Son hedef sayfa: {{page}}",
       "toolRejected": "Bir araç çağrısı reddedildi. Ajan çalışmaya devam ediyor ve yeniden deneyebilir.",

@@ -10,6 +10,7 @@ use uuid::Uuid;
 use crate::{
     AgentModel, Backend, Codex, Config, Control, Host, cli,
     codex::{Delta, Request, function_output, message, project_context},
+    completion::Completion,
 };
 
 pub(crate) const INSTRUCTIONS: &str = r#"You are Koharu Agent, operating a manga translation project inside Koharu.
@@ -25,6 +26,7 @@ When the user explicitly requests page reprocessing, run_pipeline requires opera
 Use the provided tools whenever the user asks to inspect or change the project. Never claim a change succeeded unless its tool result says it succeeded.
 All project changes are revisioned and reversible. Do not ask for permission. Do not produce a plan or expose internal steps; continue using tools until the request is complete or cannot be completed.
 Use element IDs from inspect_page for layer tools. set_geometry moves/resizes text on the image; reorder_element only changes the layer tree. set_typography patches supplied properties and preserves omitted ones; null clears an override. If a tool reports invalid arguments, use its accepted/required fields to correct the call and retry. Pagination-only inspection tools accept {} for defaults, or offset and limit; do not invent placeholder keys such as unknown. Tools requiring page/element IDs or operation must receive those fields from inspection or the explicit task. Do not guess missing IDs or repeat an unchanged invalid call. A rejected tool call is recoverable feedback, not a completed edit or an instruction to stop the task.
+Native tracks rejected calls until explicitly recovered. On rejection, retry the SAME original tool with the exact retry_of ID from its error feedback and corrected arguments, retaining the original page/layer targets. A successful call on a different page or a call without retry_of does not clear the failure. Inspect other pages/fonts if needed to recover, but do not treat that as completion. A native completion check will require unresolved calls to be addressed; if recovery cannot succeed, report the remaining failures honestly instead of claiming the project is done.
 Do not invent entity identifiers. Preserve artwork and existing authored content unless the user asks to change them."#;
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize, Type)]
@@ -122,14 +124,18 @@ where
     H: Host,
 {
     pub fn new(codex: Codex, host: H) -> Result<Self> {
-        Ok(Self {
+        Ok(Self::with_configuration(codex, host, Config::load()?))
+    }
+
+    fn with_configuration(codex: Codex, host: H, config: koharu_config::Config<Config>) -> Self {
+        Self {
             codex,
             host: Arc::new(host),
-            config: Config::load()?,
+            config,
             history: Mutex::new(Vec::new()),
             serial: Mutex::new(()),
             cli: Mutex::new(cli::Session::default()),
-        })
+        }
     }
 
     pub fn codex(&self) -> &Codex {
@@ -175,7 +181,30 @@ where
     {
         let _serial = self.serial.lock().await;
         publish(Event::Started { run });
-        let result = self.run_inner(run, prompt, &control, &mut publish).await;
+        let lease = Control::default();
+        let watcher = tokio::spawn({
+            let user = control.clone();
+            let lease = lease.clone();
+            async move {
+                user.cancelled().await;
+                lease.cancel();
+            }
+        });
+        let result = async {
+            control.ensure_running()?;
+            let host = self.host.bind(run, lease.clone()).await?;
+            let result = self
+                .run_inner(host.clone(), run, prompt, &lease, &mut publish)
+                .await;
+            if result.is_err() {
+                if let Err(pending) = host.ensure_complete().await {
+                    return result.with_context(|| format!("{pending:#}"));
+                }
+            }
+            result
+        }
+        .await;
+        watcher.abort();
         match &result {
             Ok(result) => publish(Event::Completed {
                 run,
@@ -192,6 +221,7 @@ where
 
     async fn run_inner<F>(
         &self,
+        host: Arc<dyn Host>,
         run: RunId,
         prompt: String,
         control: &Control,
@@ -208,37 +238,29 @@ where
             } else {
                 &config.agy
             };
-            let lease = Control::default();
-            let watcher = tokio::spawn({
-                let user = control.clone();
-                let lease = lease.clone();
-                async move {
-                    user.cancelled().await;
-                    lease.cancel();
-                }
-            });
-            let result = async {
-                let host = self.host.bind(run, lease.clone()).await?;
-                let mut session = self.cli.lock().await;
-                cli::run(
+            let mut session = self.cli.lock().await;
+            let mut completion = Completion::default();
+            let mut request = prompt;
+            loop {
+                let message = cli::run(
                     &mut session,
                     config.backend,
                     cli_config,
-                    host,
+                    host.clone(),
                     run,
-                    &prompt,
-                    &lease,
+                    &request,
+                    control,
                     publish,
                 )
-                .await
+                .await?;
+                control.ensure_running()?;
+                if let Some(next) = completion.next(host.as_ref()).await? {
+                    request = next;
+                } else {
+                    return Ok(RunResult { run, message });
+                }
             }
-            .await;
-            watcher.abort();
-            control.ensure_running()?;
-            let message = result?;
-            return Ok(RunResult { run, message });
         }
-        let host = self.host.bind(run, control.clone()).await?;
         let context = host.context().await?;
         let models = self.codex.models().await?;
         let model = match config.codex.model.as_deref() {
@@ -266,6 +288,7 @@ where
         persisted.push(clean_user);
         let tools = host.tools();
         let session = run.to_string();
+        let mut completion = Completion::default();
 
         loop {
             control.ensure_running()?;
@@ -288,6 +311,12 @@ where
             persisted.extend(turn.output.iter().cloned());
 
             if turn.calls.is_empty() {
+                if let Some(next) = completion.next(host.as_ref()).await? {
+                    let continuation = message("user", &next);
+                    input.push(continuation.clone());
+                    persisted.push(continuation);
+                    continue;
+                }
                 *self.history.lock().await = persisted;
                 return Ok(RunResult {
                     run,
@@ -324,3 +353,7 @@ where
         }
     }
 }
+
+#[cfg(test)]
+#[path = "agent_tests.rs"]
+mod tests;
