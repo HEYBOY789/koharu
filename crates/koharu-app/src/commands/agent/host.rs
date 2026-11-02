@@ -167,13 +167,11 @@ impl KoharuHost {
         project.record_commit(&commit);
         project.reconcile_page();
         self.observe(&project);
-        let revision = commit.revision;
+        let result = mutation_result(&project, &commit, value)?;
         if visible {
             self.synchronize(commit, project.active_page()).await?;
         }
-        Invocation::changed(
-            json!({"revision": revision, "project": project.info(), "result": value}),
-        )
+        Ok(result)
     }
 
     async fn synchronize(&self, commit: Commit, page: Option<EntityId>) -> Result<()> {
@@ -254,13 +252,15 @@ impl KoharuHost {
         if report.status == RunStatus::Stopped {
             bail!("pipeline processing was cancelled");
         }
-        Invocation::changed(json!({
+        let mut result = Invocation::read(json!({
             "base_revision": report.base,
             "final_revision": report.final_revision,
             "completed": report.completed,
             "total": report.total,
             "elapsed_ms": report.elapsed.as_millis(),
-        }))
+        }))?;
+        result.changed = report.base != report.final_revision;
+        Ok(result)
     }
 }
 
@@ -331,6 +331,11 @@ impl Host for KoharuHost {
                 });
             self.progress(super::AgentPhase::Tool, page, element, None);
         }
+        if let Some(edit) = LayerEdit::parse(&call)? {
+            return self
+                .mutate(edit.targets(), |project| Box::pin(edit.apply(project)))
+                .await;
+        }
         match call.name.as_str() {
             "inspect_project" => {
                 let query: Window = arguments(&call)?;
@@ -387,10 +392,7 @@ impl Host for KoharuHost {
                     .renderer()
                     .available_fonts()
                     .await?;
-                Invocation::read(context::fonts(
-                    fonts.into_iter().map(|font| font.name).collect(),
-                    &query,
-                )?)
+                Invocation::read(context::fonts(fonts, &query)?)
             }
             "view_page" => {
                 let arguments: ViewPage = arguments(&call)?;
@@ -465,142 +467,6 @@ impl Host for KoharuHost {
                 })
                 .await
             }
-            "add_text_box" => {
-                let arguments: AddTextBox = arguments(&call)?;
-                let page = entity(&arguments.page)?;
-                let frame = Frame {
-                    x: arguments.x,
-                    y: arguments.y,
-                    width: arguments.width,
-                    height: arguments.height,
-                    angle_degrees: arguments.angle_degrees,
-                };
-                self.mutate(vec![page], |project| {
-                    Box::pin(async move {
-                        let (commit, element) = project.add_text_box(page, frame).await?;
-                        Ok((commit, json!({ "page": page, "element": element })))
-                    })
-                })
-                .await
-            }
-            "set_source_text" => {
-                let arguments: SetText = arguments(&call)?;
-                let element = entity(&arguments.element)?;
-                self.mutate(vec![element], |project| {
-                    Box::pin(async move {
-                        Ok((
-                            project.set_source_text(element, arguments.text).await?,
-                            json!({ "element": element }),
-                        ))
-                    })
-                })
-                .await
-            }
-            "set_translation" => {
-                let arguments: SetTranslation = arguments(&call)?;
-                let element = entity(&arguments.element)?;
-                self.mutate(vec![element], |project| {
-                    Box::pin(async move {
-                        Ok((
-                            project.set_translation(element, arguments.text).await?,
-                            json!({ "element": element }),
-                        ))
-                    })
-                })
-                .await
-            }
-            "set_typography" => {
-                let arguments: SetTypography = arguments(&call)?;
-                let element = entity(&arguments.element)?;
-                self.mutate(vec![element], |project| {
-                    Box::pin(async move {
-                        let typography = arguments.merge(&project.snapshot(), element)?;
-                        Ok((
-                            project
-                                .set_typography(vec![TypographyUpdate {
-                                    layer: element,
-                                    typography,
-                                }])
-                                .await?,
-                            json!({ "element": element }),
-                        ))
-                    })
-                })
-                .await
-            }
-            "set_geometry" => {
-                let arguments: SetGeometry = arguments(&call)?;
-                let element = entity(&arguments.element)?;
-                let points = arguments.points.map(|points| {
-                    points
-                        .into_iter()
-                        .map(|point| Point {
-                            x: point.x,
-                            y: point.y,
-                        })
-                        .collect()
-                });
-                self.mutate(vec![element], |project| {
-                    Box::pin(async move {
-                        Ok((
-                            project
-                                .set_geometry(vec![GeometryUpdate {
-                                    layer: element,
-                                    points,
-                                }])
-                                .await?,
-                            json!({ "element": element }),
-                        ))
-                    })
-                })
-                .await
-            }
-            "set_visibility" => {
-                let arguments: SetVisibility = arguments(&call)?;
-                let elements = entities(&arguments.elements)?;
-                self.mutate(elements.clone(), |project| {
-                    Box::pin(async move {
-                        Ok((
-                            project
-                                .set_visibility(
-                                    elements.clone(),
-                                    arguments.visible,
-                                    arguments.opacity,
-                                )
-                                .await?,
-                            json!({ "elements": elements }),
-                        ))
-                    })
-                })
-                .await
-            }
-            "delete_elements" => {
-                let arguments: DeleteElements = arguments(&call)?;
-                let elements = entities(&arguments.elements)?;
-                self.mutate(elements.clone(), |project| {
-                    Box::pin(async move {
-                        Ok((
-                            project.delete_layers(elements.clone()).await?,
-                            json!({ "elements": elements }),
-                        ))
-                    })
-                })
-                .await
-            }
-            "reorder_element" => {
-                let arguments: ReorderElement = arguments(&call)?;
-                let element = entity(&arguments.element)?;
-                let parent = entity(&arguments.parent)?;
-                self.mutate(vec![element, parent], |project| {
-                    Box::pin(async move {
-                        Ok((
-                            project.move_layer(element, parent, arguments.index).await?,
-                            json!({ "element": element, "parent": parent }),
-                        ))
-                    })
-                })
-                .await
-            }
             "run_pipeline" => self.run_pipeline(arguments(&call)?, control).await,
             name => bail!("unknown Koharu tool {name}"),
         }
@@ -609,6 +475,155 @@ impl Host for KoharuHost {
 
 struct AgentCommitter {
     host: KoharuHost,
+}
+
+fn mutation_result(
+    project: &Project,
+    commit: &Commit,
+    value: impl serde::Serialize,
+) -> Result<Invocation> {
+    let mut result = Invocation::read(json!({
+        "revision": commit.revision, "project": project.info(), "result": value,
+    }))?;
+    result.changed = commit.changes.from != commit.changes.to;
+    Ok(result)
+}
+
+#[cfg(test)]
+#[path = "acceptance.rs"]
+mod acceptance;
+
+// The CLI and the native acceptance fixture execute the same parsed layer commands.
+enum LayerEdit {
+    Add(EntityId, Frame),
+    Source(EntityId, String),
+    Translation(EntityId, Option<String>),
+    Typography(EntityId, SetTypography),
+    Geometry(EntityId, Option<Vec<Point>>),
+    Visibility(Vec<EntityId>, Option<bool>, Option<f32>),
+    Delete(Vec<EntityId>),
+    Reorder(EntityId, EntityId, usize),
+}
+
+impl LayerEdit {
+    fn parse(call: &ToolCall) -> Result<Option<Self>> {
+        Ok(Some(match call.name.as_str() {
+            "add_text_box" => {
+                let a: AddTextBox = arguments(call)?;
+                Self::Add(
+                    entity(&a.page)?,
+                    Frame {
+                        x: a.x,
+                        y: a.y,
+                        width: a.width,
+                        height: a.height,
+                        angle_degrees: a.angle_degrees,
+                    },
+                )
+            }
+            "set_source_text" => {
+                let a: SetText = arguments(call)?;
+                Self::Source(entity(&a.element)?, a.text)
+            }
+            "set_translation" => {
+                let a: SetTranslation = arguments(call)?;
+                Self::Translation(entity(&a.element)?, a.text)
+            }
+            "set_typography" => {
+                let a: SetTypography = arguments(call)?;
+                Self::Typography(entity(&a.element)?, a)
+            }
+            "set_geometry" => {
+                let a: SetGeometry = arguments(call)?;
+                Self::Geometry(
+                    entity(&a.element)?,
+                    a.points.map(|points| {
+                        points
+                            .into_iter()
+                            .map(|p| Point { x: p.x, y: p.y })
+                            .collect()
+                    }),
+                )
+            }
+            "set_visibility" => {
+                let a: SetVisibility = arguments(call)?;
+                Self::Visibility(entities(&a.elements)?, a.visible, a.opacity)
+            }
+            "delete_elements" => {
+                let a: DeleteElements = arguments(call)?;
+                Self::Delete(entities(&a.elements)?)
+            }
+            "reorder_element" => {
+                let a: ReorderElement = arguments(call)?;
+                Self::Reorder(entity(&a.element)?, entity(&a.parent)?, a.index)
+            }
+            _ => return Ok(None),
+        }))
+    }
+
+    fn targets(&self) -> Vec<EntityId> {
+        match self {
+            Self::Add(id, _)
+            | Self::Source(id, _)
+            | Self::Translation(id, _)
+            | Self::Typography(id, _)
+            | Self::Geometry(id, _) => vec![*id],
+            Self::Visibility(ids, ..) | Self::Delete(ids) => ids.clone(),
+            Self::Reorder(id, parent, _) => vec![*id, *parent],
+        }
+    }
+
+    async fn apply(self, project: &mut Project) -> Result<(Commit, Value)> {
+        Ok(match self {
+            Self::Add(page, frame) => {
+                let (commit, element) = project.add_text_box(page, frame).await?;
+                (commit, json!({ "page": page, "element": element }))
+            }
+            Self::Source(element, text) => (
+                project.set_source_text(element, text).await?,
+                json!({ "element": element }),
+            ),
+            Self::Translation(element, text) => (
+                project.set_translation(element, text).await?,
+                json!({ "element": element }),
+            ),
+            Self::Typography(element, a) => {
+                let typography = a.merge(&project.snapshot(), element)?;
+                (
+                    project
+                        .set_typography(vec![TypographyUpdate {
+                            layer: element,
+                            typography,
+                        }])
+                        .await?,
+                    json!({ "element": element }),
+                )
+            }
+            Self::Geometry(element, points) => (
+                project
+                    .set_geometry(vec![GeometryUpdate {
+                        layer: element,
+                        points,
+                    }])
+                    .await?,
+                json!({ "element": element }),
+            ),
+            Self::Visibility(elements, visible, opacity) => (
+                project
+                    .set_visibility(elements.clone(), visible, opacity)
+                    .await?,
+                json!({ "elements": elements }),
+            ),
+            Self::Delete(elements) => (
+                project.delete_layers(elements.clone()).await?,
+                json!({ "elements": elements }),
+            ),
+            Self::Reorder(element, parent, index) => (
+                project.move_layer(element, parent, index).await?,
+                json!({ "element": element, "parent": parent }),
+            ),
+        })
+    }
 }
 
 #[async_trait]
@@ -648,7 +663,7 @@ fn editor_tools() -> Vec<Tool> {
                     ),
                     definition::<Window>(
                         "list_fonts",
-                        "List available font family names. Follow pagination.next_offset until null for all fonts.",
+                        "List installed font families with available faces (numeric weight, weight_range, style) and script/language metadata, using the same representation as Properties. Choose supported faces rather than guessing. Follow pagination.next_offset until null.",
                     ),
                     definition::<ViewPage>(
                         "view_page",
@@ -665,7 +680,7 @@ fn editor_tools() -> Vec<Tool> {
                     ),
                     definition::<SetTypography>(
                         "set_typography",
-                        "Patch only the supplied typography properties; omitted properties are preserved, explicit null clears an override. Example: element = an inspected text-layer ID, preferred_font = a family from list_fonts.",
+                        "Patch existing text typography. Omitted fields are preserved; null clears an override. font_weight is an INTEGER 1–1000 (400 regular, 700 bold), never a word. font_style is normal/italic/oblique. Choose a supported face from list_fonts. Colors are numeric RGBA arrays, each channel 0–255. Fixed size: size > 0 in pixels with auto_fit=false. Auto size: size=null with auto_fit=true. stroke_width >= 0; 0 disables the outline. alignment=Start/Center/End/Justify; writing_mode=Horizontal/Vertical; null restores automatic direction/alignment. Preserve text and artwork for readability repairs.",
                     ),
                     definition::<SetGeometry>(
                         "set_geometry",
@@ -673,7 +688,7 @@ fn editor_tools() -> Vec<Tool> {
                     ),
                     definition::<SetVisibility>(
                         "set_visibility",
-                        "Change visibility and/or opacity for elements.",
+                        "Change visibility (boolean) and/or opacity (number from 0 to 1, not 0 to 100). Omitted properties are preserved. Target inspected layer IDs.",
                     ),
                     definition::<DeleteElements>("delete_elements", "Delete elements and descendants."),
                     definition::<ReorderElement>(
@@ -1142,7 +1157,6 @@ struct SetTranslation {
 }
 
 #[derive(Clone, Copy, Deserialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
 enum AgentTextAlignment {
     Start,
     Center,
@@ -1162,7 +1176,6 @@ impl From<AgentTextAlignment> for koharu_scene::TextAlignment {
 }
 
 #[derive(Clone, Copy, Deserialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
 enum AgentWritingMode {
     Horizontal,
     Vertical,
@@ -1202,17 +1215,23 @@ struct SetTypography {
     #[serde(default, deserialize_with = "patch_field")]
     preferred_font: Option<Option<String>>,
     #[serde(default, deserialize_with = "patch_field")]
+    /// Numeric font weight, 1–1000. Use 400 for regular, 700 for bold. Never pass a word.
     font_weight: Option<Option<u16>>,
     #[serde(default, deserialize_with = "patch_field")]
+    /// Supported face style from list_fonts: normal, italic or oblique.
     font_style: Option<Option<AgentFontStyle>>,
     #[serde(default, deserialize_with = "patch_field")]
+    /// Positive pixel size; pair with auto_fit=false. For Auto use size=null, auto_fit=true.
     size: Option<Option<f32>>,
     auto_fit: Option<bool>,
     #[serde(default, deserialize_with = "patch_field")]
+    /// Numeric RGBA channels, each 0–255.
     color: Option<Option<[u8; 4]>>,
     #[serde(default, deserialize_with = "patch_field")]
+    /// Numeric RGBA outline color; alpha 0 hides the border.
     stroke_color: Option<Option<[u8; 4]>>,
     #[serde(default, deserialize_with = "patch_field")]
+    /// Nonnegative outline width in pixels; 0 disables the border.
     stroke_width: Option<Option<f32>>,
     #[serde(default, deserialize_with = "patch_field")]
     alignment: Option<Option<AgentTextAlignment>>,

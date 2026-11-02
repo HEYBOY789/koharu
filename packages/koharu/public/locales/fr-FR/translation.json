@@ -110,6 +110,8 @@
       "responding": "Rédaction de la réponse…",
       "waiting": "En attente du traitement…",
       "summary": "Résumé du raisonnement",
+      "targetPage": "Page ciblée : {{page}}",
+      "lastPage": "Dernière page ciblée : {{page}}",
       "toolRejected": "Un appel d’outil a été refusé. L’agent fonctionne toujours et peut réessayer.",
       "changes": "Modifications terminées : {{count}}",
       "background": "L’agent travaille sur « {{name}} ».",

@@ -2,6 +2,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-libra
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 
 import { AgentPanel } from '@/components/editor/AgentPanel'
+import { AgentProgress } from '@/components/editor/AgentProgress'
 import { receiveAgent, useKoharuStore } from '@/lib/store'
 import {
   commands,
@@ -52,9 +53,24 @@ const run: AgentRun = {
   page: null,
   element: null,
   stage: null,
+  last_page: null,
   changes: 0,
   error: null,
 }
+
+it('distinguishes the current chapter/page from the last target during queries and thinking', () => {
+  const page = 'Chapter 12 — A very long chapter title · 3/50 · 003'
+  const current: AgentRun = { ...run, phase: 'tool', tool: 'set_typography', page, last_page: page }
+  const view = render(<AgentProgress run={current} />)
+  expect(screen.getByText(`Target page: ${page}`)).toBeVisible()
+  view.rerender(<AgentProgress run={{ ...current, tool: 'list_fonts', page: null }} />)
+  expect(screen.queryByText(`Target page: ${page}`)).not.toBeInTheDocument()
+  expect(screen.getByText(`Last targeted page: ${page}`)).toBeVisible()
+  view.rerender(<AgentProgress run={{ ...current, phase: 'thinking' }} />)
+  expect(screen.getByText(`Last targeted page: ${page}`)).toBeVisible()
+  view.rerender(<AgentProgress run={{ ...run, project: 'B' }} />)
+  expect(screen.queryByText(page, { exact: false })).not.toBeInTheDocument()
+})
 function snapshot(sequence: number, current: AgentRun = run, text = ''): AgentSnapshot {
   return {
     sequence,

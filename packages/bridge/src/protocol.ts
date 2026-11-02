@@ -168,6 +168,7 @@ export type AgentRun = {
         phase: AgentPhase,
         tool: string | null,
         page: string | null,
+        last_page: string | null,
         element: string | null,
         stage: Stage | null,
         changes: number,

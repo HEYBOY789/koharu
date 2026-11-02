@@ -551,7 +551,7 @@ async fn installed_agy_edits_layer_with_native_contracts_and_chapter_range() -> 
                     )
                 }
                 "list_fonts" => Invocation::read(
-                    json!({"fonts":["Noto Sans"],"pagination":{"next_offset":null}}),
+                    json!({"fonts":[{"name":"Noto Sans","faces":[{"weight":400,"weight_range":null,"style":"normal"},{"weight":700,"weight_range":null,"style":"normal"}],"metadata":{"scripts":["latn"],"languages":["vi"]}}],"pagination":{"next_offset":null}}),
                 ),
                 "set_edit_scope" => {
                     anyhow::ensure!(

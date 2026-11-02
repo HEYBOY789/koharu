@@ -60,6 +60,7 @@ pub struct AgentRun {
     pub phase: AgentPhase,
     pub tool: Option<String>,
     pub page: Option<String>,
+    pub last_page: Option<String>,
     pub element: Option<String>,
     pub stage: Option<koharu_pipeline::Stage>,
     pub changes: u32,
@@ -180,6 +181,7 @@ impl SessionStore {
                 phase: AgentPhase::Starting,
                 tool: None,
                 page: None,
+                last_page: None,
                 element: None,
                 stage: None,
                 changes: 0,
@@ -286,6 +288,9 @@ impl SessionStore {
                 .filter(|run| run.id == id && run.state == AgentRunState::Running)
             {
                 run.phase = phase;
+                if page.is_some() {
+                    run.last_page = page.clone();
+                }
                 run.page = page;
                 run.element = element;
                 run.stage = stage;
@@ -315,6 +320,28 @@ impl SessionStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn chapter_target_survives_non_page_tools_without_leaking_into_a_new_run() {
+        let store = SessionStore::default();
+        let id = RunId::new();
+        store.begin(id, "A".into(), "repair the project");
+        let page = "Chapter 12 · 3/20 · 003";
+        store.progress(id, AgentPhase::Tool, Some(page.into()), None, None);
+        store.event(Event::ToolStarted {
+            run: id,
+            call_id: "fonts".into(),
+            name: "list_fonts".into(),
+        });
+        store.progress(id, AgentPhase::Tool, None, None, None);
+        let run = serde_json::to_value(store.snapshot().run.unwrap()).unwrap();
+        assert!(run["page"].is_null());
+        assert_eq!(run["last_page"], page);
+        store.begin(RunId::new(), "B".into(), "repair B");
+        let run = serde_json::to_value(store.snapshot().run.unwrap()).unwrap();
+        assert!(run["page"].is_null());
+        assert!(run["last_page"].is_null());
+    }
 
     #[test]
     fn tool_failures_are_visible_without_counting_edits_and_replay_is_bounded() {

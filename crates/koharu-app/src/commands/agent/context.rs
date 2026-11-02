@@ -230,15 +230,15 @@ pub(super) fn page(
     )
 }
 
-pub(super) fn fonts(fonts: Vec<String>, query: &Window) -> Result<Value> {
+pub(super) fn fonts(fonts: Vec<koharu_renderer::FontFamily>, query: &Window) -> Result<Value> {
     validate(query.limit)?;
     let total = fonts.len();
     let entries = fonts
         .into_iter()
         .skip(query.offset)
         .take(query.limit)
-        .map(Value::String)
-        .collect();
+        .map(|font| serde_json::to_value(crate::commands::fonts::FontFamily::from(font)))
+        .collect::<std::result::Result<Vec<_>, _>>()?;
     window(json!({}), "fonts", entries, total, query.offset)
 }
 
@@ -408,27 +408,55 @@ mod tests {
 
     #[test]
     fn font_windows_preserve_names_and_never_exceed_the_response_budget() -> Result<()> {
-        let names = (0..70)
-            .map(|index| format!("Font {index}"))
+        use koharu_renderer::{FontFace, FontFamily, FontMetadata, FontRange, FontStyle};
+        let fixture = |name| FontFamily {
+            name,
+            metadata: FontMetadata::default(),
+            sources: vec![],
+            faces: vec![FontFace {
+                post_script_name: "VariableItalic".into(),
+                weight: 700,
+                weight_range: Some(FontRange {
+                    minimum: 100,
+                    maximum: 900,
+                }),
+                style: FontStyle::Italic,
+            }],
+        };
+        let families = (0..70)
+            .map(|index| fixture(format!("Font {index}")))
             .collect::<Vec<_>>();
         let mut actual = Vec::new();
         let mut offset = 0;
         loop {
-            let response = fonts(names.clone(), &Window { offset, limit: 20 })?;
+            let response = fonts(families.clone(), &Window { offset, limit: 20 })?;
+            assert!(serde_json::to_vec(&response)?.len() <= MAX_BYTES);
+            assert_eq!(response["fonts"][0]["faces"][0]["weight"], 700);
+            assert_eq!(
+                response["fonts"][0]["faces"][0]["weight_range"]["maximum"],
+                900
+            );
+            assert_eq!(response["fonts"][0]["faces"][0]["style"], "italic");
             actual.extend(
                 response["fonts"]
                     .as_array()
                     .unwrap()
                     .iter()
-                    .map(|name| name.as_str().unwrap().to_owned()),
+                    .map(|font| font["name"].as_str().unwrap().to_owned()),
             );
             let Some(next) = response["pagination"]["next_offset"].as_u64() else {
                 break;
             };
             offset = next as usize;
         }
-        assert_eq!(actual, names);
-        assert!(fonts(vec!["x".repeat(MAX_BYTES)], &Window::default()).is_err());
+        assert_eq!(
+            actual,
+            families
+                .iter()
+                .map(|font| font.name.clone())
+                .collect::<Vec<_>>()
+        );
+        assert!(fonts(vec![fixture("x".repeat(MAX_BYTES))], &Window::default()).is_err());
         Ok(())
     }
 }

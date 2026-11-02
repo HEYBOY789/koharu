@@ -110,6 +110,8 @@
       "responding": "Escrevendo resposta…",
       "waiting": "Aguardando processamento…",
       "summary": "Resumo do raciocínio",
+      "targetPage": "Página selecionada: {{page}}",
+      "lastPage": "Última página selecionada: {{page}}",
       "toolRejected": "Uma chamada de ferramenta foi rejeitada. O agente continua em execução e pode tentar novamente.",
       "changes": "Edições concluídas: {{count}}",
       "background": "O agente está trabalhando em “{{name}}”.",

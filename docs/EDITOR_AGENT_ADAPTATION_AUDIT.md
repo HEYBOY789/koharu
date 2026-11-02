@@ -2,6 +2,31 @@
 
 Ngày: 31/10/2026. Source đã kiểm tra: `b4ce18dcbedc0f805145d8d2940e0189abd2349d`.
 
+## Kiểm tra thuộc tính layer và vị trí agent — 02/11/2026
+
+Lần kiểm tra này đối chiếu trực tiếp `TypeInspector`, `LayerEditor`, cây Layers và các tool native. Layer mutations dùng chung một bộ lệnh đã parse cho ứng dụng và fixture nghiệm thu; fixture không còn giả lập thành công bằng cách tăng bộ đếm. Các thay đổi vẫn giữ project lease, revision check, phạm vi trang, patch native, Undo và đồng bộ canvas của ứng dụng.
+
+| Điều khiển | Tool và biểu diễn thực tế | Kiểm tra native |
+| --- | --- | --- |
+| Font | `list_fonts` trả family, faces, weight/range/style và metadata giống Properties; `set_typography.preferred_font` | Đổi font giữ các thuộc tính khác, đọc lại sau khi mở project |
+| Độ đậm, kiểu chữ | `font_weight` là số 1–1000; `font_style` là `normal/italic/oblique` | Weight 400/700; cả ba style; từ chối `"bold"`, weight 0/1001 |
+| Cỡ chữ, Auto | `size` là pixel dương, `auto_fit` là boolean; `size:null` bỏ cỡ cố định | Cỡ cố định, Auto, giữ thuộc tính bỏ qua, từ chối size không hợp lệ |
+| Màu chữ | `color:[r,g,b,a]`, mỗi kênh 0–255 | Ghi/đọc RGBA, xóa override; từ chối hex hoặc kênh ngoài khoảng |
+| Border | `stroke_color` RGBA và `stroke_width >= 0`; alpha 0 hoặc width 0 tắt viền | Màu/alpha/độ dày và xóa override; từ chối độ dày âm |
+| Căn lề, hướng chữ | Dùng cùng giá trị native: `Start/Center/End/Justify`, `Horizontal/Vertical`; `null` là Auto/inherit | Mọi lựa chọn, xóa override; input tool và output inspection thống nhất chữ hoa/thường |
+| Vị trí, kích thước hộp chữ | `set_geometry` dùng polygon trong tọa độ trang | Ghi/đọc điểm; reset bằng `null` chỉ được cho layout có vùng tự động |
+| Ẩn/hiện, opacity | `set_visibility`, opacity 0–1 | Thay riêng từng thuộc tính giữ phần còn lại; từ chối opacity 50 |
+| Nội dung, xuống dòng | `set_source_text`, `set_translation` | Ghi/đọc text và xuống dòng; `text:null` xóa translation có chủ đích |
+| Thêm, xóa, sắp xếp layer | `add_text_box`, `delete_elements`, `reorder_element` | Tạo hộp có góc, đổi thứ tự cây, xóa và Undo |
+
+`font_weight:"bold"` vẫn bị từ chối: native không sửa đoán payload. Schema và hướng dẫn nay ghi rõ số 700 cho bold, cách chọn face hỗ trợ, RGBA và đơn vị. Căn lề/hướng chữ trước đó nhận lowercase trong khi inspection trả tên enum native có chữ hoa; hợp đồng tool đã được thống nhất với inspection, không giữ alias cũ.
+
+Agent/Activity hiển thị trang đang được tool nhắm tới gồm tên chapter, vị trí `3/50` và nhãn trang. Khi agent đọc font/project hoặc chuyển sang suy luận, giao diện ghi rõ **trang gần nhất**. Trạng thái này được giữ qua các tool không có target, nhưng reset khi bắt đầu run/project khác. Không tự chuyển canvas đang được người dùng thao tác. Bộ đếm chỉ tăng khi commit đổi revision; gửi lại cùng giá trị không được tính là một chỉnh sửa mới.
+
+Kiểm tra tập trung gồm native settings roundtrip, Undo, từ chối payload sai, phạm vi trang, no-op và persistence; UI kiểm tra target hiện tại/trang gần nhất và hai project song song. Lượt nghiệm thu AGY/Gemini dùng project native tạm, font catalog thật và renderer native để kiểm tra model gửi tham số, lưu layer và xem ảnh trước/sau. Kết quả chạy/build/bàn giao cuối được ghi trong `F:\web_truyen\docs\VALIDATION.md`.
+
+Giới hạn: đây không phải kết luận mọi trang trong project người dùng đã được dàn chữ đẹp. Line height, letter/word spacing, inset, brush/erase/freehand và thao tác pan không có tool Editor Agent tương ứng; một số giá trị spacing còn do renderer quyết định. Geometry polygon không phải tool kéo/rotate canvas theo resolved layout metrics. Chưa mở tool Undo cho agent; Undo vẫn có trong ứng dụng. Các luồng chapter summary/wiki và xuất bản giữ phạm vi như ghi ở phần trước.
+
 ## Cập nhật triển khai — 02/11/2026
 
 Phần bên dưới lưu kết quả rà soát ban đầu. Các thay đổi sau đã được triển khai cho sửa layer/font theo chapter:

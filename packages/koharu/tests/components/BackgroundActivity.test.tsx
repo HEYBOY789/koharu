@@ -27,6 +27,7 @@ it('shows an agent on A alongside a pipeline on B and stops only the selected ru
           page: '007',
           element: null,
           stage: null,
+          last_page: null,
           changes: 3,
           error: null,
         },
