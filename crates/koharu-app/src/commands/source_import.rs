@@ -140,7 +140,7 @@ pub(crate) async fn preview_source_url(
         handle.state::<JobChannel>().channel.publish(job);
         let result: Result<SourcePreview> = async {
             let _permit = processing
-                .wait(&stop)
+                .wait_source(&stop)
                 .await
                 .context("source preview stopped while queued")?;
             if let Some(job) = processing.jobs.lock().get_mut(&id) {
@@ -347,13 +347,13 @@ pub(crate) async fn import_source_url(
     handle.state::<JobChannel>().channel.publish(job.clone());
     drop(tokio::spawn(async move {
         let processing = handle.state::<Processing>();
-        let permit = processing.wait(&stop).await;
-        let result = if permit.is_some() {
+        let permit = processing.wait_source(&stop).await;
+        let result = if let Some(permit) = permit {
             if let Some(job) = processing.jobs.lock().get_mut(&id) {
                 job.state = JobState::Running;
                 handle.state::<JobChannel>().channel.publish(job.clone());
             }
-            download_and_import(&handle, id, &url, &config, &options, &stop).await
+            download_and_import(&handle, id, &url, &config, &options, &stop, permit).await
         } else {
             Err(anyhow::anyhow!("source import stopped while queued"))
         };
@@ -460,6 +460,7 @@ async fn run_source_command(
     Ok(output)
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn download_and_import(
     handle: &AppHandle<CefRuntime>,
     id: JobId,
@@ -467,6 +468,7 @@ async fn download_and_import(
     config: &PublicationConfig,
     options: &SourceImportOptions,
     stop: &StopToken,
+    source_permit: tokio::sync::OwnedMutexGuard<()>,
 ) -> Result<()> {
     let output = run_source_command(handle, id, url, config, options, stop, false).await?;
     let bytes = tokio::fs::read(output.join("source.json")).await?;
@@ -537,7 +539,7 @@ async fn download_and_import(
     )
     .await?;
     if options.summarize || options.translate {
-        let chapters = project
+        let chapters: Vec<_> = project
             .snapshot()
             .chapters()?
             .entries
@@ -550,6 +552,36 @@ async fn download_and_import(
             .retain_background(project, ProjectOwner::Pipeline)
             .await?;
         let outcome = async {
+            let processing = handle.state::<Processing>();
+            if let Some(job) = processing.jobs.lock().get_mut(&id) {
+                job.state = JobState::Queued;
+                job.phase = Some(if options.summarize {
+                    ChapterPhase::Summarize
+                } else {
+                    ChapterPhase::Translate
+                });
+                job.completed = 0;
+                job.total = chapters.len();
+                job.chapter_title = None;
+                job.detail = None;
+                job.model = None;
+                job.chapter_progress = Some(super::processing::ChapterProgress {
+                    completed: 0,
+                    total: chapters.len(),
+                });
+                handle.state::<JobChannel>().channel.publish(job.clone());
+            }
+            // The retained project reserves its own session while the next source
+            // can download. Only summary/translation waits for accelerator admission.
+            drop(source_permit);
+            let _permit = processing
+                .wait(stop)
+                .await
+                .context("source workflow stopped while queued")?;
+            if let Some(job) = processing.jobs.lock().get_mut(&id) {
+                job.state = JobState::Running;
+                handle.state::<JobChannel>().channel.publish(job.clone());
+            }
             let config = summarizer::SummarizerConfig::load()?.read()?.clone();
             let language = koharu_pipeline::PipelineConfig::load()?
                 .read()?
@@ -579,7 +611,11 @@ async fn download_and_import(
         outcome?;
         return Ok(());
     }
-    // MangaDex creation stays in the background; the existing generic URL flow still opens its project.
+    // Keep an active workflow visible. Generic URL imports still open when idle.
+    let processing = handle.state::<Processing>();
+    let Ok(_permit) = processing.try_admit() else {
+        return Ok(());
+    };
     if source_address(url, None)?.1 {
         return Ok(());
     }

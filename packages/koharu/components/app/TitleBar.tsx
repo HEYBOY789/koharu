@@ -23,6 +23,7 @@ import {
   usePage,
   usePages,
   useProject,
+  useProjectBusy,
 } from '@/lib/queries'
 import { useKoharuStore } from '@/lib/store'
 import { commands, type Operation, type Scope, type Stage } from '@koharu/bridge/protocol'
@@ -59,10 +60,7 @@ export function TitleBar() {
   const selectLayers = useKoharuStore((state) => state.selectLayers)
   const setSettingsOpen = useKoharuStore((state) => state.setSettingsOpen)
   const requestCanvasFit = useKoharuStore((state) => state.requestCanvasFit)
-  // One pipeline job runs at a time across the project, including chapter runs.
-  const busy = useKoharuStore((state) =>
-    Object.values(state.jobs).some((job) => job.state === 'running'),
-  )
+  const busy = useProjectBusy()
   const { importPages, importing } = useImportPages()
   const { run: exportProject, busy: exporting } = useCommand(
     ['export-project'],
@@ -109,7 +107,7 @@ export function TitleBar() {
                 <BookOpen />
                 {t('mangadex.title')}
               </MenubarItem>
-              <MenubarItem disabled={busy || importing} onClick={() => setSourceImportOpen(true)}>
+              <MenubarItem disabled={importing} onClick={() => setSourceImportOpen(true)}>
                 <BookOpen />
                 {t('sourceImport.title')}
               </MenubarItem>

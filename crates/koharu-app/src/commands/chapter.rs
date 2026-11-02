@@ -375,13 +375,17 @@ async fn start(
     };
     let id = JobId::new();
     let stop = StopToken::default();
-    let permit = handle.state::<Processing>().try_admit()?;
     {
         let processing = handle.state::<Processing>();
         let mut stops = processing.stops.lock();
         stops.insert(id, stop.clone());
     }
-    let target = match handle.state::<CurrentProject>().project.retain(origin, ProjectOwner::Pipeline).await {
+    let target = match handle
+        .state::<CurrentProject>()
+        .project
+        .retain(origin, ProjectOwner::Pipeline)
+        .await
+    {
         Ok(target) => target,
         Err(error) => {
             handle.state::<Processing>().stops.lock().remove(&id);
@@ -391,7 +395,7 @@ async fn start(
     let job = Job {
         id,
         project: Some(target.name.clone()),
-        state: JobState::Running,
+        state: JobState::Queued,
         completed: 0,
         total: chapters.len(),
         page: None,
@@ -421,20 +425,25 @@ async fn start(
 
     let task = handle.clone();
     drop(tokio::spawn(async move {
-        let _permit = permit;
-        let outcome = run_bound(
-            task.clone(),
-            id,
-            target.clone(),
-            chapters,
-            summarize,
-            translate,
-            resume,
-            config,
-            language,
-            stop,
-        )
-        .await;
+        let processing = task.state::<Processing>();
+        let outcome = if let Some(_permit) = processing.wait(&stop).await {
+            update(&task, id, |job| job.state = JobState::Running);
+            run_bound(
+                task.clone(),
+                id,
+                target.clone(),
+                chapters,
+                summarize,
+                translate,
+                resume,
+                config,
+                language,
+                stop,
+            )
+            .await
+        } else {
+            Ok(true)
+        };
         let (stopped, failure) = match outcome {
             Ok(stopped) => (stopped, None),
             Err(error) => (false, Some(format!("{error:#}"))),

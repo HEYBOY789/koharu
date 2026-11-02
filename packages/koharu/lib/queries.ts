@@ -77,10 +77,25 @@ export function useProject(enabled = true) {
 }
 
 export function useProjectBusy() {
+  return Boolean(useProjectJob())
+}
+
+export function useProjectJob() {
   const name = useProject().data?.name
   return useKoharuStore((state) =>
-    Object.values(state.jobs).some(
-      (job) => job.state === 'running' && (job.project === null || job.project === name),
+    Object.values(state.jobs).find(
+      (job) =>
+        (job.state === 'running' || job.state === 'queued') &&
+        job.phase !== 'inspect' &&
+        (job.project === name || (job.project === null && job.phase !== 'import')),
+    ),
+  )
+}
+
+export function useInferenceJob() {
+  return useKoharuStore((state) =>
+    Object.values(state.jobs).find(
+      (job) => job.state === 'running' && job.phase !== 'import' && job.phase !== 'inspect',
     ),
   )
 }

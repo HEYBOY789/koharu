@@ -91,6 +91,7 @@ pub enum JobState {
 #[derive(Default)]
 pub(crate) struct Processing {
     pub(crate) admission: Arc<tokio::sync::Mutex<()>>,
+    source_admission: Arc<tokio::sync::Mutex<()>>,
     pub(crate) stops: Mutex<HashMap<JobId, StopToken>>,
     pub(crate) jobs: Mutex<HashMap<JobId, Job>>,
     pub(crate) inpainting_mask: Mutex<Option<koharu_pipeline::InpaintingMask>>,
@@ -105,7 +106,21 @@ impl Processing {
     }
 
     pub(crate) async fn wait(&self, stop: &StopToken) -> Option<tokio::sync::OwnedMutexGuard<()>> {
-        let admission = self.admission.clone().lock_owned();
+        Self::wait_on(&self.admission, stop).await
+    }
+
+    pub(crate) async fn wait_source(
+        &self,
+        stop: &StopToken,
+    ) -> Option<tokio::sync::OwnedMutexGuard<()>> {
+        Self::wait_on(&self.source_admission, stop).await
+    }
+
+    async fn wait_on(
+        lane: &Arc<tokio::sync::Mutex<()>>,
+        stop: &StopToken,
+    ) -> Option<tokio::sync::OwnedMutexGuard<()>> {
+        let admission = lane.clone().lock_owned();
         tokio::pin!(admission);
         loop {
             if stop.stopped() {
@@ -119,8 +134,10 @@ impl Processing {
     }
     pub(crate) fn busy_for(&self, name: &str) -> bool {
         self.jobs.lock().values().any(|job| {
-            job.state == JobState::Running
-                && job.project.as_deref().is_none_or(|project| project == name)
+            matches!(job.state, JobState::Running | JobState::Queued)
+                && job.phase != Some(ChapterPhase::Inspect)
+                && (job.project.as_deref() == Some(name)
+                    || job.project.is_none() && job.phase != Some(ChapterPhase::Import))
         })
     }
 }
@@ -238,14 +255,13 @@ pub(crate) async fn process(
     processing: State<'_, Processing>,
     job_channel: State<'_, JobChannel>,
 ) -> std::result::Result<JobId, Error> {
-    let (snapshot, origin) = {
+    let origin = {
         let current = project.project.lock().await;
         let current = current.as_ref().context("no project is open")?;
-        (current.snapshot(), current.instance_id)
+        current.instance_id
     };
     let id = JobId::new();
     let stop = StopToken::default();
-    let permit = processing.try_admit()?;
     {
         let mut stops = processing.stops.lock();
         stops.insert(id, stop.clone());
@@ -260,7 +276,7 @@ pub(crate) async fn process(
     let job = Job {
         id,
         project: Some(target.name.clone()),
-        state: JobState::Running,
+        state: JobState::Queued,
         completed: 0,
         total: 0,
         page: None,
@@ -281,23 +297,45 @@ pub(crate) async fn process(
     let task_handle = handle.clone();
     let inpainting_mask = processing.inpainting_mask.lock().take();
     drop(tokio::spawn(async move {
-        let _permit = permit;
-        let request = koharu_pipeline::Request {
-            resume: false,
-            operation,
-            scope,
-            stop: stop.clone(),
-            progress: Some(progress_sink(task_handle.clone(), id)),
-            inpainting_mask,
-        };
-        let mut committer = PipelineCommitter::new(task_handle.clone(), target.clone());
-        let result = pipeline.execute(snapshot, request, &mut committer).await;
-        let (stopped, error) = match result {
-            Ok(report) => (report.status == RunStatus::Stopped, None),
-            Err(error) => {
-                tracing::error!(stage = ?error.stage, %error, "processing failed");
-                (false, Some(format!("{error:#}")))
+        let result: Result<bool> = async {
+            let processing = task_handle.state::<Processing>();
+            let Some(_permit) = processing.wait(&stop).await else {
+                return Ok(true);
+            };
+            let snapshot = task_handle
+                .state::<CurrentProject>()
+                .project
+                .snapshot(&target)
+                .await?;
+            if let Some(job) = processing.jobs.lock().get_mut(&id) {
+                job.state = JobState::Running;
+                task_handle
+                    .state::<JobChannel>()
+                    .channel
+                    .publish(job.clone());
             }
+            let request = koharu_pipeline::Request {
+                resume: false,
+                operation,
+                scope,
+                stop: stop.clone(),
+                progress: Some(progress_sink(task_handle.clone(), id)),
+                inpainting_mask,
+            };
+            let mut committer = PipelineCommitter::new(task_handle.clone(), target.clone());
+            let report = pipeline
+                .execute(snapshot, request, &mut committer)
+                .await
+                .map_err(|error| {
+                    tracing::error!(stage = ?error.stage, %error, "processing failed");
+                    error
+                })?;
+            Ok(report.status == RunStatus::Stopped)
+        }
+        .await;
+        let (stopped, error) = match result {
+            Ok(stopped) => (stopped, None),
+            Err(error) => (false, Some(format!("{error:#}"))),
         };
         task_handle
             .state::<CurrentProject>()
@@ -346,6 +384,121 @@ pub(crate) async fn stop_job(
 #[cfg(test)]
 mod admission_tests {
     use super::*;
+
+    #[test]
+    fn preview_and_other_downloads_do_not_block_project_edits_but_queued_work_reserves_its_target()
+    {
+        let processing = Processing::default();
+        let id = JobId::new();
+        let mut job = Job {
+            id,
+            project: Some("Imported".into()),
+            state: JobState::Running,
+            completed: 0,
+            total: 0,
+            page: None,
+            chapter: None,
+            chapter_title: None,
+            chapter_progress: None,
+            phase: Some(ChapterPhase::Import),
+            stage: None,
+            model: None,
+            detail: None,
+            retry: None,
+            error: None,
+        };
+        processing.jobs.lock().insert(id, job.clone());
+        assert!(!processing.busy_for("Editing"));
+        assert!(processing.busy_for("Imported"));
+        job.phase = Some(ChapterPhase::Inspect);
+        job.project = None;
+        processing.jobs.lock().insert(id, job.clone());
+        assert!(!processing.busy_for("Editing"));
+        job.phase = Some(ChapterPhase::Translate);
+        job.project = Some("Imported".into());
+        job.state = JobState::Queued;
+        processing.jobs.lock().insert(id, job.clone());
+        assert!(!processing.busy_for("Editing"));
+        assert!(processing.busy_for("Imported"));
+        job.state = JobState::Stopped;
+        processing.jobs.lock().insert(id, job);
+        assert!(!processing.busy_for("Imported"));
+    }
+
+    #[tokio::test]
+    async fn source_work_is_independent_of_inference_but_sources_still_run_one_at_a_time() {
+        let processing = Processing::default();
+        let inference = processing.try_admit().unwrap();
+        let stop = StopToken::default();
+        let source = tokio::time::timeout(
+            std::time::Duration::from_millis(100),
+            processing.wait_source(&stop),
+        )
+        .await
+        .expect("an active translation must not block downloads")
+        .unwrap();
+        let next_source = processing.wait_source(&stop);
+        tokio::pin!(next_source);
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(20), &mut next_source)
+                .await
+                .is_err()
+        );
+        drop(inference);
+        let inference = processing
+            .try_admit()
+            .expect("an active download must not block translation");
+        drop(source);
+        let next_source = tokio::time::timeout(std::time::Duration::from_millis(100), next_source)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            processing.try_admit().is_err(),
+            "the source must not release inference admission"
+        );
+        drop(next_source);
+        drop(inference);
+    }
+
+    #[tokio::test]
+    async fn stopped_source_waiter_does_not_release_other_sources_or_inference() {
+        let processing = Processing::default();
+        let inference = processing.try_admit().unwrap();
+        let source = processing.wait_source(&StopToken::default()).await.unwrap();
+        let stop = StopToken::default();
+        let waiting = processing.wait_source(&stop);
+        tokio::pin!(waiting);
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(20), &mut waiting)
+                .await
+                .is_err()
+        );
+        stop.stop();
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(300), waiting)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert!(processing.try_admit().is_err());
+        let next_stop = StopToken::default();
+        let next = processing.wait_source(&next_stop);
+        tokio::pin!(next);
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(20), &mut next)
+                .await
+                .is_err()
+        );
+        drop(source);
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(100), next)
+                .await
+                .unwrap()
+                .is_some()
+        );
+        drop(inference);
+    }
 
     #[tokio::test]
     async fn import_queue_waits_for_current_workflow_and_cancellation_does_not_block_the_next() {

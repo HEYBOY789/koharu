@@ -39,12 +39,12 @@ impl Workspace {
     fn retain(&mut self, id: Uuid, name: String, owner: ProjectOwner) -> Result<ProjectLease> {
         ensure!(
             !self.leases.iter().any(|(token, (project, existing))| {
-                (*existing == owner)
+                (*existing == owner && owner == ProjectOwner::Agent)
                     || (*project == id
                         && (*existing == ProjectOwner::Pipeline
                             || self.busy_agents.contains(token)))
             }),
-            "a task already owns this project or processing lane; stop it before starting another"
+            "a task already owns this project or agent lane; stop it before starting another"
         );
         let token = Uuid::new_v4();
         self.leases.insert(token, (id, owner));
@@ -337,19 +337,148 @@ mod tests {
             workspace.snapshot(&imported).await.unwrap().pages().count(),
             0
         );
-        assert!(
-            workspace
-                .retain_background(memory("Another").await, ProjectOwner::Pipeline)
-                .await
-                .is_err()
-        );
+        let waiting = workspace
+            .retain_background(memory("Another").await, ProjectOwner::Pipeline)
+            .await
+            .unwrap();
+        assert!(workspace.target(&imported).await.is_ok());
+        assert!(workspace.target(&waiting).await.is_ok());
         workspace.finish(&imported).await;
+        assert!(workspace.target(&waiting).await.is_ok());
+        workspace.finish(&waiting).await;
         assert_eq!(workspace.lock().await.as_ref().unwrap().name, "Editing");
         assert!(
             workspace
                 .retain_background(memory("Next").await, ProjectOwner::Pipeline)
                 .await
                 .is_ok()
+        );
+    }
+
+    #[tokio::test]
+    async fn imported_workflows_keep_sessions_and_fifo_while_the_next_source_downloads() {
+        use crate::commands::processing::Processing;
+        use koharu_pipeline::StopToken;
+        use std::time::Duration;
+
+        let root = tempfile::tempdir().unwrap();
+        let library = ProjectLibrary {
+            root: root.path().to_owned(),
+        };
+        let workspace = ProjectWorkspace::default();
+        let a = library.create("Translating").await.unwrap();
+        let a_id = a.instance_id;
+        workspace.replace(a).await;
+        let active = workspace
+            .retain(a_id, ProjectOwner::Pipeline)
+            .await
+            .unwrap();
+        let processing = Processing::default();
+        let current = processing.try_admit().unwrap();
+        let stop = StopToken::default();
+        let source =
+            tokio::time::timeout(Duration::from_millis(100), processing.wait_source(&stop))
+                .await
+                .unwrap()
+                .unwrap();
+        let b = workspace
+            .retain_background(
+                library.create("Downloaded B").await.unwrap(),
+                ProjectOwner::Pipeline,
+            )
+            .await
+            .unwrap();
+        let b_wait = processing.wait(&stop);
+        tokio::pin!(b_wait);
+        assert!(
+            tokio::time::timeout(Duration::from_millis(20), &mut b_wait)
+                .await
+                .is_err()
+        );
+        drop(source);
+        let next_source =
+            tokio::time::timeout(Duration::from_millis(100), processing.wait_source(&stop))
+                .await
+                .unwrap()
+                .unwrap();
+        let c = workspace
+            .retain_background(
+                library.create("Downloaded C").await.unwrap(),
+                ProjectOwner::Pipeline,
+            )
+            .await
+            .unwrap();
+        let c_wait = processing.wait(&stop);
+        tokio::pin!(c_wait);
+        assert!(
+            tokio::time::timeout(Duration::from_millis(20), &mut c_wait)
+                .await
+                .is_err()
+        );
+        assert_eq!(workspace.lock().await.as_ref().unwrap().name, "Translating");
+        workspace.open(&library, "Downloaded B").await.unwrap();
+        assert!(workspace.target(&b).await.unwrap().1);
+        assert!(
+            workspace
+                .retain(b.id, ProjectOwner::Pipeline)
+                .await
+                .is_err()
+        );
+        assert!(workspace.retain(b.id, ProjectOwner::Agent).await.is_err());
+        assert!(workspace.delete(&library, "Downloaded C").await.is_err());
+        workspace.open(&library, "Translating").await.unwrap();
+        workspace.finish(&active).await;
+        drop(current);
+        let b_running = tokio::time::timeout(Duration::from_millis(100), b_wait)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            tokio::time::timeout(Duration::from_millis(20), &mut c_wait)
+                .await
+                .is_err()
+        );
+        assert!(processing.try_admit().is_err());
+        {
+            let (mut project, visible) = workspace.target(&b).await.unwrap();
+            assert!(!visible);
+            project
+                .set_wiki("characters".into(), "B only".into())
+                .await
+                .unwrap();
+        }
+        assert!(
+            workspace
+                .snapshot(&c)
+                .await
+                .unwrap()
+                .wiki()
+                .unwrap()
+                .files
+                .iter()
+                .all(|file| file.body != "B only")
+        );
+        workspace.finish(&b).await;
+        assert!(workspace.target(&c).await.is_ok());
+        drop(b_running);
+        let c_running = tokio::time::timeout(Duration::from_millis(100), c_wait)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(processing.try_admit().is_err());
+        drop(next_source);
+        workspace.finish(&c).await;
+        drop(c_running);
+        assert!(processing.try_admit().is_ok());
+        let reopened = library.open("Downloaded B").await.unwrap();
+        assert!(
+            reopened
+                .snapshot()
+                .wiki()
+                .unwrap()
+                .files
+                .iter()
+                .any(|file| file.body == "B only")
         );
     }
 
@@ -493,12 +622,17 @@ mod tests {
         let target = workspace.retain(id, ProjectOwner::Pipeline).await.unwrap();
         workspace.replace(library.create("A").await.unwrap()).await;
         let active_id = workspace.lock().await.as_ref().unwrap().instance_id;
+        let queued = workspace
+            .retain(active_id, ProjectOwner::Pipeline)
+            .await
+            .unwrap();
         assert!(
             workspace
                 .retain(active_id, ProjectOwner::Pipeline)
                 .await
                 .is_err()
         );
+        workspace.finish(&queued).await;
         assert!(workspace.delete(&library, "B").await.is_err());
         #[cfg(windows)]
         assert!(workspace.delete(&library, "b").await.is_err());

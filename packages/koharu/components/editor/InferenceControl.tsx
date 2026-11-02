@@ -16,6 +16,7 @@ import { useTranslation } from 'react-i18next'
 import { ModelPicker } from '@/components/controls/ModelPicker'
 import { OutputPicker, type OutputDraft } from '@/components/controls/OutputPicker'
 import { refreshTranslationModels, savePreferences } from '@/lib/backend'
+import { useInferenceJob, useProjectJob } from '@/lib/queries'
 import { pipelineStages, receivePreferences, useKoharuStore, type PipelineScope } from '@/lib/store'
 import { modelKey, providerName } from '@/lib/translation'
 import {
@@ -44,9 +45,11 @@ export function InferenceControl({
   const stages = useKoharuStore((state) => state.processingStages)
   const setScope = useKoharuStore((state) => state.setProcessingScope)
   const setStages = useKoharuStore((state) => state.setProcessingStages)
-  const jobs = useKoharuStore((state) => state.jobs)
   const selectedPages = useKoharuStore((state) => state.selectedPages)
-  const running = Object.values(jobs).find((job) => job.state === 'running') ?? null
+  const running = useInferenceJob()
+  const current = useProjectJob()
+  const processing =
+    current?.phase !== 'import' && current?.phase !== 'inspect' ? current : undefined
   const unavailable = scope === 'selected-pages' && selectedPages.length === 0
 
   return (
@@ -60,8 +63,8 @@ export function InferenceControl({
         onStagesChange={setStages}
       />
 
-      {running ? (
-        <StopJobButton id={running.id} label className='rounded-lg px-2.5 text-[11px]' />
+      {processing ? (
+        <StopJobButton id={processing.id} label className='rounded-lg px-2.5 text-[11px]' />
       ) : (
         <Button
           type='button'
@@ -71,11 +74,11 @@ export function InferenceControl({
             !running && 'bg-primary/80 hover:bg-primary/90',
           )}
           disabled={disabled || unavailable}
-          aria-label={t('inference.runProcessing')}
+          aria-label={t(running ? 'inference.queueProcessing' : 'inference.runProcessing')}
           onClick={() => onRun(scope, stages)}
         >
           <Play className='size-3' />
-          <span>{t('inference.run')}</span>
+          <span>{t(running ? 'inference.queueProcessing' : 'inference.run')}</span>
         </Button>
       )}
     </div>

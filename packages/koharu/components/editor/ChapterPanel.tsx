@@ -15,8 +15,10 @@ import {
   refresh,
   useChapter,
   useChapters,
+  useInferenceJob,
   usePage,
   useProject,
+  useProjectBusy,
 } from '@/lib/queries'
 import { useKoharuStore } from '@/lib/store'
 import { commands } from '@koharu/bridge/protocol'
@@ -68,10 +70,12 @@ export function ChapterPanel() {
     setDraft(null)
   }, [chapterId])
 
-  // The backend runs one job at a time across the whole project, so every
-  // chapter's controls have to yield to a job started from another chapter.
-  const running = Object.values(jobs).find((job) => job.state === 'running')
-  const busy = Boolean(running)
+  const running = useInferenceJob()
+  const projectBusy = useProjectBusy()
+  const busy = projectBusy
+  const waiting = Object.values(jobs).find(
+    (job) => job.state === 'queued' && job.project === project?.name,
+  )
   const currentRunning = running?.project === project?.name ? running : undefined
   const ownRunning = currentRunning?.chapter === chapterId ? currentRunning : undefined
   if (!data || !chapterId) return null
@@ -233,10 +237,20 @@ export function ChapterPanel() {
               </p>
             ) : null}
           </div>
+        ) : waiting ? (
+          <div
+            role='status'
+            className='mt-2 flex items-center rounded-md bg-muted/60 p-2 text-[10px]'
+          >
+            {t('activity.queued')}
+            <StopJobButton id={waiting.id} className='ml-auto' />
+          </div>
         ) : running ? (
           <p className='mt-2 rounded-md bg-muted/60 p-2 text-[10px] leading-4 text-muted-foreground'>
             {t('chapter.otherRunning', {
-              title: running.chapter_title ?? t('chapter.title'),
+              title:
+                [running.project, running.chapter_title].filter(Boolean).join(' · ') ||
+                t('chapter.title'),
             })}
           </p>
         ) : null}
