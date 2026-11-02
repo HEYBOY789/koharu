@@ -2,6 +2,14 @@
 
 Ngày: 31/10/2026. Source đã kiểm tra: `b4ce18dcbedc0f805145d8d2940e0189abd2349d`.
 
+## Gửi prompt bị chặn bởi console Windows — 03/11/2026
+
+Ảnh tiếp theo cho thấy input bị khóa nhưng prompt chưa vào hội thoại. Kiểm tra cửa sổ thực tế thấy console mang tên `Select koharu.exe`, chưa có subprocess AGY. Chỉ gửi Escape cho đúng console, không gửi lại prompt hoặc dừng job, làm tên console trở lại bình thường, tiến trình AGY xuất hiện và prompt cũ được ghi vào hội thoại. Lượt đó sau đó hoàn tất ở Chapter 2 trang 002 với một chỉnh sửa native đã lưu. Đây là bằng chứng trực tiếp của lần treo này, không phải lỗi gọi tool hoặc thiếu kết nối model.
+
+Desktop startup trên Windows nay bỏ `ENABLE_QUICK_EDIT_MODE` và bật `ENABLE_EXTENDED_FLAGS`, giữ nguyên các input mode khác. Helper chạy sau khi parse CLI để --version/--help không thay đổi console; không có console hoặc stdin bị redirect thì bỏ qua. API Windows nằm sau cfg Windows trong module riêng; đường khởi động Linux không đổi.
+
+Kiểm tra Win32 thật trong console ẩn, độc lập đã thất bại khi Quick Edit còn bật, rồi qua sau sửa; đồng thời xác minh các flag khác và tính lặp lại. Test được đánh dấu manual/ignored vì cần console riêng, tránh thay đổi console dùng chung khi chạy suite. Nó xác minh mode hệ điều hành, không giả lập model hay thao tác trên project của người dùng. Cách sửa ngăn chọn chữ tự động bằng chuột; thao tác cố ý chọn Mark/Select trong menu console vẫn có thể làm console dừng. Chi tiết build và bàn giao ghi trong validation của workspace website.
+
 ## Giữ lỗi theo target và kiểm tra hoàn tất — 03/11/2026
 
 Nguyên nhân cảnh báo biến mất: trạng thái tiến độ cũ chỉ giữ lỗi của tool gần nhất, rồi xóa khi tool tiếp theo bắt đầu. Thành công ở trang khác và câu trả lời kết thúc của model chưa được đối chiếu với những lời gọi vẫn thất bại.

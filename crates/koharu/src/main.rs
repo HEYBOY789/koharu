@@ -27,6 +27,8 @@ async fn main() {
     }
 
     let _cli = Cli::parse();
+    #[cfg(target_os = "windows")]
+    koharu::terminal::prevent_selection_pause();
     let _guard = sentry::initialize();
     panic::install();
     tracing::subscriber::set_global_default(
