@@ -9,6 +9,7 @@ import {
   commands,
   type PublicationConfig,
   type PublicationReadiness,
+  type SourcePreview,
 } from '@koharu/bridge/protocol'
 
 afterEach(cleanup)
@@ -42,6 +43,95 @@ const ready: PublicationReadiness = {
   catalogError: 'No website catalog',
 }
 
+it('explains import prerequisites beside the actions and recovers from failed or stopped previews', async () => {
+  vi.spyOn(commands, 'getSourceImportSettings').mockResolvedValue(config)
+  vi.spyOn(commands, 'inspectPublication').mockResolvedValue(ready)
+  const start = vi.spyOn(commands, 'importSourceUrl').mockResolvedValue('queued')
+  const preview = vi.mocked(commands.previewSourceUrl)
+  preview.mockRejectedValueOnce(new Error('Source lookup failed: HTTP 502'))
+  preview.mockResolvedValueOnce(null)
+  render(
+    <SourceImportDialog
+      open
+      onOpenChange={() => {}}
+      manga={{ title: 'Book', url: 'https://books.example/book', language: 'en', tags: [] }}
+    />,
+  )
+  const button = await screen.findByRole('button', { name: en.sourceImport.start })
+  const inspect = screen.getByRole('button', { name: en.sourceImport.preview })
+  await waitFor(() => expect(inspect).toBeEnabled())
+  const explanation = () => document.getElementById(button.getAttribute('aria-describedby') ?? '')!
+  expect(button).toBeDisabled()
+  expect(explanation()).toBeVisible()
+  expect(explanation().textContent).not.toBe('')
+  const prerequisite = explanation().textContent
+  fireEvent.click(inspect)
+  const failure = await screen.findByRole('alert')
+  expect(failure).toHaveTextContent('Source lookup failed: HTTP 502')
+  expect(button.closest('footer')).toContainElement(failure)
+  expect(button).toBeDisabled()
+  fireEvent.click(inspect)
+  await waitFor(() => expect(screen.queryByRole('alert')).not.toBeInTheDocument())
+  await waitFor(() => expect(inspect).toBeEnabled())
+  expect(button).toBeDisabled()
+  expect(explanation().textContent).not.toBe(prerequisite)
+  fireEvent.click(inspect)
+  await waitFor(() => expect(button).toBeEnabled())
+  expect(explanation().textContent).not.toBe(prerequisite)
+  fireEvent.change(screen.getByRole('combobox', { name: en.sourceImport.chapterSelection }), {
+    target: { value: 'range' },
+  })
+  fireEvent.change(screen.getByLabelText(en.sourceImport.chapterFrom), { target: { value: '99' } })
+  fireEvent.change(screen.getByLabelText(en.sourceImport.chapterTo), { target: { value: '99' } })
+  expect(button).toBeDisabled()
+  fireEvent.change(screen.getByRole('textbox', { name: en.sourceImport.url }), {
+    target: { value: 'https://books.example/other' },
+  })
+  expect(explanation().textContent).toBe(prerequisite)
+  expect(start).not.toHaveBeenCalled()
+})
+
+it('discards a previous chapter survey when a refresh fails and blocks old chapters while retrying', async () => {
+  vi.spyOn(commands, 'getSourceImportSettings').mockResolvedValue(config)
+  vi.spyOn(commands, 'inspectPublication').mockResolvedValue(ready)
+  render(
+    <SourceImportDialog
+      open
+      onOpenChange={() => {}}
+      manga={{ title: 'Book', url: 'https://books.example/book', language: 'en', tags: [] }}
+    />,
+  )
+  const inspect = await screen.findByRole('button', { name: en.sourceImport.preview })
+  await waitFor(() => expect(inspect).toBeEnabled())
+  fireEvent.click(inspect)
+  const button = screen.getByRole('button', { name: en.sourceImport.start })
+  await waitFor(() => expect(button).toBeEnabled())
+  vi.mocked(commands.previewSourceUrl).mockRejectedValueOnce(
+    new Error('Cannot refresh chapter list'),
+  )
+  fireEvent.click(inspect)
+  await screen.findByRole('alert')
+  expect(button).toBeDisabled()
+  let finish!: (value: SourcePreview) => void
+  vi.mocked(commands.previewSourceUrl).mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        finish = resolve
+      }),
+  )
+  fireEvent.click(inspect)
+  expect(button).toBeDisabled()
+  await act(async () =>
+    finish({
+      title: 'Fresh book',
+      source_url: 'https://books.example/book',
+      chapters: [{ url: 'https://books.example/chapter-3', number: 3, title: 'Chapter 3' }],
+    }),
+  )
+  await waitFor(() => expect(button).toBeEnabled())
+  expect(screen.getByText('Fresh book')).toBeVisible()
+})
+
 it('imports with resolved local tools without requiring a website catalog, and rejects a non-web URL', async () => {
   vi.spyOn(commands, 'getSourceImportSettings').mockResolvedValue(config)
   vi.spyOn(commands, 'inspectPublication').mockResolvedValue(ready)
@@ -52,7 +142,7 @@ it('imports with resolved local tools without requiring a website catalog, and r
   const button = screen.getByRole('button', { name: en.sourceImport.start })
   fireEvent.change(url, { target: { value: 'file:///private' } })
   fireEvent.blur(url)
-  await waitFor(() => expect(screen.getByText(en.publication.toolsReady)).toBeInTheDocument())
+  await waitFor(() => expect(commands.inspectPublication).toHaveBeenCalledWith(config, false))
   expect(button).toBeDisabled()
   expect(url).toHaveAttribute('aria-invalid', 'true')
   expect(document.getElementById(url.getAttribute('aria-describedby')!)).toHaveTextContent(

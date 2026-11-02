@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
+import { useEffect, useId, useMemo, useRef, useState, type FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { LocalAgentTools } from '@/components/app/LocalAgentTools'
@@ -43,6 +43,7 @@ export function SourceImportDialog({
   manga?: { title: string; url: string; language: string; tags: string[] }
 }) {
   const { t, i18n } = useTranslation()
+  const actionHintId = useId()
   const [url, setURL] = useState(manga?.url ?? '')
   const [downloadURL, setDownloadURL] = useState('')
   const [language, setLanguage] = useState(manga?.language ?? 'en')
@@ -61,7 +62,7 @@ export function SourceImportDialog({
   const [urlTouched, setURLTouched] = useState(false)
   const [readerTouched, setReaderTouched] = useState(false)
   const [previewing, setPreviewing] = useState(false)
-  const [preview, setPreview] = useState<{ key: string; data: SourcePreview } | null>(null)
+  const [preview, setPreview] = useState<{ key: string; data: SourcePreview | null } | null>(null)
   const [chapters, setChapters] = useState<string[]>([])
   const previewRequest = useRef(0)
   let catalog = false
@@ -112,6 +113,8 @@ export function SourceImportDialog({
     if (!open || !checkConfig) return
     let active = true
     setChecking(true)
+    setInspection(undefined)
+    setError('')
     const timer = setTimeout(() => {
       void call(commands.inspectPublication, checkConfig, false)
         .then((status) => {
@@ -132,18 +135,41 @@ export function SourceImportDialog({
   const update = (value: Partial<PublicationConfig>) =>
     setConfig((current) => (current ? { ...current, ...value } : current))
   const locked = starting || previewing
-  const canPreview =
+  const canPreview = Boolean(
     validURL &&
     (!catalog || validReader) &&
     readiness &&
     !readiness.missing.length &&
     !checking &&
-    !locked
+    !locked,
+  )
+  const canImport = Boolean(canPreview && survey && chapters.length)
+  let actionHint: string
+  if (error) actionHint = error
+  else if (starting) actionHint = t('common.loading')
+  else if (previewing) actionHint = t('sourceImport.previewWaiting')
+  else if (checking || !readiness) actionHint = t('publication.checking')
+  else if (readiness.missing.length)
+    actionHint = t('publication.toolsMissing', {
+      tools: readiness.missing.map((tool) => t(`publication.${tool}`)).join(', '),
+    })
+  else if (!validURL) actionHint = t('sourceImport.invalidURL')
+  else if (catalog && !validReader)
+    actionHint = `${t('sourceImport.downloadURL')}: ${t('sourceImport.invalidURL')}`
+  else if (preview?.key === sourceKey && preview.data === null)
+    actionHint = t('sourceImport.previewStopped', { preview: t('sourceImport.preview') })
+  else if (!survey)
+    actionHint = t('sourceImport.previewRequired', { preview: t('sourceImport.preview') })
+  else if (!survey.chapters.length) actionHint = t('sourceImport.noChapters')
+  else if (!chapters.length) actionHint = t('sourceImport.selectAtLeastOne')
+  else actionHint = t('sourceImport.readyToImport', { import: t('sourceImport.start') })
   async function inspectSource() {
     if (!config || !canPreview) return
     const request = ++previewRequest.current
     setPreviewing(true)
     setError('')
+    setPreview(null)
+    setChapters([])
     try {
       const data = await call(commands.previewSourceUrl, url.trim(), config, {
         language: catalog ? language : null,
@@ -154,10 +180,8 @@ export function SourceImportDialog({
         chapters: null,
       })
       if (previewRequest.current === request) {
-        if (data) {
-          setPreview({ key: sourceKey, data })
-          setChapters(data.chapters.map((chapter) => chapter.url))
-        }
+        setPreview({ key: sourceKey, data })
+        setChapters(data?.chapters.map((chapter) => chapter.url) ?? [])
       }
     } catch (cause) {
       if (previewRequest.current === request) setError(String(cause))
@@ -167,16 +191,7 @@ export function SourceImportDialog({
   }
   async function start(event: FormEvent) {
     event.preventDefault()
-    if (
-      !config ||
-      !readiness ||
-      readiness.missing.length ||
-      !validURL ||
-      locked ||
-      !survey ||
-      !chapters.length
-    )
-      return
+    if (!config || !readiness || !canImport || !survey) return
     setStarting(true)
     setError('')
     try {
@@ -222,11 +237,6 @@ export function SourceImportDialog({
         ) : (
           <form className='flex min-h-0 flex-col' onSubmit={(event) => void start(event)}>
             <div className='min-h-0 flex-1 space-y-4 overflow-y-auto px-6 py-4'>
-              {error && (
-                <p role='alert' className='text-sm break-words text-destructive'>
-                  {error}
-                </p>
-              )}
               <fieldset disabled={locked} className='space-y-3'>
                 <label className='block space-y-1 text-xs'>
                   {t('sourceImport.url')}
@@ -387,17 +397,6 @@ export function SourceImportDialog({
                 </div>
                 <p className='text-xs text-muted-foreground'>{t('publication.modelHint')}</p>
               </fieldset>
-              <p role='status' className='text-xs'>
-                {checking
-                  ? t('publication.checking')
-                  : readiness && !readiness.missing.length
-                    ? t('publication.toolsReady')
-                    : t('publication.toolsMissing', {
-                        tools:
-                          readiness?.missing.map((tool) => t(`publication.${tool}`)).join(', ') ||
-                          t('publication.tools'),
-                      })}
-              </p>
               <LocalAgentTools
                 config={config}
                 readiness={readiness}
@@ -409,30 +408,29 @@ export function SourceImportDialog({
               />
               <p className='text-xs text-muted-foreground'>{t('sourceImport.progress')}</p>
             </div>
-            <div className='flex shrink-0 flex-wrap items-center justify-between gap-3 border-t bg-popover px-6 py-4'>
-              <Button
-                type='button'
-                variant='outline'
-                disabled={!canPreview}
-                onClick={() => void inspectSource()}
+            <footer className='grid shrink-0 gap-3 border-t bg-popover px-6 py-4'>
+              <p
+                id={actionHintId}
+                role={error ? 'alert' : 'status'}
+                className={`max-h-24 overflow-y-auto text-xs leading-5 break-words whitespace-pre-wrap ${error ? 'text-destructive' : 'text-muted-foreground'}`}
               >
-                {previewing ? t('sourceImport.previewing') : t('sourceImport.preview')}
-              </Button>
-              <Button
-                type='submit'
-                disabled={
-                  locked ||
-                  checking ||
-                  !validURL ||
-                  !readiness ||
-                  Boolean(readiness.missing.length) ||
-                  !survey ||
-                  !chapters.length
-                }
-              >
-                {starting ? t('common.loading') : t('sourceImport.start')}
-              </Button>
-            </div>
+                {actionHint}
+              </p>
+              <div className='flex flex-wrap items-center justify-between gap-3'>
+                <Button
+                  type='button'
+                  variant={survey?.chapters.length ? 'outline' : 'default'}
+                  disabled={!canPreview}
+                  aria-describedby={actionHintId}
+                  onClick={() => void inspectSource()}
+                >
+                  {previewing ? t('sourceImport.previewing') : t('sourceImport.preview')}
+                </Button>
+                <Button type='submit' disabled={!canImport} aria-describedby={actionHintId}>
+                  {starting ? t('common.loading') : t('sourceImport.start')}
+                </Button>
+              </div>
+            </footer>
           </form>
         )}
       </DialogContent>
