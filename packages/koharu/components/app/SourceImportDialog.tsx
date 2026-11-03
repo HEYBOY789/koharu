@@ -4,6 +4,7 @@ import { useEffect, useId, useMemo, useRef, useState, type FormEvent } from 'rea
 import { useTranslation } from 'react-i18next'
 
 import { LocalAgentTools } from '@/components/app/LocalAgentTools'
+import { PiModelHint } from '@/components/controls/PiModelHint'
 import { call } from '@/lib/backend'
 import { mangaDexLanguages } from '@/lib/mangadex'
 import {
@@ -396,6 +397,7 @@ export function SourceImportDialog({
                   </label>
                 </div>
                 <p className='text-xs text-muted-foreground'>{t('publication.modelHint')}</p>
+                {config.backend === 'pi' && <PiModelHint />}
               </fieldset>
               <LocalAgentTools
                 config={config}

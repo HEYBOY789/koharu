@@ -5,6 +5,7 @@ import { Bot, CircleStop, LogOut, RefreshCw, Send, Sparkles } from 'lucide-react
 import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
+import { PiModelHint } from '@/components/controls/PiModelHint'
 import { call } from '@/lib/backend'
 import { useProject } from '@/lib/queries'
 import { useKoharuStore } from '@/lib/store'
@@ -312,6 +313,7 @@ export function AgentPanel() {
             )}
           </div>
         )}
+        {backend === 'pi' && <PiModelHint />}
         {checking && (
           <p role='status' className='text-[10px] text-muted-foreground'>
             {t('agent.checking')}

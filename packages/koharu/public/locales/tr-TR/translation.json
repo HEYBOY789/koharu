@@ -76,6 +76,7 @@
     "message": "Koharu Ajanına mesaj gönder",
     "model": "Model",
     "placeholder": "Koharu’dan bu proje üzerinde çalışmasını isteyin…",
+    "piModelHint": "Pi yerel veya özel modelleri için provider/model-id biçimini kullanın. Pi models.json dosyasında yapılandırdığınız sağlayıcı adını aynen yazın (örneğin local-proxy). Örnek:",
     "properties": "Özellikler",
     "reasoning": "Akıl yürütme",
     "reasoningLevels": {

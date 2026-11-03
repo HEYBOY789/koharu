@@ -76,6 +76,7 @@
     "message": "傳送訊息給 Koharu 代理",
     "model": "模型",
     "placeholder": "讓 Koharu 處理此專案…",
+    "piModelHint": "Pi 本機或自訂模型請填寫 provider/model-id。前綴必須與 Pi 的 models.json 中設定的供應商名稱完全一致（例如 local-proxy）。範例：",
     "properties": "屬性",
     "reasoning": "推理",
     "reasoningLevels": {

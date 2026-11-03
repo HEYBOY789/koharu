@@ -76,6 +76,7 @@
     "message": "向 Koharu 智能体发送消息",
     "model": "模型",
     "placeholder": "让 Koharu 处理此项目…",
+    "piModelHint": "Pi 本地或自定义模型请填写 provider/model-id。前缀必须与 Pi 的 models.json 中配置的提供商名称完全一致（例如 local-proxy）。示例：",
     "properties": "属性",
     "reasoning": "推理",
     "reasoningLevels": {

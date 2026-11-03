@@ -76,6 +76,7 @@
     "message": "Сообщение агенту Koharu",
     "model": "Модель",
     "placeholder": "Попросите Koharu поработать над проектом…",
+    "piModelHint": "Для локальных и пользовательских моделей Pi укажите provider/model-id. Имя провайдера должно точно совпадать с указанным в models.json Pi (например local-proxy). Пример:",
     "properties": "Свойства",
     "reasoning": "Рассуждение",
     "reasoningLevels": {

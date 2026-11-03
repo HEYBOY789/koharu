@@ -76,6 +76,7 @@
     "message": "Enviar mensaje al agente de Koharu",
     "model": "Modelo",
     "placeholder": "Pide a Koharu que trabaje en este proyecto…",
+    "piModelHint": "Para modelos locales o personalizados de Pi, introduce proveedor/id-del-modelo. Usa el nombre exacto del proveedor configurado en models.json de Pi (por ejemplo local-proxy). Ejemplo:",
     "properties": "Propiedades",
     "reasoning": "Razonamiento",
     "reasoningLevels": {

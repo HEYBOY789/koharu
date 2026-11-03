@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState, type FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { LocalAgentTools } from '@/components/app/LocalAgentTools'
+import { PiModelHint } from '@/components/controls/PiModelHint'
 import { call } from '@/lib/backend'
 import { projectKey, refresh } from '@/lib/queries'
 import { useKoharuStore } from '@/lib/store'
@@ -324,6 +325,7 @@ export function PublicationDialog({
                 </label>
               </div>
               <p className='text-xs text-muted-foreground'>{t('publication.modelHint')}</p>
+              {config.backend === 'pi' && <PiModelHint />}
             </fieldset>
             <section className='space-y-2 rounded-lg border p-3 text-xs'>
               <div role='status' aria-live='polite' className='space-y-1'>

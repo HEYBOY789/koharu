@@ -76,6 +76,7 @@
     "message": "Koharuエージェントにメッセージを送信",
     "model": "モデル",
     "placeholder": "Koharuにこのプロジェクトの作業を依頼…",
+    "piModelHint": "Pi のローカル・カスタムモデルは provider/model-id の形式で入力してください。Pi の models.json に設定したプロバイダー名と完全に一致させます（例：local-proxy）。入力例：",
     "properties": "プロパティ",
     "reasoning": "推論",
     "reasoningLevels": {

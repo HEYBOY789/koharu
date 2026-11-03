@@ -4,6 +4,7 @@ import { Check, LoaderCircle, RefreshCw } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
+import { PiModelHint } from '@/components/controls/PiModelHint'
 import {
   PreferencePage,
   PreferenceRow,
@@ -241,6 +242,7 @@ export function SummarizerPreferences() {
               />
             ) : null}
           </div>
+          {draft.backend === 'pi' && <PiModelHint />}
         </PreferenceRow>
         <PreferenceRow
           title={t('settings.summarizer.effort')}
