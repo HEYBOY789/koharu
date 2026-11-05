@@ -391,6 +391,7 @@ impl KoharuHost {
         let background =
             output::frame_image(desktop.rasterizer().await?, &frame.without_text()?).await?;
         let mut report = frame.readability();
+        readability::source_duplicates(snapshot, &mut report)?;
         report.sample_background(&background);
         Ok(report)
     }
@@ -537,103 +538,13 @@ impl KoharuHost {
             bail!("Agent request was cancelled");
         }
         if let Some(edit) = LayerEdit::parse(&call)? {
-            if self.binding.as_ref().unwrap().review.lock().active() {
-                anyhow::ensure!(
-                    !matches!(
-                        edit,
-                        LayerEdit::Add(..) | LayerEdit::Source(..) | LayerEdit::Reorder(..)
-                    ),
-                    "Readability repair preserves artwork, source text and the layer tree"
-                );
-                let snapshot = self
-                    .handle
-                    .state::<CurrentProject>()
-                    .project
-                    .snapshot(self.target()?)
-                    .await?;
-                if let LayerEdit::Translation(element, ref text) = edit {
-                    let text = text
-                        .as_ref()
-                        .context("Readability repair cannot remove the translation")?;
-                    let original = snapshot
-                        .text_layer(element)?
-                        .content()?
-                        .translation()?
-                        .context("readability needs an existing translation")?;
-                    anyhow::ensure!(
-                        original
-                            .text
-                            .value
-                            .split_whitespace()
-                            .eq(text.split_whitespace()),
-                        "Readability edits may change line breaks, but must preserve every word"
-                    );
-                }
-                if matches!(edit, LayerEdit::Delete(..) | LayerEdit::Visibility(..)) {
-                    for target in edit.targets() {
-                        let is_text = snapshot.text_layer(target).is_ok();
-                        let cleanup = snapshot
-                            .component::<koharu_scene::RasterLayer>(target)?
-                            .is_some_and(|r| r.kind == koharu_scene::RasterLayerKind::Cleanup);
-                        anyhow::ensure!(
-                            is_text || (cleanup && matches!(edit, LayerEdit::Visibility(..))),
-                            "Readability repair cannot delete or hide artwork or raster layers"
-                        );
-                        let destructive = matches!(edit, LayerEdit::Delete(..))
-                            || matches!(&edit, LayerEdit::Visibility(_, Some(false), _))
-                            || matches!(&edit,LayerEdit::Visibility(_,_,Some(v)) if *v<=0.0);
-                        if cleanup {
-                            anyhow::ensure!(
-                                !destructive,
-                                "Readability repair must preserve cleanup; hiding it exposes original lettering"
-                            );
-                        } else if destructive {
-                            let page = scope::page_for(&snapshot, target)?;
-                            let report = self
-                                .binding
-                                .as_ref()
-                                .unwrap()
-                                .review
-                                .lock()
-                                .before_edit(page, readability::stamp(&snapshot, page)?)?
-                                .context("Audit before removing duplicates")?;
-                            let targets = edit.targets();
-                            let survivor = report
-                                .issues
-                                .iter()
-                                .filter(|issue| {
-                                    issue.kind
-                                        == koharu_renderer::ReadabilityKind::DuplicateCandidate
-                                })
-                                .find_map(|issue| {
-                                    let other = if issue.element == target {
-                                        issue.related
-                                    } else if issue.related == Some(target) {
-                                        Some(issue.element)
-                                    } else {
-                                        None
-                                    }?;
-                                    (!targets.contains(&other)
-                                        && report.layers.iter().any(|layer| layer.element == other))
-                                    .then_some(other)
-                                });
-                            anyhow::ensure!(
-                                survivor.is_some(),
-                                "Only an audited duplicate can be removed, keeping another visible copy. Never remove ordinary dialogue or every duplicate copy."
-                            );
-                        }
-                        if let LayerEdit::Visibility(_, _, Some(opacity)) = &edit {
-                            let current = snapshot
-                                .component::<koharu_scene::Visibility>(target)?
-                                .map_or(1.0, |v| v.opacity);
-                            anyhow::ensure!(
-                                *opacity >= current || destructive,
-                                "Readability repair cannot fade text or cleanup to conceal a problem"
-                            );
-                        }
-                    }
-                }
-            }
+            let snapshot = self
+                .handle
+                .state::<CurrentProject>()
+                .project
+                .snapshot(self.target()?)
+                .await?;
+            edit.validate_review(&snapshot, &self.binding.as_ref().unwrap().review.lock())?;
             if matches!(edit, LayerEdit::Typography(..) | LayerEdit::Geometry(..))
                 || (matches!(edit, LayerEdit::Translation(..))
                     && self.binding.as_ref().unwrap().review.lock().active())
@@ -746,6 +657,7 @@ impl KoharuHost {
                 let review_active = self.binding.as_ref().unwrap().review.lock().active();
                 let review_report = if review_active {
                     let mut report = frame.readability();
+                    readability::source_duplicates(&snapshot, &mut report)?;
                     report.sample_background(
                         &output::frame_image(rasterizer.clone(), &frame.without_text()?).await?,
                     );
@@ -906,6 +818,94 @@ enum LayerEdit {
 }
 
 impl LayerEdit {
+    fn validate_review(&self, snapshot: &Snapshot, review: &readability::Review) -> Result<()> {
+        if !review.active() {
+            return Ok(());
+        }
+        anyhow::ensure!(
+            !matches!(
+                self,
+                LayerEdit::Add(..) | LayerEdit::Source(..) | LayerEdit::Reorder(..)
+            ),
+            "Readability repair preserves artwork, source text and the layer tree"
+        );
+        if let LayerEdit::Translation(element, text) = self {
+            let text = text
+                .as_ref()
+                .context("Readability repair cannot remove the translation")?;
+            let original = snapshot
+                .text_layer(*element)?
+                .content()?
+                .translation()?
+                .context("readability needs an existing translation")?;
+            anyhow::ensure!(
+                original
+                    .text
+                    .value
+                    .split_whitespace()
+                    .eq(text.split_whitespace()),
+                "Readability edits may change line breaks, but must preserve every word"
+            );
+        }
+        if matches!(self, LayerEdit::Delete(..) | LayerEdit::Visibility(..)) {
+            for target in self.targets() {
+                let is_text = snapshot.text_layer(target).is_ok();
+                let cleanup = snapshot
+                    .component::<koharu_scene::RasterLayer>(target)?
+                    .is_some_and(|r| r.kind == koharu_scene::RasterLayerKind::Cleanup);
+                anyhow::ensure!(
+                    is_text || (cleanup && matches!(self, LayerEdit::Visibility(..))),
+                    "Readability repair cannot delete or hide artwork or raster layers"
+                );
+                let destructive = matches!(self, LayerEdit::Delete(..))
+                    || matches!(&self, LayerEdit::Visibility(_, Some(false), _))
+                    || matches!(&self,LayerEdit::Visibility(_,_,Some(v)) if *v<=0.0);
+                if cleanup {
+                    anyhow::ensure!(
+                        !destructive,
+                        "Readability repair must preserve cleanup; hiding it exposes original lettering"
+                    );
+                } else if destructive {
+                    let page = scope::page_for(&snapshot, target)?;
+                    let report = review
+                        .before_edit(page, readability::stamp(&snapshot, page)?)?
+                        .context("Audit before removing duplicates")?;
+                    let targets = self.targets();
+                    let survivor = report
+                        .issues
+                        .iter()
+                        .filter(|issue| {
+                            issue.kind == koharu_renderer::ReadabilityKind::DuplicateCandidate
+                        })
+                        .find_map(|issue| {
+                            let other = if issue.element == target {
+                                issue.related
+                            } else if issue.related == Some(target) {
+                                Some(issue.element)
+                            } else {
+                                None
+                            }?;
+                            (!targets.contains(&other)
+                                && report.layers.iter().any(|layer| layer.element == other))
+                            .then_some(other)
+                        });
+                    if survivor.is_none() {
+                        return Err(readability::DeclinedEdit("Only an audited duplicate can be removed, keeping another visible copy. Never remove ordinary dialogue or every duplicate copy.".into()).into());
+                    }
+                }
+                if let LayerEdit::Visibility(_, _, Some(opacity)) = &self {
+                    let current = snapshot
+                        .component::<koharu_scene::Visibility>(target)?
+                        .map_or(1.0, |v| v.opacity);
+                    anyhow::ensure!(
+                        *opacity >= current || destructive,
+                        "Readability repair cannot fade text or cleanup to conceal a problem"
+                    );
+                }
+            }
+        }
+        Ok(())
+    }
     fn preview_patch(&self, snapshot: &Snapshot) -> Result<Option<(koharu_scene::Patch, Value)>> {
         Ok(Some(match self {
             Self::Translation(element, text) => (
@@ -1122,7 +1122,7 @@ fn editor_tools() -> Vec<Tool> {
                         "set_visibility",
                         "Change visibility (boolean) and/or opacity (number from 0 to 1, not 0 to 100). Omitted properties are preserved. Target inspected layer IDs.",
                     ),
-                    definition::<DeleteElements>("delete_elements", "Delete elements and descendants."),
+                    definition::<DeleteElements>("delete_elements", "Delete elements and descendants. During a readability review only an audited duplicate with another visible surviving copy can be removed. Similar wording or a shared balloon is not sufficient proof. A candidate_rejected reply is non-mutating feedback: preserve the text and fix its typography/layout, or verify remaining issues as needs_review. Never hide it instead or move/rewrite it to manufacture duplicate evidence."),
                     definition::<ReorderElement>(
                         "reorder_element",
                         "Reorder the LAYER TREE only. Requires element (ID from inspect_page), parent (page/group ID), index (zero-based). This does not move text on the image: use set_geometry for that.",

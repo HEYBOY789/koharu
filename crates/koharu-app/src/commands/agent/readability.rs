@@ -3,12 +3,88 @@ use std::collections::HashMap;
 
 use anyhow::{Context as _, Result, ensure};
 use koharu_renderer::{ReadabilityKind, ReadabilityReport};
-use koharu_scene::{BlobId, EntityId, Snapshot};
+use koharu_scene::{BlobId, EntityId, RegionSpec as _, Snapshot};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use specta::Type;
 
 use crate::commands::project::Project;
+
+/// OCR can detect the same sentence twice, then automatic placement separates
+/// the rendered copies. Compare immutable source regions, never edited frames.
+pub(super) fn source_duplicates(snapshot: &Snapshot, report: &mut ReadabilityReport) -> Result<()> {
+    let mut sources = Vec::new();
+    for layer in &report.layers {
+        let text = snapshot.text_layer(layer.element)?;
+        let content = text.content()?;
+        let Some(source) = content.source()? else {
+            continue;
+        };
+        let source = source
+            .text
+            .value
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+            .to_lowercase();
+        if source.chars().filter(|c| c.is_alphanumeric()).count() < 12 {
+            continue;
+        }
+        let (Some(target), Some(region)) = (text.automatic_target()?, content.source_region()?)
+        else {
+            continue;
+        };
+        if target.region()?.kind != koharu_scene::BubbleRegion::kind() {
+            continue;
+        }
+        let geometry = region.geometry()?;
+        if geometry.points.len() < 3 {
+            continue;
+        }
+        let bounds = geometry.points.iter().fold(
+            [
+                f64::INFINITY,
+                f64::INFINITY,
+                f64::NEG_INFINITY,
+                f64::NEG_INFINITY,
+            ],
+            |b, p| [b[0].min(p.x), b[1].min(p.y), b[2].max(p.x), b[3].max(p.y)],
+        );
+        sources.push((layer.element, target.id(), source, bounds));
+    }
+    for (index, left) in sources.iter().enumerate() {
+        for right in &sources[index + 1..] {
+            if left.1 != right.1 || left.2 != right.2 {
+                continue;
+            }
+            let [lx, ly, lr, lb] = left.3;
+            let [rx, ry, rr, rb] = right.3;
+            let area = ((lr - lx) * (lb - ly)).min((rr - rx) * (rb - ry));
+            if area <= 0.0 {
+                continue;
+            }
+            let ratio =
+                ((lr.min(rr) - lx.max(rx)).max(0.0) * (lb.min(rb) - ly.max(ry)).max(0.0)) / area;
+            if ratio < 0.8
+                || report.issues.iter().any(|issue| {
+                    issue.kind == ReadabilityKind::DuplicateCandidate
+                        && ((issue.element == left.0 && issue.related == Some(right.0))
+                            || (issue.element == right.0 && issue.related == Some(left.0)))
+                })
+            {
+                continue;
+            }
+            report.issues.push(koharu_renderer::ReadabilityIssue {
+                id: format!("source_duplicate:{}:{}", left.0, right.0),
+                element: left.0,
+                related: Some(right.0),
+                kind: ReadabilityKind::DuplicateCandidate,
+                value: ratio as f32,
+            });
+        }
+    }
+    Ok(())
+}
 
 pub(super) async fn checked_candidate(
     renderer: &koharu_renderer::Renderer,
@@ -21,6 +97,7 @@ pub(super) async fn checked_candidate(
     let candidate = snapshot.preview([patch])?;
     let frame = renderer.render(&candidate, page).await?;
     let mut report = frame.readability();
+    source_duplicates(&candidate, &mut report)?;
     let background =
         crate::commands::output::frame_image(rasterizer, &frame.without_text()?).await?;
     report.sample_background(&background);
@@ -43,6 +120,27 @@ impl std::fmt::Display for CandidateRegression {
     }
 }
 impl std::error::Error for CandidateRegression {}
+
+/// A valid tool proposal declined by review policy is feedback, not a malformed
+/// call that can be fixed only by eventually performing the prohibited edit.
+#[derive(Debug)]
+pub(super) struct DeclinedEdit(pub String);
+impl std::fmt::Display for DeclinedEdit {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+impl std::error::Error for DeclinedEdit {}
+
+impl DeclinedEdit {
+    pub fn feedback(&self) -> Result<koharu_agent::Invocation> {
+        koharu_agent::Invocation::read(serde_json::json!({
+            "changed": false,
+            "candidate_rejected": self.0,
+            "next": "No edit was applied. Do not retry a prohibited deletion or hide the same text instead. Preserve the dialogue, inspect its source and layout, and use repair_text/typography/geometry for readability. Audit and view the current page again, then verify remaining real issues as needs_review with a reason if they cannot be fixed safely. Do not move text or change words to manufacture duplicate evidence."
+        }))
+    }
+}
 
 pub(super) struct RepairBatch {
     pub patch: koharu_scene::Patch,
@@ -582,11 +680,28 @@ mod tests {
         )?))?;
         let project = Project::open("review capture".into(), source).await?;
         let snapshot = project.snapshot();
-        let pages = snapshot.chapters()?.entries[0].pages[15..17].to_vec();
+        let positions: Vec<[usize; 2]> =
+            serde_json::from_str(&std::env::var("KOHARU_READABILITY_POSITIONS")?)?;
+        let chapters = snapshot.chapters()?;
+        let pages = positions
+            .iter()
+            .map(|[chapter, page]| {
+                chapters
+                    .entries
+                    .get(chapter.saturating_sub(1))
+                    .and_then(|c| c.pages.get(page.saturating_sub(1)))
+                    .copied()
+                    .context("requested chapter/page")
+            })
+            .collect::<Result<Vec<_>>>()?;
         let renderer = koharu_renderer::Renderer::new()?;
         let rasterizer = std::sync::Arc::new(koharu_rasterizer::Rasterizer::new()?);
         let mut reports = vec![];
-        for (index, page) in pages.into_iter().enumerate() {
+        for page in pages {
+            std::fs::write(
+                output.join(format!("page-{page}-layers.json")),
+                serde_json::to_vec_pretty(&Project::page(&snapshot, page)?)?,
+            )?;
             let frame = renderer.render(&snapshot, page).await?;
             for width in [390, 960] {
                 let bytes = crate::commands::output::frame_preview(
@@ -596,12 +711,11 @@ mod tests {
                     Some(width),
                 )
                 .await?;
-                std::fs::write(
-                    output.join(format!("page-{}-{width}.webp", index + 16)),
-                    bytes,
-                )?;
+                std::fs::write(output.join(format!("page-{page}-{width}.webp")), bytes)?;
             }
-            reports.push(frame.readability());
+            let mut report = frame.readability();
+            source_duplicates(&snapshot, &mut report)?;
+            reports.push(report);
         }
         std::fs::write(
             output.join("captured-readability.json"),

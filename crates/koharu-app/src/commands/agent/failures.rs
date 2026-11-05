@@ -407,6 +407,13 @@ impl Failures {
         target: Target,
         result: Result<Invocation>,
     ) -> Result<Invocation> {
+        let result = match result {
+            Err(error) if error.is::<super::readability::DeclinedEdit>() => error
+                .downcast_ref::<super::readability::DeclinedEdit>()
+                .unwrap()
+                .feedback(),
+            result => result,
+        };
         match result {
             Ok(result) => {
                 if let Some(id) = &attempt.retry_of {

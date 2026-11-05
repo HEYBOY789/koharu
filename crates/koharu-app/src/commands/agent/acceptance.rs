@@ -334,6 +334,193 @@ struct NativeHost {
 }
 
 #[tokio::test]
+async fn declined_dialogue_removal_does_not_poison_the_readability_run() -> Result<()> {
+    let f = Fixture::new().await?;
+    let snapshot = f.project.snapshot();
+    let revision = snapshot.revision();
+    let stamp = readability::stamp(&snapshot, f.page)?;
+    let mut review = readability::Review::default();
+    review.begin(&[f.page])?;
+    review.audit(
+        stamp,
+        koharu_renderer::ReadabilityReport {
+            page: f.page,
+            page_width: 1000,
+            page_height: 1600,
+            reader_widths: vec![390, 960],
+            minimum_font_px: 12.0,
+            layers: vec![],
+            issues: vec![],
+        },
+    );
+    review.viewed(f.page, stamp, None);
+    let mut ledger = Failures::default();
+    for (tool, arguments) in [
+        ("delete_elements", json!({"elements":[f.layer]})),
+        (
+            "set_visibility",
+            json!({"elements":[f.layer],"visible":false}),
+        ),
+    ] {
+        let attempt = Attempt::parse(call(tool, arguments))?;
+        let edit = LayerEdit::parse(&attempt.call)?.unwrap();
+        let target = Target::capture(&snapshot, &attempt.call)?;
+        let rejected = edit.validate_review(&snapshot, &review);
+        assert!(rejected.is_err(), "ordinary dialogue must remain protected");
+        let feedback = ledger.finish(
+            &attempt,
+            target,
+            rejected.and_then(|_| anyhow::bail!("an unsafe edit must never reach the commit seam")),
+        );
+        assert!(
+            feedback.is_ok(),
+            "a rejected visual proposal must be actionable feedback, not require successfully deleting dialogue to clear the failure: {feedback:?}"
+        );
+        let feedback = feedback?;
+        assert!(!feedback.changed);
+        assert_eq!(snapshot.revision(), revision);
+        assert!(snapshot.text_layer(f.layer).is_ok());
+    }
+    ledger.ensure_complete()?;
+    review.verify(f.page, stamp, vec![])?;
+    review.ensure_complete()?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn original_ocr_duplicates_survive_translation_and_layout_differences_but_keep_one_copy()
+-> Result<()> {
+    use koharu_scene::{
+        Authored, BubbleRegion, FlowsIn, Geometry, Origin, RecognizedFrom, SourceText, TextLayout,
+        TextLayoutKind, TextRegion, Translation,
+    };
+    let mut f = Fixture::new().await?;
+    let geometry = |x: f64| Geometry {
+        origin: Origin::User,
+        points: vec![
+            koharu_scene::Point { x, y: 100.0 },
+            koharu_scene::Point {
+                x: x + 100.0,
+                y: 100.0,
+            },
+            koharu_scene::Point {
+                x: x + 100.0,
+                y: 160.0,
+            },
+            koharu_scene::Point { x, y: 160.0 },
+        ],
+    };
+    let mut layers = vec![];
+    let patch = f.project.snapshot().patch(|edit| {
+        let balloon =
+            edit.add_analysis_region::<BubbleRegion>(f.page, At::End, &geometry(100.0), None)?;
+        let other_balloon =
+            edit.add_analysis_region::<BubbleRegion>(f.page, At::End, &geometry(100.0), None)?;
+        for (i, (source, x, other)) in [
+            ("Did you hear my conversation just now?", 100.0, false),
+            ("Did you hear my conversation just now?", 102.0, false),
+            ("Did you hear my conversation just now?", 100.0, true),
+            ("Did you hear my conversation just now?", 400.0, false),
+            ("A different sentence in the same balloon.", 100.0, false),
+            ("Yes!", 100.0, false),
+            ("Yes!", 100.0, false),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let region =
+                edit.add_analysis_region::<TextRegion>(f.page, At::End, &geometry(x), None)?;
+            let content = edit.add_text_content(f.page, At::End)?;
+            edit.set(
+                content,
+                &SourceText {
+                    text: Authored::user(source.into()),
+                    language: None,
+                },
+            )?;
+            edit.set(
+                content,
+                &Translation {
+                    text: Authored::user(format!("different translation {i}")),
+                    language: None,
+                },
+            )?;
+            edit.relate::<RecognizedFrom>(content, region)?;
+            let layer = edit.add_text_layer(
+                f.page,
+                At::End,
+                content,
+                &TextLayout {
+                    origin: Origin::User,
+                    kind: TextLayoutKind::Paragraph,
+                    angle_degrees: None,
+                },
+            )?;
+            edit.relate::<FlowsIn>(layer, if other { other_balloon } else { balloon })?;
+            layers.push(layer);
+        }
+        Ok(())
+    })?;
+    let snapshot = f.project.session.commit(patch).await?.snapshot;
+    let mut report = koharu_renderer::ReadabilityReport {
+        page: f.page,
+        page_width: 1000,
+        page_height: 1600,
+        reader_widths: vec![390, 960],
+        minimum_font_px: 12.0,
+        layers: layers
+            .iter()
+            .enumerate()
+            .map(|(i, id)| koharu_renderer::ReadableText {
+                element: *id,
+                text: format!("different translation {i}"),
+                source_font_px: 9.0,
+                display_font_px: vec![3.51, 8.64],
+                fonts: vec![],
+                bounds: [i as f32 * 150.0, 0.0, 100.0, 20.0],
+                layout_bounds: [i as f32 * 150.0, 0.0, 100.0, 20.0],
+                color: [0, 0, 0, 255],
+                opacity: 1.0,
+                stroke_width: 0.0,
+                stroke_color: None,
+                background: None,
+            })
+            .collect(),
+        issues: vec![],
+    };
+    readability::source_duplicates(&snapshot, &mut report)?;
+    assert_eq!(
+        report.issues.len(),
+        1,
+        "Different balloons, nonoverlapping source regions, different source words and repeated short utterances are not duplicate proof"
+    );
+    assert_eq!(report.issues[0].element, layers[0]);
+    assert_eq!(report.issues[0].related, Some(layers[1]));
+    let stamp = readability::stamp(&snapshot, f.page)?;
+    let mut review = readability::Review::default();
+    review.begin(&[f.page])?;
+    review.audit(stamp, report.clone());
+    review.viewed(f.page, stamp, None);
+    LayerEdit::Delete(vec![layers[0]]).validate_review(&snapshot, &review)?;
+    assert!(
+        LayerEdit::Delete(vec![layers[0], layers[1]])
+            .validate_review(&snapshot, &review)
+            .is_err()
+    );
+    assert!(
+        LayerEdit::Delete(vec![layers[4]])
+            .validate_review(&snapshot, &review)
+            .is_err()
+    );
+    let (_, value) = LayerEdit::Delete(vec![layers[0]])
+        .apply(&mut f.project)
+        .await?;
+    let _ = value;
+    assert!(f.project.snapshot().text_layer(layers[1]).is_ok());
+    Ok(())
+}
+
+#[tokio::test]
 async fn native_failed_layer_is_not_cleared_by_other_page_edits_or_wrong_target_retry() -> Result<()>
 {
     let mut f = Fixture::new().await?;
@@ -542,6 +729,7 @@ impl NativeHost {
                 &edit.targets(),
             )?;
             let snapshot = project.snapshot();
+            edit.validate_review(&snapshot, &binding.review.lock())?;
             let pages = edit
                 .targets()
                 .iter()
@@ -631,6 +819,7 @@ impl NativeHost {
                     binding.review.lock().begin(&scope)?;
                     let frame = self.renderer.render(&project.snapshot(), page).await?;
                     let mut report = frame.readability();
+                    readability::source_duplicates(&project.snapshot(), &mut report)?;
                     let background = output::frame_image(
                         Arc::new(koharu_rasterizer::Rasterizer::new()?),
                         &frame.without_text()?,
@@ -703,6 +892,7 @@ impl NativeHost {
                     let frame = self.renderer.render(&project.snapshot(), page).await?;
                     let review_report = if binding.review.lock().active() {
                         let mut report = frame.readability();
+                        readability::source_duplicates(&project.snapshot(), &mut report)?;
                         let background =
                             output::frame_image(rasterizer.clone(), &frame.without_text()?).await?;
                         report.sample_background(&background);
@@ -787,7 +977,7 @@ impl NativeHost {
 }
 
 #[tokio::test]
-#[ignore = "Manual installed-agent readability integration on two detached real manga pages"]
+#[ignore = "Manual installed-agent readability integration on explicitly selected detached real manga pages"]
 async fn installed_agent_reviews_readability_with_native_measurements_and_verification()
 -> Result<()> {
     let path =
@@ -807,7 +997,21 @@ async fn installed_agent_reviews_readability_with_native_measurements_and_verifi
         Project::open("Detached readability integration".into(), path).await?,
     ));
     let before = project.lock().await.snapshot();
-    let pages = before.chapters()?.entries[0].pages[15..17].to_vec();
+    let positions: Vec<[usize; 2]> =
+        serde_json::from_str(&std::env::var("KOHARU_READABILITY_POSITIONS")?)?;
+    let chapters = before.chapters()?;
+    let pages = positions
+        .iter()
+        .map(|[chapter, page]| {
+            chapters
+                .entries
+                .get(chapter.saturating_sub(1))
+                .and_then(|c| c.pages.get(page.saturating_sub(1)))
+                .copied()
+                .context("requested chapter/page")
+        })
+        .collect::<Result<Vec<_>>>()?;
+    anyhow::ensure!(!pages.is_empty(), "choose at least one page");
     let renderer = koharu_renderer::Renderer::new()?;
     let calls = Arc::new(parking_lot::Mutex::new(Vec::new()));
     let host = NativeHost {
@@ -820,8 +1024,10 @@ async fn installed_agent_reviews_readability_with_native_measurements_and_verifi
     let agent = koharu_agent::Agent::new(koharu_agent::Codex::new()?, host)?;
     let control = Control::default();
     let prompt = format!(
-        "Sửa chữ nhỏ, chữ chồng và viền quá dày để dễ đọc trên điện thoại và desktop. CHỈ làm Chapter 1 trang 016 và 017, tức phạm vi inclusive first_page={} last_page={}. Đây là bản sao thử, không sửa ngoài phạm vi. Giữ nguyên lời thoại và hình vẽ; không chạy lại dịch/OCR/pipeline. Dùng audit_readability, ảnh toàn trang và ảnh cận cảnh để chọn cách sửa phù hợp từng lớp, ưu tiên repair_text theo batch; chỉ nới khung trong vùng bóng thoại hợp lệ nếu cần. Kiểm tra lại cả hai kích thước sau sửa và verify_readability từng trang. Vấn đề không sửa an toàn được phải đánh dấu needs_review và nói rõ. Làm trực tiếp bằng tool, không chỉ trả lời hướng dẫn.",
-        pages[0], pages[1]
+        "Sửa chữ nhỏ, chữ chồng và viền quá dày để dễ đọc trên điện thoại và desktop. CHỈ làm các vị trí chapter/trang (1-based): {:?}, tức phạm vi inclusive first_page={} last_page={}. Đây là bản sao thử, không sửa ngoài phạm vi. Giữ nguyên lời thoại và hình vẽ; chỉ được bỏ một bản OCR trùng đã được audit xác nhận và còn một bản hiển thị. Không chạy lại dịch/OCR/pipeline. Dùng audit_readability, ảnh toàn trang và ảnh cận cảnh để chọn cách sửa phù hợp từng lớp, ưu tiên repair_text theo batch; nới khung trong vùng bóng thoại hợp lệ khi chữ vẫn quá nhỏ. Kiểm tra lại cả hai kích thước sau sửa và verify_readability từng trang. Vấn đề không sửa an toàn được phải đánh dấu needs_review và nói rõ. Làm trực tiếp bằng tool, không chỉ trả lời hướng dẫn.",
+        positions,
+        pages[0],
+        pages[pages.len() - 1]
     );
     let mut events = Vec::new();
     let task = agent.run(RunId::new(), prompt, control.clone(), |event| {
@@ -841,9 +1047,29 @@ async fn installed_agent_reviews_readability_with_native_measurements_and_verifi
     agent.clear().await;
     let after = project.lock().await.snapshot();
     for page in &pages {
+        let mut report = renderer.render(&before, *page).await?.readability();
+        readability::source_duplicates(&before, &mut report)?;
         for entity in before.descendants(*page)? {
             if let Ok(layer) = before.text_layer(entity.id()) {
-                let new = after.text_layer(entity.id())?;
+                let Ok(new) = after.text_layer(entity.id()) else {
+                    anyhow::ensure!(
+                        report.issues.iter().any(|issue| {
+                            if issue.kind != koharu_renderer::ReadabilityKind::DuplicateCandidate {
+                                return false;
+                            }
+                            let survivor = if issue.element == entity.id() {
+                                issue.related
+                            } else if issue.related == Some(entity.id()) {
+                                Some(issue.element)
+                            } else {
+                                None
+                            };
+                            survivor.is_some_and(|id| after.text_layer(id).is_ok())
+                        }),
+                        "agent deleted dialogue without a surviving audited copy"
+                    );
+                    continue;
+                };
                 anyhow::ensure!(
                     layer.content()?.translation()?.map(|v| v
                         .text
@@ -873,17 +1099,18 @@ async fn installed_agent_reviews_readability_with_native_measurements_and_verifi
     )?;
     let result = result?;
     anyhow::ensure!(
-        calls
-            .last()
-            .is_some_and(|c| c["coverage"]["checked"] == 2 && c["coverage"]["total"] == 2),
-        "agent did not verify both scoped pages"
+        calls.last().is_some_and(
+            |c| c["coverage"]["checked"].as_u64() == Some(pages.len() as u64)
+                && c["coverage"]["total"].as_u64() == Some(pages.len() as u64)
+        ),
+        "agent did not verify every scoped page"
     );
     anyhow::ensure!(
         calls.iter().any(|c| c["changed"] == true),
         "agent made no saved edit"
     );
     println!(
-        "Installed agent finished two measured, rendered and verified native pages: {}",
+        "Installed agent finished measured, rendered and verified native pages: {}",
         result.message
     );
     Ok(())
