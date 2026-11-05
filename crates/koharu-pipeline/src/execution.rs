@@ -93,7 +93,10 @@ impl<'a> Execution<'a> {
         })
     }
 
-    pub(crate) async fn run(mut self) -> std::result::Result<Report, PipelineError> {
+    pub(crate) async fn run(
+        mut self,
+        mut permit: crate::admission::Permit,
+    ) -> std::result::Result<Report, PipelineError> {
         if self.stopped() {
             return Ok(self.report(RunStatus::Stopped));
         }
@@ -104,8 +107,20 @@ impl<'a> Execution<'a> {
         let runner = self.runner.clone();
         let mut running = FuturesUnordered::new();
         loop {
-            while let Some(job) = self.take_ready_job() {
-                running.push(runner.run(job));
+            if !permit.should_yield() {
+                while let Some(job) = self.take_ready_job() {
+                    running.push(runner.run(job));
+                }
+            }
+            if running.is_empty()
+                && permit.should_yield()
+                && !self.stopped()
+                && self.failure.is_none()
+            {
+                if !permit.yield_to_interactive(&self.stop).await {
+                    break;
+                }
+                continue;
             }
 
             let Some(completion) = running.next().await else {
@@ -256,7 +271,7 @@ impl<'a> Execution<'a> {
         Ok(self.report(status))
     }
 
-    fn report(&self, status: RunStatus) -> Report {
+    pub(crate) fn report(&self, status: RunStatus) -> Report {
         Report {
             status,
             base: self.base,

@@ -75,11 +75,14 @@ async fn automatic_recovery_is_bounded_and_stops_for_quota_or_invalid_output() {
         let (session, _) = crate::resume::text_fixture(1).await;
         let revision = session.snapshot().revision();
         let calls = Arc::new(AtomicUsize::new(0));
-        let pipeline = Pipeline::test_translation(Box::new(Broken {
-            calls: calls.clone(),
-            status,
-            message,
-        }));
+        let pipeline = Pipeline::test_processors(vec![(
+            Stage::Translation,
+            Box::new(Broken {
+                calls: calls.clone(),
+                status,
+                message,
+            }),
+        )]);
         let stop = StopToken::default();
         let outcome_stop = stop.clone();
         let progress_stop = stop.clone();
@@ -206,9 +209,12 @@ async fn automatic_recovery_continues_the_failed_page_without_manual_resume() {
     }
     let (mut session, ids) = crate::resume::text_fixture(3).await;
     let calls = Arc::new(AtomicUsize::new(0));
-    let pipeline = Pipeline::test_translation(Box::new(Interrupted {
-        calls: calls.clone(),
-    }));
+    let pipeline = Pipeline::test_processors(vec![(
+        Stage::Translation,
+        Box::new(Interrupted {
+            calls: calls.clone(),
+        }),
+    )]);
     let result = pipeline
         .execute(
             session.snapshot(),
@@ -309,10 +315,13 @@ async fn resume_after_quota_failure_skips_committed_pages_and_keeps_pending_work
     let (mut session, ids) = crate::resume::text_fixture(3).await;
     let calls = Arc::new(AtomicUsize::new(0));
     let exhausted = Arc::new(AtomicBool::new(true));
-    let pipeline = Pipeline::test_translation(Box::new(Quota {
-        calls: calls.clone(),
-        exhausted: exhausted.clone(),
-    }));
+    let pipeline = Pipeline::test_processors(vec![(
+        Stage::Translation,
+        Box::new(Quota {
+            calls: calls.clone(),
+            exhausted: exhausted.clone(),
+        }),
+    )]);
     let request = || Request {
         resume: true,
         operation: Operation::Only {

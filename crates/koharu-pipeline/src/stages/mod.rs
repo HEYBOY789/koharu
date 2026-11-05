@@ -92,8 +92,13 @@ pub(crate) struct Stages {
 
 impl Stages {
     #[cfg(test)]
-    pub(crate) fn replace_translation(&mut self, processor: Box<dyn StageProcessor>) {
-        self.translation = processor;
+    pub(crate) fn replace(&mut self, stage: Stage, processor: Box<dyn StageProcessor>) {
+        match stage {
+            Stage::Detection => self.detection = processor,
+            Stage::Ocr => self.ocr = processor,
+            Stage::Translation => self.translation = processor,
+            Stage::Inpainting => self.inpainting = processor,
+        }
     }
     pub(crate) fn new(
         config: &PipelineConfig,

@@ -184,17 +184,12 @@ pub(crate) async fn subscribe(
 }
 
 pub(super) async fn replace_project(handle: &AppHandle<CefRuntime>, opened: Project) -> Result<()> {
-    prepare_project_switch(handle).await;
     handle
         .state::<CurrentProject>()
         .project
         .replace(opened)
         .await;
     show_current_project(handle).await
-}
-
-async fn prepare_project_switch(handle: &AppHandle<CefRuntime>) {
-    handle.state::<Processing>().inpainting_mask.lock().take();
 }
 
 async fn show_current_project(handle: &AppHandle<CefRuntime>) -> Result<()> {
@@ -299,7 +294,6 @@ pub(crate) async fn open_project(
         );
     }
     let library = handle.state::<ProjectLibrary>().inner().clone();
-    prepare_project_switch(&handle).await;
     handle
         .state::<CurrentProject>()
         .project
@@ -342,7 +336,6 @@ pub(crate) async fn delete_project(
 }
 
 async fn close_current_project(handle: &AppHandle<CefRuntime>) -> Result<()> {
-    prepare_project_switch(handle).await;
     handle.state::<CurrentProject>().project.close().await;
     show_current_project(handle).await
 }

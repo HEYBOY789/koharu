@@ -15,7 +15,6 @@ import {
   refresh,
   useChapter,
   useChapters,
-  useInferenceJob,
   usePage,
   useProject,
   useProjectBusy,
@@ -70,13 +69,14 @@ export function ChapterPanel() {
     setDraft(null)
   }, [chapterId])
 
-  const running = useInferenceJob()
   const projectBusy = useProjectBusy()
   const busy = projectBusy
   const waiting = Object.values(jobs).find(
     (job) => job.state === 'queued' && job.project === project?.name,
   )
-  const currentRunning = running?.project === project?.name ? running : undefined
+  const currentRunning = Object.values(jobs).find(
+    (job) => job.state === 'running' && job.project === project?.name && job.chapter !== null,
+  )
   const ownRunning = currentRunning?.chapter === chapterId ? currentRunning : undefined
   if (!data || !chapterId) return null
 
@@ -245,12 +245,13 @@ export function ChapterPanel() {
             {t('activity.queued')}
             <StopJobButton id={waiting.id} className='ml-auto' />
           </div>
-        ) : running ? (
+        ) : currentRunning ? (
           <p className='mt-2 rounded-md bg-muted/60 p-2 text-[10px] leading-4 text-muted-foreground'>
             {t('chapter.otherRunning', {
               title:
-                [running.project, running.chapter_title].filter(Boolean).join(' · ') ||
-                t('chapter.title'),
+                [currentRunning.project, currentRunning.chapter_title]
+                  .filter(Boolean)
+                  .join(' · ') || t('chapter.title'),
             })}
           </p>
         ) : null}

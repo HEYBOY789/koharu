@@ -752,6 +752,10 @@ async fn summarize_one(
          Write in {language}. `setting.md` must be a translation system prompt, not a summary.\n\
          Do not read another chapter and do not edit `pages/`."
     );
+    let pipeline = handle.state::<koharu_pipeline::Pipeline>();
+    let Some(permit) = pipeline.reserve_inference(stop).await else {
+        return Ok(false);
+    };
     let stopped = summarizer::run_agent(
         handle.clone(),
         id,
@@ -762,6 +766,7 @@ async fn summarize_one(
         stop.clone(),
     )
     .await?;
+    drop(permit);
     if stopped {
         return Ok(false);
     }

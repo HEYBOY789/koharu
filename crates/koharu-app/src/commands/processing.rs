@@ -94,7 +94,6 @@ pub(crate) struct Processing {
     source_admission: Arc<tokio::sync::Mutex<()>>,
     pub(crate) stops: Mutex<HashMap<JobId, StopToken>>,
     pub(crate) jobs: Mutex<HashMap<JobId, Job>>,
-    pub(crate) inpainting_mask: Mutex<Option<koharu_pipeline::InpaintingMask>>,
 }
 
 impl Processing {
@@ -223,6 +222,7 @@ pub(crate) fn progress_sink(
                 jobs.get_mut(&id).map(|job| {
                     job.completed = completed;
                     job.total = total;
+                    job.state = JobState::Running;
                     // Other stages may keep progressing while translation waits.
                     // Keep its recovery visible until translation starts again.
                     if retry.is_some()
@@ -246,40 +246,48 @@ pub(crate) fn progress_sink(
 
 #[tauri::command]
 #[specta::specta]
-#[allow(clippy::too_many_arguments)]
 pub(crate) async fn process(
     handle: AppHandle<CefRuntime>,
     scope: koharu_pipeline::Scope,
     operation: koharu_pipeline::Operation,
     project: State<'_, CurrentProject>,
-    processing: State<'_, Processing>,
-    job_channel: State<'_, JobChannel>,
 ) -> std::result::Result<JobId, Error> {
     let origin = {
         let current = project.project.lock().await;
         let current = current.as_ref().context("no project is open")?;
         current.instance_id
     };
+    let target = project
+        .project
+        .retain(origin, ProjectOwner::Pipeline)
+        .await?;
+    Ok(start_process(
+        handle,
+        target,
+        koharu_pipeline::Request {
+            scope,
+            operation,
+            ..Default::default()
+        },
+    ))
+}
+
+pub(super) fn start_process(
+    handle: AppHandle<CefRuntime>,
+    target: ProjectLease,
+    mut request: koharu_pipeline::Request,
+) -> JobId {
     let id = JobId::new();
-    let stop = StopToken::default();
-    {
-        let mut stops = processing.stops.lock();
-        stops.insert(id, stop.clone());
-    }
-    let target = match project.project.retain(origin, ProjectOwner::Pipeline).await {
-        Ok(target) => target,
-        Err(error) => {
-            processing.stops.lock().remove(&id);
-            return Err(error.into());
-        }
-    };
+    let stop = request.stop.clone();
+    let processing = handle.state::<Processing>();
+    processing.stops.lock().insert(id, stop.clone());
     let job = Job {
         id,
         project: Some(target.name.clone()),
         state: JobState::Queued,
         completed: 0,
         total: 0,
-        page: None,
+        page: request.inpainting_mask.as_ref().map(|mask| mask.page),
         chapter: None,
         chapter_title: None,
         chapter_progress: None,
@@ -291,37 +299,34 @@ pub(crate) async fn process(
         error: None,
     };
     processing.jobs.lock().insert(id, job.clone());
-    job_channel.channel.publish(job);
+    handle.state::<JobChannel>().channel.publish(job);
 
     let pipeline = handle.state::<koharu_pipeline::Pipeline>().inner().clone();
     let task_handle = handle.clone();
-    let inpainting_mask = processing.inpainting_mask.lock().take();
+    let interactive = request.inpainting_mask.is_some()
+        && request.operation
+            == koharu_pipeline::Operation::Only {
+                stage: koharu_pipeline::Stage::Inpainting,
+            };
+    request.progress = Some(progress_sink(task_handle.clone(), id));
     drop(tokio::spawn(async move {
         let result: Result<bool> = async {
             let processing = task_handle.state::<Processing>();
-            let Some(_permit) = processing.wait(&stop).await else {
-                return Ok(true);
+            // Ordinary workflows stay FIFO across whole projects. A manual
+            // Remove stroke borrows the pipeline lane at a drained stage boundary.
+            let _permit = if interactive {
+                None
+            } else {
+                let Some(permit) = processing.wait(&stop).await else {
+                    return Ok(true);
+                };
+                Some(permit)
             };
             let snapshot = task_handle
                 .state::<CurrentProject>()
                 .project
                 .snapshot(&target)
                 .await?;
-            if let Some(job) = processing.jobs.lock().get_mut(&id) {
-                job.state = JobState::Running;
-                task_handle
-                    .state::<JobChannel>()
-                    .channel
-                    .publish(job.clone());
-            }
-            let request = koharu_pipeline::Request {
-                resume: false,
-                operation,
-                scope,
-                stop: stop.clone(),
-                progress: Some(progress_sink(task_handle.clone(), id)),
-                inpainting_mask,
-            };
             let mut committer = PipelineCommitter::new(task_handle.clone(), target.clone());
             let report = pipeline
                 .execute(snapshot, request, &mut committer)
@@ -364,7 +369,7 @@ pub(crate) async fn process(
             task_handle.state::<JobChannel>().channel.publish(job);
         }
     }));
-    Ok(id)
+    id
 }
 
 #[tauri::command]

@@ -128,6 +128,45 @@ it('allows translation while a different project downloads and keeps the toolbar
   expect(stop).toHaveBeenCalledWith('translation')
 })
 
+it('does not claim another project locks editing and reserves only the local Remove job', async () => {
+  const other: Job = {
+    ...download,
+    id: 'background-translation',
+    chapter: 'other-chapter',
+    chapter_title: 'A very long background chapter title that belongs to a different project',
+    phase: 'translate',
+  }
+  useKoharuStore.setState({ jobs: { other } })
+  setup()
+  const translate = await screen.findByRole('button', { name: /^Translate$/ })
+  expect(translate).toBeEnabled()
+  expect(screen.queryByText(other.chapter_title!, { exact: false })).not.toBeInTheDocument()
+  act(() =>
+    useKoharuStore.setState({
+      jobs: {
+        other,
+        remove: {
+          ...download,
+          id: 'remove',
+          project: 'Editing',
+          phase: null,
+          chapter_title: null,
+          stage: 'inpainting',
+          state: 'queued',
+        },
+      },
+    }),
+  )
+  expect(translate).toBeDisabled()
+  expect(screen.getByText('Queued')).toBeVisible()
+  act(() => {
+    const jobs = useKoharuStore.getState().jobs
+    useKoharuStore.setState({ jobs: { ...jobs, remove: { ...jobs.remove, state: 'finished' } } })
+  })
+  expect(translate).toBeEnabled()
+  expect(useKoharuStore.getState().jobs.other.state).toBe('running')
+})
+
 it('reserves only the queued import target and ignores a source preview without a project', async () => {
   const run = setup()
   const translate = await screen.findByRole('button', { name: /^Translate$/ })

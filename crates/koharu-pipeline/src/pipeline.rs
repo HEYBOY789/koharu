@@ -14,12 +14,14 @@ use crate::{
 pub struct Pipeline {
     current: Arc<ArcSwap<StageRunner>>,
     resources: Arc<ResourceMonitor>,
-    execution: Arc<tokio::sync::Mutex<()>>,
+    execution: Arc<crate::admission::Admission>,
 }
 
 impl Pipeline {
     #[cfg(test)]
-    pub(crate) fn test_translation(processor: Box<dyn crate::stages::StageProcessor>) -> Self {
+    pub(crate) fn test_processors(
+        processors: Vec<(crate::Stage, Box<dyn crate::stages::StageProcessor>)>,
+    ) -> Self {
         let device = koharu_ml::Device::cpu();
         let resources = ResourceMonitor::new(&device);
         let translator = koharu_translator::Translator::from_config(
@@ -34,12 +36,14 @@ impl Pipeline {
             resources.clone(),
         )
         .unwrap();
-        runner.replace_translation(processor);
+        for (stage, processor) in processors {
+            runner.replace(stage, processor);
+        }
         runner.set_retry_delays(vec![std::time::Duration::from_millis(1); 3]);
         Self {
             current: Arc::new(ArcSwap::from_pointee(runner)),
             resources,
-            execution: Arc::new(tokio::sync::Mutex::new(())),
+            execution: Arc::default(),
         }
     }
     pub fn pending_pages(
@@ -94,13 +98,18 @@ impl Pipeline {
         Ok(Self {
             current,
             resources,
-            execution: Arc::new(tokio::sync::Mutex::new(())),
+            execution: Arc::default(),
         })
     }
 
     pub fn subscribe_resources(&self) -> tokio::sync::watch::Receiver<ResourceSnapshot> {
         self.resources.start();
         self.resources.subscribe()
+    }
+
+    /// External chapter summarizers share inference admission with page models.
+    pub async fn reserve_inference(&self, stop: &crate::StopToken) -> Option<impl Send + use<>> {
+        self.execution.acquire(false, stop).await
     }
 
     #[tracing::instrument(skip_all)]
@@ -110,15 +119,22 @@ impl Pipeline {
         request: Request,
         committer: &mut dyn Committer,
     ) -> std::result::Result<Report, PipelineError> {
-        let _execution = self.execution.lock().await;
-        Execution::new(
+        let interactive = request.inpainting_mask.is_some()
+            && request.operation
+                == crate::Operation::Only {
+                    stage: crate::Stage::Inpainting,
+                };
+        let permit = self.execution.acquire(interactive, &request.stop).await;
+        let execution = Execution::new(
             self.current.load_full(),
             self.resources.clone(),
             snapshot,
             request,
             committer,
-        )?
-        .run()
-        .await
+        )?;
+        match permit {
+            Some(permit) => execution.run(permit).await,
+            None => Ok(execution.report(crate::RunStatus::Stopped)),
+        }
     }
 }

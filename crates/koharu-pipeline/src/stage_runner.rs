@@ -26,11 +26,12 @@ impl StageRunner {
         self.retry_delays = delays;
     }
     #[cfg(test)]
-    pub(crate) fn replace_translation(
+    pub(crate) fn replace(
         &mut self,
+        stage: Stage,
         processor: Box<dyn crate::stages::StageProcessor>,
     ) {
-        self.stages.replace_translation(processor);
+        self.stages.replace(stage, processor);
     }
     pub(crate) fn pending_pages(
         &self,

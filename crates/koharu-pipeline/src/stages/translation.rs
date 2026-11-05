@@ -462,9 +462,12 @@ mod tests {
             }
         }
         let calls = Arc::new(Mutex::new(Vec::new()));
-        let pipeline = crate::Pipeline::test_translation(Box::new(EmptyOnce {
-            calls: calls.clone(),
-        }));
+        let pipeline = crate::Pipeline::test_processors(vec![(
+            crate::Stage::Translation,
+            Box::new(EmptyOnce {
+                calls: calls.clone(),
+            }),
+        )]);
         let result = pipeline
             .execute(
                 session.snapshot(),
