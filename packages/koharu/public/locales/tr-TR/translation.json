@@ -118,7 +118,9 @@
       "toolRejected": "Bir araç çağrısı reddedildi. Ajan çalışmaya devam ediyor ve yeniden deneyebilir.",
       "changes": "Tamamlanan düzenleme: {{count}}",
       "background": "Ajan “{{name}}” üzerinde çalışıyor.",
-      "newConversation": "Yeni konuşma"
+      "newConversation": "Yeni konuşma",
+      "readability": "Kontrol edilen sayfalar: {{checked}}/{{total}}",
+      "readabilityNeedsReview": "İncelenecek bulgular: {{count}}"
     },
     "tools": {
       "inspect_chapters": "Bölümler okunuyor",
@@ -139,7 +141,10 @@
       "set_visibility": "Görünürlük güncelleniyor",
       "delete_elements": "Katmanlar kaldırılıyor",
       "reorder_element": "Katman sırası değiştiriliyor",
-      "run_pipeline": "İşlem hattı çalıştırılıyor"
+      "run_pipeline": "İşlem hattı çalıştırılıyor",
+      "audit_readability": "Okunabilirlik ölçülüyor",
+      "repair_text": "Metin boyutu ayarlanıyor",
+      "verify_readability": "Sayfa okunabilirliği doğrulanıyor"
     }
   },
   "canvas": {

@@ -20,6 +20,7 @@ use tauri_runtime_cef::CefRuntime;
 use super::{
     context::{self, InspectChapter, InspectPage, Window},
     failures::{Attempt, Failures, Target},
+    readability::{self, Review, VerifyReadability},
     scope::{self, EditRange},
 };
 
@@ -48,6 +49,7 @@ struct Binding {
     observed: Arc<parking_lot::Mutex<Option<Revision>>>,
     pages: Arc<parking_lot::Mutex<Option<Vec<EntityId>>>>,
     failures: Arc<parking_lot::Mutex<Failures>>,
+    review: Arc<parking_lot::Mutex<Review>>,
 }
 
 impl Binding {
@@ -165,7 +167,25 @@ impl KoharuHost {
             self.binding.as_ref().unwrap().pages.lock().as_deref(),
             &targets,
         )?;
+        let snapshot = project.snapshot();
+        let pages = targets
+            .iter()
+            .map(|id| scope::page_for(&snapshot, *id))
+            .collect::<Result<std::collections::HashSet<_>>>()?;
+        for page in &pages {
+            self.binding
+                .as_ref()
+                .unwrap()
+                .review
+                .lock()
+                .before_edit(*page, readability::stamp(&snapshot, *page)?)?;
+        }
         let (commit, value) = mutation(&mut project).await?;
+        if commit.changes.from != commit.changes.to {
+            for page in pages {
+                self.binding.as_ref().unwrap().review.lock().changed(page);
+            }
+        }
         project.record_commit(&commit);
         project.reconcile_page();
         self.observe(&project);
@@ -285,6 +305,7 @@ impl Host for KoharuHost {
                 observed: Arc::new(parking_lot::Mutex::new(None)),
                 pages: Arc::new(parking_lot::Mutex::new(None)),
                 failures: Arc::default(),
+                review: Arc::default(),
             }),
         }))
     }
@@ -337,6 +358,10 @@ impl Host for KoharuHost {
             .state::<super::AgentState>()
             .store
             .failures(binding.run, pending);
+        self.handle
+            .state::<super::AgentState>()
+            .store
+            .readability(binding.run, binding.review.lock().progress());
         if exhausted {
             binding.control.cancel();
         }
@@ -344,25 +369,286 @@ impl Host for KoharuHost {
     }
 
     async fn ensure_complete(&self) -> Result<()> {
-        self.binding
-            .as_ref()
-            .context("Agent host is unbound")?
-            .failures
-            .lock()
-            .ensure_complete()
+        let binding = self.binding.as_ref().context("Agent host is unbound")?;
+        let projects = self.handle.state::<CurrentProject>();
+        let (project, _) = projects.project.target(self.target()?).await?;
+        self.check_project(&project)?;
+        binding.failures.lock().ensure_complete()?;
+        let review = binding.review.lock();
+        review.ensure_complete()?;
+        review.ensure_fresh(&project.snapshot())
     }
 }
 
 impl KoharuHost {
+    async fn measured(
+        &self,
+        snapshot: &Snapshot,
+        page: EntityId,
+    ) -> Result<koharu_renderer::ReadabilityReport> {
+        let desktop = self.handle.state::<Desktop>();
+        let frame = desktop.renderer().render(snapshot, page).await?;
+        let background =
+            output::frame_image(desktop.rasterizer().await?, &frame.without_text()?).await?;
+        let mut report = frame.readability();
+        report.sample_background(&background);
+        Ok(report)
+    }
+
+    async fn audit_readability(&self, query: InspectPage) -> Result<Invocation> {
+        context::validate(query.limit)?;
+        let page = entity(&query.page)?;
+        let projects = self.handle.state::<CurrentProject>();
+        let (project, _) = projects.project.target(self.target()?).await?;
+        self.check_project(&project)?;
+        let binding = self.binding.as_ref().unwrap();
+        let pages = binding
+            .pages
+            .lock()
+            .clone()
+            .context("Choose set_edit_scope before reviewing")?;
+        scope::check(&project.snapshot(), Some(&pages), &[page])?;
+        binding.review.lock().begin(&pages)?;
+        let report = self.measured(&project.snapshot(), page).await?;
+        let entries = report.layers.iter().skip(query.offset).take(query.limit).map(|layer| json!({
+            "layer":layer,"issues":report.issues.iter().filter(|i| i.element==layer.element).collect::<Vec<_>>()
+        })).collect();
+        let result = context::window(
+            json!({"page":context::location(&project.snapshot(),page)?, "revision":project.revision(), "reader_widths":report.reader_widths, "minimum_font_px":report.minimum_font_px,"issue_count":report.issues.len(), "note":"Measurements are triage. Inspect crops; a dense balloon that cannot fit readable text needs review, not silent shrinking."}),
+            "entries",
+            entries,
+            report.layers.len(),
+            query.offset,
+        )?;
+        binding
+            .review
+            .lock()
+            .audit(readability::stamp(&project.snapshot(), page)?, report);
+        self.observe(&project);
+        Invocation::read(result)
+    }
+
+    async fn edit_readability(&self, edit: LayerEdit) -> Result<Invocation> {
+        let projects = self.handle.state::<CurrentProject>();
+        let (mut project, visible) = projects.project.target(self.target()?).await?;
+        self.check_project(&project)?;
+        self.check_revision(&project)?;
+        let snapshot = project.snapshot();
+        let binding = self.binding.as_ref().unwrap();
+        scope::check(&snapshot, binding.pages.lock().as_deref(), &edit.targets())?;
+        if !binding.review.lock().active() {
+            let pages = binding
+                .pages
+                .lock()
+                .clone()
+                .context("Choose an edit scope")?;
+            binding.review.lock().begin(&pages)?;
+        }
+        let page = scope::page_for(&snapshot, edit.targets()[0])?;
+        let before = binding
+            .review
+            .lock()
+            .before_edit(page, readability::stamp(&snapshot, page)?)?;
+        let (patch, value) = edit
+            .preview_patch(&snapshot)?
+            .context("expected typography/geometry edit")?;
+        let quality = if let Some(before) = before {
+            let desktop = self.handle.state::<Desktop>();
+            let candidate = readability::checked_candidate(
+                &desktop.renderer(),
+                desktop.rasterizer().await?,
+                &snapshot,
+                &patch,
+                page,
+                &before,
+            )
+            .await;
+            match candidate {
+                Ok(report) => Some(report),
+                Err(error) if error.is::<readability::CandidateRegression>() => {
+                    return Invocation::read(
+                        json!({"page":page,"changed":false,"candidate_rejected":format!("{error}"),"remaining_issues":before.issues,"next":"Inspect a crop and propose a different layout, or verify the remaining issue as needs_review."}),
+                    );
+                }
+                Err(error) => return Err(error),
+            }
+        } else {
+            None
+        };
+        self.check_project(&project)?;
+        let commit = project.commit(patch).await?;
+        project.record_commit(&commit);
+        project.reconcile_page();
+        if commit.changes.from != commit.changes.to {
+            if let Some(report) = quality.as_ref() {
+                binding
+                    .review
+                    .lock()
+                    .audit(readability::stamp(&commit.snapshot, page)?, report.clone());
+            } else {
+                binding.review.lock().changed(page);
+            }
+        }
+        self.observe(&project);
+        let result = mutation_result(
+            &project,
+            &commit,
+            json!({"edit":value,"quality":quality,"verification_required":true}),
+        )?;
+        if visible {
+            self.synchronize(commit, project.active_page()).await?;
+        }
+        Ok(result)
+    }
+
+    async fn repair_text(&self, query: RepairText) -> Result<Invocation> {
+        let page = entity(&query.page)?;
+        let elements = entities(&query.elements)?;
+        let desktop = self.handle.state::<Desktop>();
+        let renderer = desktop.renderer();
+        let rasterizer = desktop.rasterizer().await?;
+        let review = self.binding.as_ref().unwrap().review.clone();
+        let control = self.binding.as_ref().unwrap().control.clone();
+        self.mutate(elements.clone(), move |project| {
+            Box::pin(async move {
+                let snapshot = project.snapshot();
+                let before = review
+                    .lock()
+                    .before_edit(page, readability::stamp(&snapshot, page)?)?
+                    .context("Call audit_readability and view_page before repair_text")?;
+                let batch =
+                    readability::repair_batch(&renderer, rasterizer, &snapshot, &elements, &before).await?;
+                anyhow::ensure!(
+                    !control.is_cancelled(),
+                    "Agent request was cancelled; no candidate edit was saved"
+                );
+                let commit = project.commit(batch.patch).await?;
+                Ok((
+                    commit,
+                    json!({"page":page,"elements":elements,"remaining_issues":batch.report.issues,"declined":batch.declined,"verification_required":true}),
+                ))
+            })
+        })
+        .await
+    }
+
     async fn execute_tool(&self, call: ToolCall, control: &Control) -> Result<Invocation> {
         if control.is_cancelled() {
             bail!("Agent request was cancelled");
         }
         if let Some(edit) = LayerEdit::parse(&call)? {
+            if self.binding.as_ref().unwrap().review.lock().active() {
+                anyhow::ensure!(
+                    !matches!(
+                        edit,
+                        LayerEdit::Add(..) | LayerEdit::Source(..) | LayerEdit::Reorder(..)
+                    ),
+                    "Readability repair preserves artwork, source text and the layer tree"
+                );
+                let snapshot = self
+                    .handle
+                    .state::<CurrentProject>()
+                    .project
+                    .snapshot(self.target()?)
+                    .await?;
+                if let LayerEdit::Translation(element, ref text) = edit {
+                    let text = text
+                        .as_ref()
+                        .context("Readability repair cannot remove the translation")?;
+                    let original = snapshot
+                        .text_layer(element)?
+                        .content()?
+                        .translation()?
+                        .context("readability needs an existing translation")?;
+                    anyhow::ensure!(
+                        original
+                            .text
+                            .value
+                            .split_whitespace()
+                            .eq(text.split_whitespace()),
+                        "Readability edits may change line breaks, but must preserve every word"
+                    );
+                }
+                if matches!(edit, LayerEdit::Delete(..) | LayerEdit::Visibility(..)) {
+                    for target in edit.targets() {
+                        let is_text = snapshot.text_layer(target).is_ok();
+                        let cleanup = snapshot
+                            .component::<koharu_scene::RasterLayer>(target)?
+                            .is_some_and(|r| r.kind == koharu_scene::RasterLayerKind::Cleanup);
+                        anyhow::ensure!(
+                            is_text || (cleanup && matches!(edit, LayerEdit::Visibility(..))),
+                            "Readability repair cannot delete or hide artwork or raster layers"
+                        );
+                        let destructive = matches!(edit, LayerEdit::Delete(..))
+                            || matches!(&edit, LayerEdit::Visibility(_, Some(false), _))
+                            || matches!(&edit,LayerEdit::Visibility(_,_,Some(v)) if *v<=0.0);
+                        if cleanup {
+                            anyhow::ensure!(
+                                !destructive,
+                                "Readability repair must preserve cleanup; hiding it exposes original lettering"
+                            );
+                        } else if destructive {
+                            let page = scope::page_for(&snapshot, target)?;
+                            let report = self
+                                .binding
+                                .as_ref()
+                                .unwrap()
+                                .review
+                                .lock()
+                                .before_edit(page, readability::stamp(&snapshot, page)?)?
+                                .context("Audit before removing duplicates")?;
+                            let targets = edit.targets();
+                            let survivor = report
+                                .issues
+                                .iter()
+                                .filter(|issue| {
+                                    issue.kind
+                                        == koharu_renderer::ReadabilityKind::DuplicateCandidate
+                                })
+                                .find_map(|issue| {
+                                    let other = if issue.element == target {
+                                        issue.related
+                                    } else if issue.related == Some(target) {
+                                        Some(issue.element)
+                                    } else {
+                                        None
+                                    }?;
+                                    (!targets.contains(&other)
+                                        && report.layers.iter().any(|layer| layer.element == other))
+                                    .then_some(other)
+                                });
+                            anyhow::ensure!(
+                                survivor.is_some(),
+                                "Only an audited duplicate can be removed, keeping another visible copy. Never remove ordinary dialogue or every duplicate copy."
+                            );
+                        }
+                        if let LayerEdit::Visibility(_, _, Some(opacity)) = &edit {
+                            let current = snapshot
+                                .component::<koharu_scene::Visibility>(target)?
+                                .map_or(1.0, |v| v.opacity);
+                            anyhow::ensure!(
+                                *opacity >= current || destructive,
+                                "Readability repair cannot fade text or cleanup to conceal a problem"
+                            );
+                        }
+                    }
+                }
+            }
+            if matches!(edit, LayerEdit::Typography(..) | LayerEdit::Geometry(..))
+                || (matches!(edit, LayerEdit::Translation(..))
+                    && self.binding.as_ref().unwrap().review.lock().active())
+            {
+                return self.edit_readability(edit).await;
+            }
             return self
                 .mutate(edit.targets(), |project| Box::pin(edit.apply(project)))
                 .await;
         }
+        anyhow::ensure!(
+            !self.binding.as_ref().unwrap().review.lock().active()
+                || !matches!(call.name.as_str(), "delete_pages" | "move_page"),
+            "Readability repair cannot delete pages or move them between chapters"
+        );
         match call.name.as_str() {
             "inspect_project" => {
                 let query: Window = arguments(&call)?;
@@ -392,6 +678,9 @@ impl KoharuHost {
                 self.check_revision(&project)?;
                 let snapshot = project.snapshot();
                 let pages = query.resolve(&snapshot)?;
+                if query.readability || self.binding.as_ref().unwrap().review.lock().active() {
+                    self.binding.as_ref().unwrap().review.lock().begin(&pages)?;
+                }
                 let result = json!({"first":context::location(&snapshot, pages[0])?, "last":context::location(&snapshot, *pages.last().unwrap())?, "page_count":pages.len()});
                 *self.binding.as_ref().unwrap().pages.lock() = Some(pages);
                 Invocation::read(result)
@@ -405,6 +694,23 @@ impl KoharuHost {
                 let result = context::page(&project.snapshot(), page, query.offset, query.limit)?;
                 self.observe(&project);
                 Invocation::read(result)
+            }
+            "audit_readability" => self.audit_readability(arguments(&call)?).await,
+            "repair_text" => self.repair_text(arguments(&call)?).await,
+            "verify_readability" => {
+                let query: VerifyReadability = arguments(&call)?;
+                let page = entity(&query.page)?;
+                let projects = self.handle.state::<CurrentProject>();
+                let (project, _) = projects.project.target(self.target()?).await?;
+                self.check_project(&project)?;
+                self.binding.as_ref().unwrap().review.lock().verify(
+                    page,
+                    readability::stamp(&project.snapshot(), page)?,
+                    query.issues,
+                )?;
+                Invocation::read(
+                    json!({"page":page,"coverage":self.binding.as_ref().unwrap().review.lock().progress()}),
+                )
             }
             "list_fonts" => {
                 let query: Window = arguments(&call)?;
@@ -436,14 +742,75 @@ impl KoharuHost {
                 let desktop = self.handle.state::<Desktop>();
                 let renderer = desktop.renderer();
                 let rasterizer = desktop.rasterizer().await?;
-                let bytes =
-                    output::rendered_preview(&renderer, rasterizer, &snapshot, page).await?;
-                Ok(
-                    Invocation::read(json!({ "page": page, "label": label }))?.with_image(
-                        format!("Rendered page {label} ({page})"),
+                let frame = renderer.render(&snapshot, page).await?;
+                let review_active = self.binding.as_ref().unwrap().review.lock().active();
+                let review_report = if review_active {
+                    let mut report = frame.readability();
+                    report.sample_background(
+                        &output::frame_image(rasterizer.clone(), &frame.without_text()?).await?,
+                    );
+                    let summary = json!({"issues":report.issues,"font_sizes":report.layers.iter().map(|l|json!({"element":l.element,"source_font_px":l.source_font_px,"display_font_px":l.display_font_px})).collect::<Vec<_>>()});
+                    let in_scope = self
+                        .binding
+                        .as_ref()
+                        .unwrap()
+                        .pages
+                        .lock()
+                        .as_ref()
+                        .is_some_and(|pages| pages.contains(&page));
+                    let mut review = self.binding.as_ref().unwrap().review.lock();
+                    if in_scope {
+                        review.audit(readability::stamp(&snapshot, page)?, report);
+                    }
+                    Some(summary)
+                } else {
+                    None
+                };
+                let crop = arguments
+                    .element
+                    .as_deref()
+                    .map(entity)
+                    .transpose()?
+                    .map(|element| {
+                        let layer = frame
+                            .layer(element)
+                            .context("element is not rendered on this page")?;
+                        let b = layer.bounds();
+                        let margin = 32.0;
+                        Ok::<_, anyhow::Error>([
+                            b.x - margin,
+                            b.y - margin,
+                            b.width + margin * 2.0,
+                            b.height + margin * 2.0,
+                        ])
+                    })
+                    .transpose()?;
+                let dual = crop.is_none()
+                    && arguments.display_width.is_none()
+                    && self.binding.as_ref().unwrap().review.lock().active();
+                let width = if dual {
+                    Some(960)
+                } else {
+                    arguments.display_width
+                };
+                let bytes = output::frame_preview(rasterizer.clone(), &frame, crop, width).await?;
+                let mut result = Invocation::read(json!({ "page": page, "label": label, "crop":crop,"display_width":width,"phone_and_desktop":dual,"readability":review_report }))?.with_image(
+                    format!("Rendered page {label} ({page}), width {width:?}"), format!("data:image/webp;base64,{}", STANDARD.encode(bytes)));
+                if dual {
+                    let bytes = output::frame_preview(rasterizer, &frame, None, Some(390)).await?;
+                    result = result.with_image(
+                        format!("Phone view {label} ({page}), 390px wide"),
                         format!("data:image/webp;base64,{}", STANDARD.encode(bytes)),
-                    ),
-                )
+                    );
+                }
+                if crop.is_none() {
+                    self.binding.as_ref().unwrap().review.lock().viewed(
+                        page,
+                        readability::stamp(&snapshot, page)?,
+                        if dual { None } else { width },
+                    );
+                }
+                Ok(result)
             }
             "rename_page" => {
                 let arguments: RenamePage = arguments(&call)?;
@@ -494,7 +861,13 @@ impl KoharuHost {
                 })
                 .await
             }
-            "run_pipeline" => self.run_pipeline(arguments(&call)?, control).await,
+            "run_pipeline" => {
+                anyhow::ensure!(
+                    !self.binding.as_ref().unwrap().review.lock().active(),
+                    "Do not restart processing during readability repair"
+                );
+                self.run_pipeline(arguments(&call)?, control).await
+            }
             name => bail!("unknown Koharu tool {name}"),
         }
     }
@@ -533,6 +906,35 @@ enum LayerEdit {
 }
 
 impl LayerEdit {
+    fn preview_patch(&self, snapshot: &Snapshot) -> Result<Option<(koharu_scene::Patch, Value)>> {
+        Ok(Some(match self {
+            Self::Translation(element, text) => (
+                Project::translation_patch(snapshot, *element, text.clone())?,
+                json!({"element":element}),
+            ),
+            Self::Typography(element, a) => (
+                Project::typography_patch(
+                    snapshot,
+                    vec![TypographyUpdate {
+                        layer: *element,
+                        typography: a.clone().merge(snapshot, *element)?,
+                    }],
+                )?,
+                json!({"element":element}),
+            ),
+            Self::Geometry(element, points) => (
+                Project::geometry_patch(
+                    snapshot,
+                    vec![GeometryUpdate {
+                        layer: *element,
+                        points: points.clone(),
+                    }],
+                )?,
+                json!({"element":element}),
+            ),
+            _ => return Ok(None),
+        }))
+    }
     fn parse(call: &ToolCall) -> Result<Option<Self>> {
         Ok(Some(match call.name.as_str() {
             "add_text_box" => {
@@ -694,8 +1096,11 @@ fn editor_tools() -> Vec<Tool> {
                     ),
                     definition::<ViewPage>(
                         "view_page",
-                        "Render and inspect one page image. Call this only for pages whose visual appearance matters to the request.",
+                        "Render the actual page. Optional element crops around a rendered text layer at useful resolution, preserving nearby artwork. Omit element for the whole page; display_width=390 simulates phone width, 960 desktop. Always view the full page after edits before verify_readability, and inspect crops for border/overlap fixes.",
                     ),
+                    definition::<InspectPage>("audit_readability", "Measure actual rendered text at phone (390px) and desktop (960px) widths, not stored Auto overrides. Requires a chosen edit scope. Activates native review for the ENTIRE scope. Returns actual font sizes, overflow, overlap/duplicate candidates, outline ratios and background/contrast sampled with translated text hidden. Follow pagination.next_offset for all layers. Call before edits and again after every edit. Rectangular overlap is a candidate, not proof; inspect view_page crops."),
+                    definition::<RepairText>("repair_text", "Conservatively improve a batch of 1–50 audited, visually inspected translated layers on ONE page. Supply page and elements (layer IDs from audit). Native searches larger fonts inside existing layouts, reduces excessive outlines proportionally and fixes contrast on near-uniform backgrounds. Preserves words, font faces, alignment, artwork and bubble geometry. Mixed backgrounds need visual judgement. Previews every candidate and rejects measurable regressions before saving one reversible page edit. Remaining small text is NOT fixed; enlarge only legitimate balloon space with set_geometry or report needs_review. Re-audit/view after the saved change."),
+                    definition::<VerifyReadability>("verify_readability", "Finish one page only after a fresh audit and a full view_page of the current result. Supply one issue decision for every remaining issue ID. keep is ONLY for visual collision/duplicate false positives; measured small text/overflow/contrast/thick outline must be fixed or marked needs_review with a concrete reason. Native completion requires every scoped page verified; do not claim needs_review pages repaired."),
                     definition::<RenamePage>("rename_page", "Rename a project page."),
                     definition::<MovePage>("move_page", "Move a page to a zero-based GLOBAL project index. This can change its chapter membership. Inspect the returned page position after moving. Both source and destination pages must be in the edit scope."),
                     definition::<DeletePages>("delete_pages", "Delete pages and their contents."),
@@ -957,6 +1362,7 @@ mod tests {
         let range = EditRange {
             first_page: pages[2].to_string(),
             last_page: pages[4].to_string(),
+            readability: false,
         }
         .resolve(&snapshot)?;
         assert_eq!(range, pages[2..]);
@@ -966,7 +1372,8 @@ mod tests {
         assert!(
             EditRange {
                 first_page: pages[3].to_string(),
-                last_page: pages[0].to_string()
+                last_page: pages[0].to_string(),
+                readability: false,
             }
             .resolve(&snapshot)
             .is_err()
@@ -1069,6 +1476,7 @@ mod tests {
             observed: Arc::new(parking_lot::Mutex::new(None)),
             pages: Arc::new(parking_lot::Mutex::new(None)),
             failures: Arc::default(),
+            review: Arc::default(),
         };
         let mut page = None;
         let patch = project.snapshot().patch(|edit| {
@@ -1124,6 +1532,7 @@ mod tests {
             observed: Arc::new(parking_lot::Mutex::new(None)),
             pages: Arc::new(parking_lot::Mutex::new(None)),
             failures: Arc::default(),
+            review: Arc::default(),
         };
         drop(project);
         let reopened = Project::open("fixture".into(), path).await?;
@@ -1136,6 +1545,15 @@ mod tests {
 #[serde(deny_unknown_fields)]
 struct ViewPage {
     page: String,
+    element: Option<String>,
+    display_width: Option<u32>,
+}
+
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct RepairText {
+    page: String,
+    elements: Vec<String>,
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -1238,7 +1656,7 @@ impl From<AgentWritingMode> for koharu_scene::WritingMode {
     }
 }
 
-#[derive(Deserialize, JsonSchema)]
+#[derive(Clone, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct SetTypography {
     element: String,

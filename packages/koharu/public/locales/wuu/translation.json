@@ -118,7 +118,9 @@
       "toolRejected": "工具调用被拒绝。代理仍在运行，可以重试。",
       "changes": "已完成修改：{{count}}",
       "background": "智能体正在处理“{{name}}”。",
-      "newConversation": "新会话"
+      "newConversation": "新会话",
+      "readability": "检查好个页面：{{checked}}/{{total}}",
+      "readabilityNeedsReview": "还要检查个问题：{{count}}"
     },
     "tools": {
       "inspect_chapters": "读取章节",
@@ -139,7 +141,10 @@
       "set_visibility": "更新可见性",
       "delete_elements": "删除图层",
       "reorder_element": "调整图层顺序",
-      "run_pipeline": "运行处理流程"
+      "run_pipeline": "运行处理流程",
+      "audit_readability": "测量文字可读性",
+      "repair_text": "调整文字大小",
+      "verify_readability": "检查页面文字"
     }
   },
   "canvas": {

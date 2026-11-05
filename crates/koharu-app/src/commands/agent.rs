@@ -1,6 +1,7 @@
 mod context;
 mod failures;
 mod host;
+mod readability;
 mod scope;
 mod session;
 use session::SessionStore;

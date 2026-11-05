@@ -438,6 +438,41 @@ async fn discovery_reads_both_help_streams_and_requires_a_successful_capability_
 }
 
 #[tokio::test]
+#[cfg(windows)]
+async fn managed_pi_cmd_uses_its_launcher_and_preserves_spaced_arguments() -> Result<()> {
+    let directory = tempfile::Builder::new().prefix("managed pi ").tempdir()?;
+    let shim = directory.path().join("pi.cmd");
+    tokio::fs::write(&shim, "@echo off\nexit /b 99\n").await?;
+    tokio::fs::write(
+        directory.path().join("pi-launcher.js"),
+        "process.stdout.write(JSON.stringify(process.argv.slice(2)))",
+    )
+    .await?;
+    let config = CliConfig {
+        binary: Some(shim.display().to_string()),
+        ..CliConfig::default()
+    };
+    let output = command(Backend::Pi, &config)?
+        .args([
+            "--model",
+            "local-proxy/ag/gemini-3.8-flash-high",
+            "literal words with spaces",
+        ])
+        .output()
+        .await?;
+    assert!(output.status.success());
+    assert_eq!(
+        serde_json::from_slice::<Vec<String>>(&output.stdout)?,
+        [
+            "--model",
+            "local-proxy/ag/gemini-3.8-flash-high",
+            "literal words with spaces"
+        ]
+    );
+    Ok(())
+}
+
+#[tokio::test]
 #[ignore = "Manual installed CLI discovery; makes no model calls"]
 async fn installed_agy_discovers_editor_models() -> Result<()> {
     let config = CliConfig {

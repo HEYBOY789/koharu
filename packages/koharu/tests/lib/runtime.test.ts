@@ -196,6 +196,7 @@ describe('Tauri runtime', () => {
       stage: null,
       last_page: null,
       failures: [],
+      readability: null,
       changes: 1,
       error: null,
     }

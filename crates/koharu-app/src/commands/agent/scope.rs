@@ -10,6 +10,9 @@ pub(super) struct EditRange {
     pub first_page: String,
     /// Last page ID, inclusive. Use the same ID for a single page.
     pub last_page: String,
+    /// Enable measured readability review for every page in this inclusive range.
+    #[serde(default)]
+    pub readability: bool,
 }
 
 impl EditRange {

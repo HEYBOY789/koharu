@@ -182,6 +182,7 @@ export type AgentRun = {
         changes: number,
         error: string | null,
         failures: AgentFailure[],
+        readability: ReadabilityProgress | null,
 };
 
 export type AgentRunState = "running" | "finished" | "failed" | "stopped";
@@ -790,6 +791,12 @@ export type Quantization = {
 };
 
 export type RasterLayerKind = "cleanup" | "paint";
+
+export type ReadabilityProgress = {
+        total: number,
+        checked: number,
+        needs_review: number,
+};
 
 export type Reasoning = "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
 

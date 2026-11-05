@@ -67,6 +67,7 @@ pub struct AgentRun {
     pub changes: u32,
     pub error: Option<String>,
     pub failures: Vec<AgentFailure>,
+    pub readability: Option<super::readability::ReadabilityProgress>,
 }
 
 pub(super) struct SessionStore {
@@ -189,6 +190,7 @@ impl SessionStore {
                 changes: 0,
                 error: None,
                 failures: Vec::new(),
+                readability: None,
             });
         });
     }
@@ -256,8 +258,10 @@ impl SessionStore {
                     }
                 }
                 Event::Completed { message: text, .. } => {
-                    if !run.failures.is_empty() || run.error.is_some() {
-                        let error = if run.failures.is_empty() { run.error.clone().unwrap() }
+                    let incomplete_review = run.readability.as_ref().is_some_and(|r| r.checked < r.total);
+                    if !run.failures.is_empty() || run.error.is_some() || incomplete_review {
+                        let error = if incomplete_review { "Agent stopped before every scoped page was visually reviewed.".to_owned() }
+                            else if run.failures.is_empty() { run.error.clone().unwrap() }
                             else { format!("Agent stopped with {} unresolved tool calls; the request is not complete.",run.failures.len()) };
                         run.state = AgentRunState::Failed;
                         run.error = Some(error.clone());
@@ -324,6 +328,21 @@ impl SessionStore {
                 .filter(|run| run.id == id && run.state == AgentRunState::Running)
             {
                 run.failures = failures;
+            }
+        });
+    }
+    pub fn readability(
+        &self,
+        id: RunId,
+        progress: Option<super::readability::ReadabilityProgress>,
+    ) {
+        self.update(|snapshot| {
+            if let Some(run) = snapshot
+                .run
+                .as_mut()
+                .filter(|r| r.id == id && r.state == AgentRunState::Running)
+            {
+                run.readability = progress;
             }
         });
     }

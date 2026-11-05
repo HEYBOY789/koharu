@@ -28,6 +28,7 @@ it('shows an agent on A alongside a pipeline on B and stops only the selected ru
           element: null,
           stage: null,
           last_page: null,
+          readability: null,
           failures: [
             {
               id: 'failed-016',

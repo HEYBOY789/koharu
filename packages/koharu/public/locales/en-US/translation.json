@@ -118,7 +118,9 @@
       "toolRejected": "A tool call was rejected. The agent is still running and can retry.",
       "changes": "Completed edits: {{count}}",
       "background": "Agent is working on “{{name}}”.",
-      "newConversation": "New conversation"
+      "newConversation": "New conversation",
+      "readability": "Pages checked: {{checked}}/{{total}}",
+      "readabilityNeedsReview": "Findings needing review: {{count}}"
     },
     "tools": {
       "inspect_chapters": "Reading chapters",
@@ -139,7 +141,10 @@
       "set_visibility": "Updating visibility",
       "delete_elements": "Removing layers",
       "reorder_element": "Reordering layer tree",
-      "run_pipeline": "Running pipeline"
+      "run_pipeline": "Running pipeline",
+      "audit_readability": "Measuring readability",
+      "repair_text": "Fitting readable text",
+      "verify_readability": "Verifying page readability"
     }
   },
   "canvas": {

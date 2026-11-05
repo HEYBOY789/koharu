@@ -118,7 +118,9 @@
       "toolRejected": "Вызов инструмента отклонён. Агент продолжает работу и может повторить попытку.",
       "changes": "Выполнено изменений: {{count}}",
       "background": "Агент работает над «{{name}}».",
-      "newConversation": "Новый разговор"
+      "newConversation": "Новый разговор",
+      "readability": "Проверено страниц: {{checked}}/{{total}}",
+      "readabilityNeedsReview": "Требуют проверки: {{count}}"
     },
     "tools": {
       "inspect_chapters": "Чтение глав",
@@ -139,7 +141,10 @@
       "set_visibility": "Обновление видимости",
       "delete_elements": "Удаление слоёв",
       "reorder_element": "Изменение порядка слоёв",
-      "run_pipeline": "Запуск обработки"
+      "run_pipeline": "Запуск обработки",
+      "audit_readability": "Измерение читаемости",
+      "repair_text": "Подбор размера текста",
+      "verify_readability": "Проверка читаемости страницы"
     }
   },
   "canvas": {

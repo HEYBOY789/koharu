@@ -118,7 +118,9 @@
       "toolRejected": "도구 호출이 거부되었습니다. 에이전트는 계속 실행 중이며 다시 시도할 수 있습니다.",
       "changes": "완료한 수정: {{count}}",
       "background": "에이전트가 “{{name}}”에서 작업 중입니다.",
-      "newConversation": "새 대화"
+      "newConversation": "새 대화",
+      "readability": "확인한 페이지: {{checked}}/{{total}}",
+      "readabilityNeedsReview": "검토가 필요한 항목: {{count}}"
     },
     "tools": {
       "inspect_chapters": "챕터 읽는 중",
@@ -139,7 +141,10 @@
       "set_visibility": "표시 설정 변경 중",
       "delete_elements": "레이어 삭제 중",
       "reorder_element": "레이어 순서 변경 중",
-      "run_pipeline": "파이프라인 실행 중"
+      "run_pipeline": "파이프라인 실행 중",
+      "audit_readability": "가독성 측정 중",
+      "repair_text": "텍스트 크기 조정 중",
+      "verify_readability": "페이지 가독성 확인 중"
     }
   },
   "canvas": {

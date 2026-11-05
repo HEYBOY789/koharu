@@ -236,6 +236,7 @@ impl Target {
                 | "inspect_chapters"
                 | "inspect_chapter"
                 | "inspect_page"
+                | "audit_readability"
                 | "list_fonts"
         ) {
             if args.get("offset").is_none() {

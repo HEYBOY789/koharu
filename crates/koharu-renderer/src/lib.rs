@@ -7,6 +7,7 @@ mod fonts;
 mod frame;
 mod images;
 mod layout;
+mod readability;
 mod renderer;
 mod script;
 mod segment;
@@ -21,6 +22,10 @@ pub use frame::{
     RenderDependency, RenderDiagnostic, RetentionStats, TextMetadata,
 };
 pub use layout::WritingMode;
+pub use readability::{
+    Background, MINIMUM_READER_FONT, READER_WIDTHS, ReadabilityIssue, ReadabilityKind,
+    ReadabilityReport, ReadableText,
+};
 pub use renderer::Renderer;
 pub use types::{FontFace, FontFamily, FontMetadata, FontRange, FontSource, FontStyle, TextAlign};
 

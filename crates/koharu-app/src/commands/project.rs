@@ -906,7 +906,15 @@ impl Project {
         layer: EntityId,
         text: Option<String>,
     ) -> Result<Commit> {
-        let snapshot = self.snapshot();
+        let patch = Self::translation_patch(&self.snapshot(), layer, text)?;
+        self.commit(patch).await
+    }
+
+    pub(crate) fn translation_patch(
+        snapshot: &Snapshot,
+        layer: EntityId,
+        text: Option<String>,
+    ) -> Result<koharu_scene::Patch> {
         let content = Self::text_content(&snapshot, layer)?;
         let language = snapshot
             .component::<SceneTranslation>(content)?
@@ -925,14 +933,21 @@ impl Project {
                 None => edit.remove::<SceneTranslation>(content),
             }
         })?;
-        self.commit(patch).await
+        Ok(patch)
     }
 
     pub(crate) async fn set_typography(
         &mut self,
         updates: Vec<TypographyUpdate>,
     ) -> Result<Commit> {
-        let snapshot = self.snapshot();
+        let patch = Self::typography_patch(&self.snapshot(), updates)?;
+        self.commit(patch).await
+    }
+
+    pub(crate) fn typography_patch(
+        snapshot: &Snapshot,
+        updates: Vec<TypographyUpdate>,
+    ) -> Result<koharu_scene::Patch> {
         let updates = updates
             .into_iter()
             .map(|update| {
@@ -964,11 +979,18 @@ impl Project {
             }
             Ok(())
         })?;
-        self.commit(patch).await
+        Ok(patch)
     }
 
     pub(crate) async fn set_geometry(&mut self, updates: Vec<GeometryUpdate>) -> Result<Commit> {
-        let snapshot = self.snapshot();
+        let patch = Self::geometry_patch(&self.snapshot(), updates)?;
+        self.commit(patch).await
+    }
+
+    pub(crate) fn geometry_patch(
+        snapshot: &Snapshot,
+        updates: Vec<GeometryUpdate>,
+    ) -> Result<koharu_scene::Patch> {
         let updates = updates
             .into_iter()
             .map(|update| {
@@ -1013,7 +1035,7 @@ impl Project {
             }
             Ok(())
         })?;
-        self.commit(patch).await
+        Ok(patch)
     }
 
     pub(crate) async fn set_visibility(
@@ -1327,7 +1349,7 @@ impl Project {
         Ok(Some(self.commit(patch).await?))
     }
 
-    async fn commit(&mut self, patch: koharu_scene::Patch) -> Result<Commit> {
+    pub(crate) async fn commit(&mut self, patch: koharu_scene::Patch) -> Result<Commit> {
         Ok(self.session.commit(patch).await?)
     }
 

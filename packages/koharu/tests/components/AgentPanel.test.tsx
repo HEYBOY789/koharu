@@ -57,6 +57,7 @@ const run: AgentRun = {
   changes: 0,
   error: null,
   failures: [],
+  readability: null,
 }
 
 it('keeps failed page details visible while another page succeeds, then removes only resolved entries', () => {

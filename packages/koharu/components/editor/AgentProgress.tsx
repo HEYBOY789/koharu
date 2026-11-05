@@ -14,6 +14,7 @@ export function agentProgressLabel(t: TFunction, run: AgentRun, includePage = tr
         run.failures.length
           ? t('agent.progress.pendingFailures', { count: run.failures.length })
           : null,
+        run.readability ? t('agent.progress.readability', run.readability) : null,
       ]
         .filter(Boolean)
         .join(' · ')
@@ -49,6 +50,16 @@ export function AgentProgress({ run }: { run: AgentRun }) {
       <span className='break-words'>{agentProgressLabel(t, run, false)}</span>
       {agentPageLabel(t, run) && (
         <span className='font-medium break-words text-foreground'>{agentPageLabel(t, run)}</span>
+      )}
+      {run.readability && (
+        <div className='grid min-w-0 gap-0.5 break-words'>
+          <span>{t('agent.progress.readability', run.readability)}</span>
+          {run.readability.needs_review > 0 && (
+            <span className='text-amber-700 dark:text-amber-400'>
+              {t('agent.progress.readabilityNeedsReview', { count: run.readability.needs_review })}
+            </span>
+          )}
+        </div>
       )}
       {run.failures.length > 0 && (
         <details

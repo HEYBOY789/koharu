@@ -49,6 +49,7 @@ fn resolve(configured: Option<&str>, names: &[&str]) -> Result<PathBuf> {
         directories.push(home.join(".local/bin"));
         #[cfg(windows)]
         directories.extend([
+            home.join(".pi/agent/bin"),
             home.join("AppData/Local/agy/bin"),
             home.join("AppData/Roaming/npm"),
         ]);
@@ -91,13 +92,17 @@ fn command(backend: Backend, config: &CliConfig) -> Result<Command> {
         command.arg(path);
         command
     } else if cfg!(windows) && ["cmd", "bat"].contains(&extension) {
-        // npm shims point at a JS entry. Resolve that entry instead of quoting a shell command.
+        // Both the managed Pi installer and npm provide shell shims. Launch
+        // their owned JavaScript entry with Node, preserving argument boundaries.
         let directory = path.parent().context("CLI has no parent directory")?;
-        let entry = ["@earendil-works", "@mariozechner"]
-            .into_iter()
-            .map(|scope| {
-                directory.join(format!("node_modules/{scope}/pi-coding-agent/dist/cli.js"))
-            })
+        let entry = std::iter::once(directory.join("pi-launcher.js"))
+            .chain(
+                ["@earendil-works", "@mariozechner"]
+                    .into_iter()
+                    .map(|scope| {
+                        directory.join(format!("node_modules/{scope}/pi-coding-agent/dist/cli.js"))
+                    }),
+            )
             .find(|path| path.is_file())
             .context(
                 "Select Pi's dist/cli.js or executable instead of an unsupported shell shim",
@@ -400,6 +405,9 @@ async fn start_child(
                 .args([
                     "--mode",
                     "rpc",
+                    // Only Koharu's explicit extension is loaded. Project trust
+                    // lookup can otherwise write a lock into the user's Pi profile.
+                    "--no-approve",
                     "--no-builtin-tools",
                     "--no-extensions",
                     "--no-skills",

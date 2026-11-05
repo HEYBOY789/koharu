@@ -6,7 +6,9 @@ use image::{
 use koharu_pipeline::StopToken;
 use koharu_psd::{PsdExportOptions, export_page};
 use koharu_rasterizer::{Raster, RasterOptions, Rasterizer};
-use koharu_renderer::{Frame, Renderer};
+use koharu_renderer::Frame;
+#[cfg(test)]
+use koharu_renderer::Renderer;
 use koharu_scene::{AssetRole, Chapters, EntityId, Snapshot};
 use serde::Deserialize;
 use specta::Type;
@@ -313,6 +315,7 @@ pub(crate) async fn get_thumbnail(
     Ok(ImageBytes(bytes))
 }
 
+#[cfg(test)]
 pub(crate) async fn rendered_preview(
     renderer: &Renderer,
     rasterizer: Arc<Rasterizer>,
@@ -321,13 +324,58 @@ pub(crate) async fn rendered_preview(
 ) -> Result<Vec<u8>> {
     snapshot.page(page)?;
     let frame = renderer.render(snapshot, page).await?;
-    let image = rasterize(rasterizer, &frame, RasterOptions::default())
+    frame_preview(rasterizer, &frame, None, None).await
+}
+
+pub(crate) async fn frame_image(
+    rasterizer: Arc<Rasterizer>,
+    frame: &Frame,
+) -> Result<image::RgbaImage> {
+    Ok(rasterize(rasterizer, frame, RasterOptions::default())
+        .await?
+        .image)
+}
+
+pub(crate) async fn frame_preview(
+    rasterizer: Arc<Rasterizer>,
+    frame: &Frame,
+    crop: Option<[f32; 4]>,
+    display_width: Option<u32>,
+) -> Result<Vec<u8>> {
+    let image = rasterize(rasterizer, frame, RasterOptions::default())
         .await?
         .image;
     tokio_rayon::spawn(move || {
-        let image = image::DynamicImage::ImageRgba8(image)
-            .resize(1024, 1024, image::imageops::FilterType::Lanczos3)
-            .to_rgba8();
+        let mut image = image::DynamicImage::ImageRgba8(image);
+        if let Some([x, y, w, h]) = crop {
+            anyhow::ensure!(
+                [x, y, w, h].into_iter().all(f32::is_finite) && w > 0.0 && h > 0.0,
+                "invalid preview crop"
+            );
+            let left = x.floor().max(0.0).min(image.width() as f32) as u32;
+            let top = y.floor().max(0.0).min(image.height() as f32) as u32;
+            let right = (x + w).ceil().max(0.0).min(image.width() as f32) as u32;
+            let bottom = (y + h).ceil().max(0.0).min(image.height() as f32) as u32;
+            anyhow::ensure!(
+                right > left && bottom > top,
+                "preview crop is outside the page"
+            );
+            image = image.crop_imm(left, top, right - left, bottom - top);
+        }
+        let image = if let Some(width) = display_width {
+            anyhow::ensure!(
+                (240..=1600).contains(&width),
+                "display_width must be between 240 and 1600 pixels"
+            );
+            let width = width.min(image.width());
+            let height = ((image.height() as f64 * width as f64 / image.width().max(1) as f64)
+                .round() as u32)
+                .max(1);
+            image.resize_exact(width, height, image::imageops::FilterType::Lanczos3)
+        } else {
+            image.resize(1600, 1600, image::imageops::FilterType::Lanczos3)
+        }
+        .to_rgba8();
         let encoder = webp::Encoder::from_rgba(image.as_raw(), image.width(), image.height());
         Ok::<_, anyhow::Error>(encoder.encode(85.0).to_vec())
     })

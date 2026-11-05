@@ -243,14 +243,14 @@ pub(super) fn fonts(fonts: Vec<koharu_renderer::FontFamily>, query: &Window) -> 
     window(json!({}), "fonts", entries, total, query.offset)
 }
 
-fn validate(limit: usize) -> Result<()> {
+pub(super) fn validate(limit: usize) -> Result<()> {
     if !(1..=MAX_ITEMS).contains(&limit) {
         bail!("Inspection limit must be from 1 to {MAX_ITEMS}");
     }
     Ok(())
 }
 
-fn window(
+pub(super) fn window(
     mut response: Value,
     field: &str,
     mut entries: Vec<Value>,

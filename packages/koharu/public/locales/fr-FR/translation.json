@@ -118,7 +118,9 @@
       "toolRejected": "Un appel d’outil a été refusé. L’agent fonctionne toujours et peut réessayer.",
       "changes": "Modifications terminées : {{count}}",
       "background": "L’agent travaille sur « {{name}} ».",
-      "newConversation": "Nouvelle conversation"
+      "newConversation": "Nouvelle conversation",
+      "readability": "Pages vérifiées : {{checked}}/{{total}}",
+      "readabilityNeedsReview": "Points à examiner : {{count}}"
     },
     "tools": {
       "inspect_chapters": "Lecture des chapitres",
@@ -139,7 +141,10 @@
       "set_visibility": "Mise à jour de la visibilité",
       "delete_elements": "Suppression de calques",
       "reorder_element": "Réorganisation des calques",
-      "run_pipeline": "Exécution du traitement"
+      "run_pipeline": "Exécution du traitement",
+      "audit_readability": "Mesure de la lisibilité",
+      "repair_text": "Ajustement du texte",
+      "verify_readability": "Vérification de la lisibilité"
     }
   },
   "canvas": {

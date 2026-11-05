@@ -118,7 +118,9 @@
       "toolRejected": "Uma chamada de ferramenta foi rejeitada. O agente continua em execução e pode tentar novamente.",
       "changes": "Edições concluídas: {{count}}",
       "background": "O agente está trabalhando em “{{name}}”.",
-      "newConversation": "Nova conversa"
+      "newConversation": "Nova conversa",
+      "readability": "Páginas verificadas: {{checked}}/{{total}}",
+      "readabilityNeedsReview": "Problemas que precisam de revisão: {{count}}"
     },
     "tools": {
       "inspect_chapters": "Lendo capítulos",
@@ -139,7 +141,10 @@
       "set_visibility": "Atualizando visibilidade",
       "delete_elements": "Removendo camadas",
       "reorder_element": "Reordenando camadas",
-      "run_pipeline": "Executando processamento"
+      "run_pipeline": "Executando processamento",
+      "audit_readability": "Medindo a legibilidade",
+      "repair_text": "Ajustando o texto",
+      "verify_readability": "Verificando a legibilidade"
     }
   },
   "canvas": {

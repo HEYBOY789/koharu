@@ -118,7 +118,9 @@
       "toolRejected": "ツールの呼び出しが拒否されました。エージェントは実行中で、再試行できます。",
       "changes": "完了した編集: {{count}}",
       "background": "エージェントは「{{name}}」で作業中です。",
-      "newConversation": "新しい会話"
+      "newConversation": "新しい会話",
+      "readability": "確認済みページ：{{checked}}/{{total}}",
+      "readabilityNeedsReview": "要確認の問題：{{count}}"
     },
     "tools": {
       "inspect_chapters": "チャプターを読み取り中",
@@ -139,7 +141,10 @@
       "set_visibility": "表示設定を更新中",
       "delete_elements": "レイヤーを削除中",
       "reorder_element": "レイヤー順序を変更中",
-      "run_pipeline": "パイプラインを実行中"
+      "run_pipeline": "パイプラインを実行中",
+      "audit_readability": "読みやすさを測定中",
+      "repair_text": "文字を調整中",
+      "verify_readability": "ページの読みやすさを確認中"
     }
   },
   "canvas": {
