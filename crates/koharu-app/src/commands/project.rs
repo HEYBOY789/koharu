@@ -160,7 +160,7 @@ pub struct Translation {
     pub language: Option<String>,
 }
 
-#[derive(Clone, Debug, serde::Deserialize, Serialize, Type)]
+#[derive(Clone, Debug, PartialEq, serde::Deserialize, Serialize, Type)]
 pub struct Typography {
     pub preferred_font: Option<String>,
     pub font_weight: Option<u16>,

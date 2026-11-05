@@ -1010,6 +1010,7 @@ impl<'a> TextLayout<'a> {
                 line_ink,
                 (balloon_air_x, balloon_air_y),
                 self.hyphenation_policy,
+                self.font_size.is_some(),
             )
         } else if max_extent.is_finite() && max_extent > 0.0 {
             line_breaks_with_policy(&measures, max_extent, self.hyphenation_policy)
@@ -1546,6 +1547,7 @@ fn optimal_uniform_line_breaks(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn comic_line_breaks(
     segments: &[LineBreakMeasure],
     balloon: &ComicBalloon,
@@ -1554,6 +1556,7 @@ fn comic_line_breaks(
     line_ink: InkBand,
     air: (f32, f32),
     policy: HyphenationPolicy,
+    fixed_size: bool,
 ) -> LineBreakResult {
     let (air_x, air_y) = air;
     let block_extent = if writing_mode.is_vertical() {
@@ -1567,34 +1570,25 @@ fn comic_line_breaks(
         air_y
     };
     let available_block_extent = (block_extent - block_air * 2.0).max(0.0);
-    let maximum_lines = if line_ink.thickness() <= available_block_extent {
-        1 + ((available_block_extent - line_ink.thickness()) / line_height).floor() as usize
-    } else {
-        0
-    }
-    .min(COMIC_MAX_LINES)
-    .min(segments.len());
-    if maximum_lines == 0 {
-        let mut fallback = line_breaks_with_policy(
-            segments,
-            balloon.inline_extent(writing_mode, air_x, air_y),
-            policy,
-        );
-        fallback.overflowed = true;
-        return fallback;
-    }
-
-    let select = |allow_hyphenation: bool| {
+    let select = |allow_hyphenation: bool, leading: f32, shift_block: bool| {
+        let maximum_lines = if line_ink.thickness() <= available_block_extent {
+            1 + ((available_block_extent - line_ink.thickness()) / leading).floor() as usize
+        } else {
+            0
+        }
+        .min(COMIC_MAX_LINES)
+        .min(segments.len());
         (1..=maximum_lines)
             .flat_map(|line_count| {
                 balloon
                     .line_profile_candidates(
                         writing_mode,
                         line_count,
-                        line_height,
+                        leading,
                         line_ink,
                         air_x,
                         air_y,
+                        shift_block,
                     )
                     .into_iter()
                     .filter_map(move |profiles| {
@@ -1611,14 +1605,44 @@ fn comic_line_breaks(
             })
     };
 
-    if policy == HyphenationPolicy::LastResort
-        && let Some(without_hyphens) = select(false)
-        && !without_hyphens.overflowed
-    {
-        return without_hyphens;
-    }
+    let place = |allow_hyphens| {
+        let centered = select(allow_hyphens, line_height, false);
+        if !fixed_size || centered.as_ref().is_some_and(|result| !result.overflowed) {
+            return centered;
+        }
+        // The ink band includes accents and descenders across the whole text.
+        // Retain air between those bands even when tighter leading is needed.
+        let compact = (line_height * 0.9).max(line_ink.thickness() + line_height * 0.1);
+        if compact < line_height
+            && let Some(result) = select(allow_hyphens, compact, false).filter(|r| !r.overflowed)
+        {
+            return Some(result);
+        }
+        if balloon.contour.len() >= 3 {
+            for leading in [line_height, compact.min(line_height)] {
+                if let Some(result) = select(allow_hyphens, leading, true).filter(|r| !r.overflowed)
+                {
+                    return Some(result);
+                }
+                if compact >= line_height {
+                    break;
+                }
+            }
+        }
+        centered
+    };
 
-    select(policy != HyphenationPolicy::Disabled).unwrap_or_else(|| {
+    let allow_hyphens = policy != HyphenationPolicy::Disabled
+        && segments
+            .iter()
+            .any(|segment| segment.break_suffix_advance > 0.0);
+    if allow_hyphens
+        && policy == HyphenationPolicy::LastResort
+        && let Some(clean) = place(false).filter(|result| !result.overflowed)
+    {
+        return clean;
+    }
+    place(allow_hyphens).unwrap_or_else(|| {
         let mut fallback = line_breaks_with_policy(
             segments,
             balloon.inline_extent(writing_mode, air_x, air_y),
@@ -1770,11 +1794,13 @@ impl ComicBalloon {
             line_ink,
             air_x,
             air_y,
+            false,
         )
         .into_iter()
         .next()
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn line_profile_candidates(
         &self,
         writing_mode: WritingMode,
@@ -1783,6 +1809,7 @@ impl ComicBalloon {
         line_ink: InkBand,
         air_x: f32,
         air_y: f32,
+        shift_block: bool,
     ) -> Vec<Vec<LineProfile>> {
         let vertical = writing_mode.is_vertical();
         let (block_extent, inline_extent, block_air, inline_air) = if vertical {
@@ -1795,24 +1822,39 @@ impl ComicBalloon {
         if inline_radius <= 0.0 {
             return Vec::new();
         }
-        let Some(block_origin) =
-            self.centered_block_origin(writing_mode, block_extent, block_air, block_size)
+        let Some((first, last)) =
+            self.block_origin_range(writing_mode, block_extent, block_air, block_size)
         else {
             return Vec::new();
         };
-        self.line_profiles_at_origin(
-            writing_mode,
-            line_count,
-            line_height,
-            line_ink,
-            block_extent,
-            inline_extent,
-            block_air,
-            inline_air,
-            block_origin,
-        )
-        .into_iter()
-        .collect()
+        let center = (first + last) * 0.5;
+        let shift_room = ((last - first) * 0.5)
+            .min(block_extent * 0.2)
+            .min(line_height);
+        let offsets: &[f32] = if shift_block {
+            if shift_room < 1.0 {
+                return Vec::new();
+            }
+            &[-0.25, 0.25, -0.5, 0.5, -0.75, 0.75, -1.0, 1.0]
+        } else {
+            &[0.0]
+        };
+        offsets
+            .iter()
+            .filter_map(|offset| {
+                self.line_profiles_at_origin(
+                    writing_mode,
+                    line_count,
+                    line_height,
+                    line_ink,
+                    block_extent,
+                    inline_extent,
+                    block_air,
+                    inline_air,
+                    center + offset * shift_room,
+                )
+            })
+            .collect()
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1894,13 +1936,13 @@ impl ComicBalloon {
             .collect()
     }
 
-    fn centered_block_origin(
+    fn block_origin_range(
         &self,
         writing_mode: WritingMode,
         block_extent: f32,
         block_air: f32,
         block_size: f32,
-    ) -> Option<f32> {
+    ) -> Option<(f32, f32)> {
         let mut first = block_air;
         let mut last = block_extent - block_air;
         if self.contour.len() >= 3 {
@@ -1915,7 +1957,7 @@ impl ComicBalloon {
             last = last.min(maximum - block_air);
         }
         ((last - first) + f32::EPSILON >= block_size)
-            .then_some(first + (last - first - block_size) * 0.5)
+            .then_some((first, (last - block_size).max(first)))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -2586,11 +2628,51 @@ mod tests {
             before: 5.0,
             after: 5.0,
         };
-        let candidates =
-            balloon.line_profile_candidates(WritingMode::Horizontal, 5, 20.0, line_ink, 0.0, 0.0);
+        let candidates = balloon.line_profile_candidates(
+            WritingMode::Horizontal,
+            5,
+            20.0,
+            line_ink,
+            0.0,
+            0.0,
+            false,
+        );
 
         assert_eq!(candidates.len(), 1);
         assert!((candidates[0][0].block_baseline - 40.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn fixed_comic_size_uses_room_in_the_wide_part_of_an_irregular_balloon() -> anyhow::Result<()> {
+        let font = any_system_font();
+        let layout = TextLayout::new(&font)
+            .with_font_size(28.0)
+            .with_line_height(1.2)
+            .with_max_width(200.0)
+            .with_max_height(180.0)
+            .with_comic_balloon(
+                200.0,
+                180.0,
+                vec![
+                    (0.0, 0.0),
+                    (200.0, 0.0),
+                    (200.0, 180.0),
+                    (164.0, 180.0),
+                    (164.0, 90.0),
+                    (0.0, 90.0),
+                ],
+                4.0,
+            )
+            .run("WIDE LETTERING")?;
+
+        assert_eq!(layout.font_size, 28.0);
+        assert!(
+            !layout.overflowed(),
+            "the wide lobe has space for this size without crossing the contour"
+        );
+        let top = (180.0 - layout.height) * 0.5 + layout.placement_offset_y();
+        assert!(top >= 0.0 && top + layout.height <= 90.0);
+        Ok(())
     }
 
     #[test]
@@ -2784,6 +2866,7 @@ mod tests {
             },
             (0.0, 0.0),
             HyphenationPolicy::Disabled,
+            false,
         );
         let vertical_balloon = comic_balloon(
             200.0,
@@ -2802,6 +2885,7 @@ mod tests {
             },
             (0.0, 0.0),
             HyphenationPolicy::Disabled,
+            false,
         );
 
         assert_eq!(horizontal.breaks, [2, 4]);

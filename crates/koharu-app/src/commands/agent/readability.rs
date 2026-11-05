@@ -2,7 +2,7 @@
 use std::collections::HashMap;
 
 use anyhow::{Context as _, Result, ensure};
-use koharu_renderer::{ReadabilityKind, ReadabilityReport};
+use koharu_renderer::{Frame, LayerKind, ReadabilityKind, ReadabilityReport};
 use koharu_scene::{BlobId, EntityId, RegionSpec as _, Snapshot};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -145,31 +145,45 @@ impl DeclinedEdit {
 pub(super) struct RepairBatch {
     pub patch: koharu_scene::Patch,
     pub report: ReadabilityReport,
+    pub elements: Vec<EntityId>,
     pub declined: Vec<String>,
 }
 
-/// Search the existing layout, not arbitrary rectangles across the artwork.
-/// The final patch uses the same scene builders as Properties and is still
-/// checked before it can cross the native commit seam.
-pub(super) async fn repair(
+/// Try larger settings in the existing layout. Fixed-size rendering can
+/// reflow in a wider part of the balloon while keeping its original contour.
+/// The final patch uses the same scene builder as Properties.
+async fn repair(
     renderer: &koharu_renderer::Renderer,
     rasterizer: std::sync::Arc<koharu_rasterizer::Rasterizer>,
     snapshot: &Snapshot,
+    frame: &Frame,
     element: EntityId,
     before: &ReadabilityReport,
-) -> Result<(koharu_scene::Patch, ReadabilityReport)> {
+) -> Result<koharu_scene::Patch> {
     use crate::commands::{editing::TypographyUpdate, project::Typography};
     let layer = before
         .layers
         .iter()
         .find(|l| l.element == element)
         .context("target must be visible translated text")?;
+    let LayerKind::Text(rendered) = frame.layer(element).context("rendered text layer")?.kind()
+    else {
+        anyhow::bail!("repair target is not rendered text");
+    };
     let mut typography: Typography =
         if let Some(value) = snapshot.text_layer(element)?.typography()? {
             serde_json::from_value(serde_json::to_value(value)?)?
         } else {
             serde_json::from_value(serde_json::json!({"auto_fit":true}))?
         };
+    // Detection can infer vertical source lettering that the renderer ignores
+    // for a Latin translation. Promoting the style must not activate it.
+    if typography.writing_mode.is_some_and(|mode| {
+        (mode == koharu_scene::WritingMode::Vertical) != rendered.writing_mode.is_vertical()
+    }) {
+        typography.writing_mode = None;
+    }
+    let original = typography.clone();
     if let Some(bg) = &layer.background {
         let thick = layer.stroke_width / layer.source_font_px.max(1.0) > 0.08;
         if bg.light_fraction > 0.95 || bg.dark_fraction > 0.95 {
@@ -217,10 +231,11 @@ pub(super) async fn repair(
             }],
         )?;
         let candidate = snapshot.preview([&patch])?;
-        let report = renderer
-            .render(&candidate, before.page)
-            .await?
-            .readability();
+        let candidate_frame = renderer.render(&candidate, before.page).await?;
+        let direction_preserved = candidate_frame.layer(element).is_some_and(|layer| {
+            matches!(layer.kind(), LayerKind::Text(text) if text.writing_mode == rendered.writing_mode)
+        });
+        let report = candidate_frame.readability();
         let new_overlap = report.issues.iter().any(|i| {
             matches!(
                 i.kind,
@@ -232,7 +247,8 @@ pub(super) async fn repair(
                     .find(|old| old.id == i.id)
                     .is_none_or(|old| i.value > old.value + 0.01)
         });
-        if before.regressions(&report).is_empty()
+        if direction_preserved
+            && before.regressions(&report).is_empty()
             && !new_overlap
             && !report
                 .issues
@@ -248,6 +264,9 @@ pub(super) async fn repair(
             high = size;
         }
     }
+    if best == original {
+        return Ok(snapshot.patch(|_| Ok(()))?);
+    }
     let patch = Project::typography_patch(
         snapshot,
         vec![TypographyUpdate {
@@ -255,9 +274,8 @@ pub(super) async fn repair(
             typography: best,
         }],
     )?;
-    let report =
-        checked_candidate(renderer, rasterizer, snapshot, &patch, before.page, before).await?;
-    Ok((patch, report))
+    checked_candidate(renderer, rasterizer, snapshot, &patch, before.page, before).await?;
+    Ok(patch)
 }
 
 pub(super) async fn repair_batch(
@@ -267,10 +285,38 @@ pub(super) async fn repair_batch(
     elements: &[EntityId],
     before: &ReadabilityReport,
 ) -> Result<RepairBatch> {
+    let elements = if elements.is_empty() {
+        before
+            .layers
+            .iter()
+            .filter(|layer| {
+                before.issues.iter().any(|issue| {
+                    issue.element == layer.element
+                        && matches!(
+                            issue.kind,
+                            ReadabilityKind::SmallText
+                                | ReadabilityKind::ThickOutline
+                                | ReadabilityKind::LowContrast
+                        )
+                })
+            })
+            .map(|layer| layer.element)
+            .collect()
+    } else {
+        elements.to_vec()
+    };
     ensure!(
-        (1..=50).contains(&elements.len()),
-        "Choose 1–50 audited text layers on one page"
+        elements.len() <= 50,
+        "Choose up to 50 audited text layers on one page"
     );
+    if elements.is_empty() {
+        return Ok(RepairBatch {
+            patch: snapshot.patch(|_| Ok(()))?,
+            report: before.clone(),
+            elements,
+            declined: vec![],
+        });
+    }
     let mut preview = snapshot.clone();
     let background = crate::commands::output::frame_image(
         rasterizer.clone(),
@@ -283,23 +329,35 @@ pub(super) async fn repair_batch(
     let mut updates = vec![];
     let mut seen = std::collections::HashSet::new();
     let mut declined = vec![];
-    for element in elements {
+    for element in &elements {
         ensure!(seen.insert(*element), "Duplicate element ID");
         ensure!(
             super::scope::page_for(snapshot, *element)? == before.page,
             "Batch layers must belong to the requested page"
         );
-        let mut current = renderer.render(&preview, before.page).await?.readability();
+        let frame = renderer.render(&preview, before.page).await?;
+        let mut current = frame.readability();
         current.sample_background(&background);
-        let (patch, _) =
-            match repair(renderer, rasterizer.clone(), &preview, *element, &current).await {
-                Ok(result) => result,
-                Err(error) if error.is::<CandidateRegression>() => {
-                    declined.push(format!("{element}: {error}"));
-                    continue;
-                }
-                Err(error) => return Err(error),
-            };
+        let patch = match repair(
+            renderer,
+            rasterizer.clone(),
+            &preview,
+            &frame,
+            *element,
+            &current,
+        )
+        .await
+        {
+            Ok(result) => result,
+            Err(error) if error.is::<CandidateRegression>() => {
+                declined.push(format!("{element}: {error}"));
+                continue;
+            }
+            Err(error) => return Err(error),
+        };
+        if patch.is_empty() {
+            continue;
+        }
         preview = preview.preview([&patch])?;
         let typography = preview
             .text_layer(*element)?
@@ -316,6 +374,7 @@ pub(super) async fn repair_batch(
     Ok(RepairBatch {
         patch,
         report,
+        elements,
         declined,
     })
 }
@@ -745,17 +804,21 @@ mod tests {
         )?))?;
         let mut project = Project::open("detached readability validation".into(), source).await?;
         let chapters = project.snapshot().chapters()?;
-        let requested = [(0, 0), (0, 15), (1, 1), (1, 3), (2, 0)];
+        let requested: Vec<[usize; 2]> = match std::env::var("KOHARU_READABILITY_POSITIONS") {
+            Ok(value) => serde_json::from_str(&value)?,
+            Err(std::env::VarError::NotPresent) => vec![[1, 1], [1, 16], [2, 2], [2, 4], [3, 1]],
+            Err(error) => return Err(error.into()),
+        };
         let renderer = koharu_renderer::Renderer::new()?;
         let rasterizer = Arc::new(koharu_rasterizer::Rasterizer::new()?);
         let mut evidence = vec![];
-        for (sample, (chapter, index)) in requested.into_iter().enumerate() {
+        for (sample, [chapter, index]) in requested.into_iter().enumerate() {
             let page = *chapters
                 .entries
-                .get(chapter)
+                .get(chapter.checked_sub(1).context("chapter must be 1-based")?)
                 .context("chapter")?
                 .pages
-                .get(index)
+                .get(index.checked_sub(1).context("page must be 1-based")?)
                 .context("page")?;
             let initial = project.snapshot();
             let before_frame = renderer.render(&initial, page).await?;
@@ -766,24 +829,6 @@ mod tests {
             .await?;
             let mut before = before_frame.readability();
             before.sample_background(&background);
-            let mut failures = vec![];
-            let mut changes = 0;
-            let targets = before
-                .layers
-                .iter()
-                .filter(|l| {
-                    before.issues.iter().any(|i| {
-                        i.element == l.element
-                            && matches!(
-                                i.kind,
-                                ReadabilityKind::SmallText
-                                    | ReadabilityKind::ThickOutline
-                                    | ReadabilityKind::LowContrast
-                            )
-                    })
-                })
-                .map(|l| l.element)
-                .collect::<Vec<_>>();
             // The guard is deliberately exercised with an actual destructive candidate.
             if let Some(layer) = before.layers.first() {
                 let mut style: crate::commands::project::Typography =
@@ -819,22 +864,10 @@ mod tests {
                 );
                 ensure!(project.revision() == revision, "rejected preview was saved");
             }
-            if !targets.is_empty() {
-                let batch = repair_batch(
-                    &renderer,
-                    rasterizer.clone(),
-                    &project.snapshot(),
-                    &targets,
-                    &before,
-                )
-                .await?;
-                failures = batch.declined;
-                let commit = project.commit(batch.patch).await?;
-                if commit.changes.from != commit.changes.to {
-                    changes += 1;
-                    project.record_commit(&commit);
-                }
-            }
+            let batch = repair_batch(&renderer, rasterizer.clone(), &initial, &[], &before).await?;
+            let commit = project.commit(batch.patch).await?;
+            let changes = u32::from(commit.changes.from != commit.changes.to);
+            project.record_commit(&commit);
             let final_snapshot = project.snapshot();
             let after_frame = renderer.render(&final_snapshot, page).await?;
             let mut after = after_frame.readability();
@@ -851,13 +884,23 @@ mod tests {
                     "wording changed"
                 );
                 ensure!(old.frame()? == new.frame()?, "bubble geometry changed");
+                let mode = |frame: &Frame| match frame.layer(layer.element).map(|l| l.kind()) {
+                    Some(LayerKind::Text(text)) => Some(text.writing_mode),
+                    _ => None,
+                };
+                ensure!(
+                    mode(&before_frame) == mode(&after_frame),
+                    "the rendered writing direction changed for {}",
+                    layer.element
+                );
                 if let (Some(a), Some(b)) = (old.typography()?, new.typography()?) {
                     ensure!(
                         a.preferred_font == b.preferred_font
                             && a.font_weight == b.font_weight
                             && a.font_style == b.font_style
                             && a.alignment == b.alignment
-                            && a.writing_mode == b.writing_mode,
+                            && (!matches!(a.origin, koharu_scene::Origin::User)
+                                || a.writing_mode == b.writing_mode),
                         "unrequested formatting changed"
                     );
                 }
@@ -886,14 +929,15 @@ mod tests {
                     )?;
                 }
             }
-            evidence.push(serde_json::json!({"location":super::super::context::location(&final_snapshot,page)?,"changes":changes,"rejected_candidates":failures,"before":before,"after":after}));
+            evidence.push(serde_json::json!({"location":super::super::context::location(&final_snapshot,page)?,"changes":changes,"attempted_layers":batch.elements,"rejected_candidates":batch.declined,"before":before,"after":after}));
         }
         std::fs::write(
             output.join("native-readability.json"),
             serde_json::to_vec_pretty(&evidence)?,
         )?;
         println!(
-            "Five detached manga pages validated; no words, bubble geometry, font faces or artwork changed. Remaining findings are recorded for review."
+            "{} detached manga pages validated; no words, bubble geometry, font faces or artwork changed. Remaining findings are recorded for review.",
+            evidence.len()
         );
         Ok(())
     }

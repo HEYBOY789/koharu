@@ -505,12 +505,15 @@ impl KoharuHost {
     async fn repair_text(&self, query: RepairText) -> Result<Invocation> {
         let page = entity(&query.page)?;
         let elements = entities(&query.elements)?;
+        let targets = std::iter::once(page)
+            .chain(elements.iter().copied())
+            .collect();
         let desktop = self.handle.state::<Desktop>();
         let renderer = desktop.renderer();
         let rasterizer = desktop.rasterizer().await?;
         let review = self.binding.as_ref().unwrap().review.clone();
         let control = self.binding.as_ref().unwrap().control.clone();
-        self.mutate(elements.clone(), move |project| {
+        self.mutate(targets, move |project| {
             Box::pin(async move {
                 let snapshot = project.snapshot();
                 let before = review
@@ -526,7 +529,7 @@ impl KoharuHost {
                 let commit = project.commit(batch.patch).await?;
                 Ok((
                     commit,
-                    json!({"page":page,"elements":elements,"remaining_issues":batch.report.issues,"declined":batch.declined,"verification_required":true}),
+                    json!({"page":page,"elements":batch.elements,"remaining_issues":batch.report.issues,"declined":batch.declined,"verification_required":true}),
                 ))
             })
         })
@@ -1099,7 +1102,7 @@ fn editor_tools() -> Vec<Tool> {
                         "Render the actual page. Optional element crops around a rendered text layer at useful resolution, preserving nearby artwork. Omit element for the whole page; display_width=390 simulates phone width, 960 desktop. Always view the full page after edits before verify_readability, and inspect crops for border/overlap fixes.",
                     ),
                     definition::<InspectPage>("audit_readability", "Measure actual rendered text at phone (390px) and desktop (960px) widths, not stored Auto overrides. Requires a chosen edit scope. Activates native review for the ENTIRE scope. Returns actual font sizes, overflow, overlap/duplicate candidates, outline ratios and background/contrast sampled with translated text hidden. Follow pagination.next_offset for all layers. Call before edits and again after every edit. Rectangular overlap is a candidate, not proof; inspect view_page crops."),
-                    definition::<RepairText>("repair_text", "Conservatively improve a batch of 1–50 audited, visually inspected translated layers on ONE page. Supply page and elements (layer IDs from audit). Native searches larger fonts inside existing layouts, reduces excessive outlines proportionally and fixes contrast on near-uniform backgrounds. Preserves words, font faces, alignment, artwork and bubble geometry. Mixed backgrounds need visual judgement. Previews every candidate and rejects measurable regressions before saving one reversible page edit. Remaining small text is NOT fixed; enlarge only legitimate balloon space with set_geometry or report needs_review. Re-audit/view after the saved change."),
+                    definition::<RepairText>("repair_text", "Improve audited, visually inspected translated text on ONE page. Supply page alone to repair all layers flagged for small text, thick outlines or low contrast. Optional elements limits the repair to specific layer IDs. At most 50 layers per call. Native tries larger text and reflows it inside the existing balloon, reduces excessive outlines and fixes contrast on uniform backgrounds. Previews candidates and rejects regressions before saving one reversible page edit. Preserve words, font faces, alignment, artwork and balloon geometry. Re-audit/view and report remaining issues as needs_review."),
                     definition::<VerifyReadability>("verify_readability", "Finish one page only after a fresh audit and a full view_page of the current result. Supply one issue decision for every remaining issue ID. keep is ONLY for visual collision/duplicate false positives; measured small text/overflow/contrast/thick outline must be fixed or marked needs_review with a concrete reason. Native completion requires every scoped page verified; do not claim needs_review pages repaired."),
                     definition::<RenamePage>("rename_page", "Rename a project page."),
                     definition::<MovePage>("move_page", "Move a page to a zero-based GLOBAL project index. This can change its chapter membership. Inspect the returned page position after moving. Both source and destination pages must be in the edit scope."),
@@ -1553,6 +1556,8 @@ struct ViewPage {
 #[serde(deny_unknown_fields)]
 struct RepairText {
     page: String,
+    /// Omit to repair the eligible flagged layers on the page.
+    #[serde(default)]
     elements: Vec<String>,
 }
 

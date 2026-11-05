@@ -847,7 +847,7 @@ impl NativeHost {
                     scope::check(
                         &project.snapshot(),
                         binding.pages.lock().as_deref(),
-                        &elements,
+                        &[page],
                     )?;
                     binding.check_revision(&project)?;
                     let snapshot = project.snapshot();
@@ -872,7 +872,7 @@ impl NativeHost {
                     mutation_result(
                         &project,
                         &commit,
-                        json!({"page":page,"remaining_issues":batch.report.issues,"declined":batch.declined}),
+                        json!({"page":page,"elements":batch.elements,"remaining_issues":batch.report.issues,"declined":batch.declined}),
                     )?
                 }
                 "verify_readability" => {
