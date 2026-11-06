@@ -488,7 +488,10 @@ async fn original_ocr_duplicates_survive_translation_and_layout_differences_but_
             .collect(),
         issues: vec![],
     };
-    readability::source_duplicates(&snapshot, &mut report)?;
+    assert!(
+        readability::source_duplicates(&snapshot, &mut report)?.is_empty(),
+        "different translations of one OCR line require visual review"
+    );
     assert_eq!(
         report.issues.len(),
         1,
@@ -517,6 +520,160 @@ async fn original_ocr_duplicates_survive_translation_and_layout_differences_but_
         .await?;
     let _ = value;
     assert!(f.project.snapshot().text_layer(layers[1]).is_ok());
+    Ok(())
+}
+
+#[tokio::test]
+async fn merged_ocr_requires_visible_survivors_and_preserves_translation_order() -> Result<()> {
+    use koharu_scene::{
+        Authored, BubbleRegion, FlowsIn, Geometry, Origin, RecognizedFrom, SourceText, TextLayout,
+        TextLayoutKind, TextRegion, Translation,
+    };
+    let mut f = Fixture::new().await?;
+    let mut layers = vec![];
+    let patch = f.project.snapshot().patch(|edit| {
+        let balloon = edit.add_analysis_region::<BubbleRegion>(
+            f.page,
+            At::End,
+            &Geometry::rectangle(0.0, 0.0, 600.0, 400.0),
+            None,
+        )?;
+        for (source, translated, x, width) in [
+            (
+                "Please call me tomorrow. Thank you for your help.",
+                "Hãy gọi tôi ngày mai. Cảm ơn bạn đã giúp.",
+                0.0,
+                500.0,
+            ),
+            (
+                "Please call me tomorrow.",
+                "Hãy gọi tôi ngày mai.",
+                10.0,
+                200.0,
+            ),
+            (
+                "Thank you for your help.",
+                "Cảm ơn bạn đã giúp.",
+                260.0,
+                200.0,
+            ),
+            (
+                "Please call me tomorrow. Thank you for your help. Bring medicine.",
+                "Hãy gọi tôi ngày mai. Cảm ơn bạn đã giúp. Mang thuốc.",
+                0.0,
+                500.0,
+            ),
+            (
+                "Please call me tomorrow. Please call me tomorrow. Thank you for your help.",
+                "Hãy gọi tôi ngày mai. Hãy gọi tôi ngày mai. Cảm ơn bạn đã giúp.",
+                0.0,
+                500.0,
+            ),
+            (
+                "Please call me tomorrow. Thank you for your help.",
+                "Cảm ơn bạn đã giúp. Hãy gọi tôi ngày mai.",
+                0.0,
+                500.0,
+            ),
+        ] {
+            let region = edit.add_analysis_region::<TextRegion>(
+                f.page,
+                At::End,
+                &Geometry::rectangle(x, 20.0, width, 100.0),
+                None,
+            )?;
+            let content = edit.add_text_content(f.page, At::End)?;
+            edit.set(
+                content,
+                &SourceText {
+                    text: Authored::user(source.into()),
+                    language: None,
+                },
+            )?;
+            edit.set(
+                content,
+                &Translation {
+                    text: Authored::user(translated.into()),
+                    language: None,
+                },
+            )?;
+            edit.relate::<RecognizedFrom>(content, region)?;
+            let layer = edit.add_text_layer(
+                f.page,
+                At::End,
+                content,
+                &TextLayout {
+                    origin: Origin::User,
+                    kind: TextLayoutKind::Paragraph,
+                    angle_degrees: None,
+                },
+            )?;
+            edit.relate::<FlowsIn>(layer, balloon)?;
+            layers.push(layer);
+        }
+        Ok(())
+    })?;
+    let snapshot = f.project.session.commit(patch).await?.snapshot;
+    let renderer = koharu_renderer::Renderer::new()?;
+    let mut report = renderer.render(&snapshot, f.page).await?.readability();
+    let groups = readability::source_duplicates(&snapshot, &mut report)?;
+    assert_eq!(groups.len(), 2);
+    let matched = groups
+        .iter()
+        .find(|group| group.element == layers[0])
+        .context("exact ordered match")?;
+    assert!(matched.automatic);
+    assert_eq!(matched.survivors.len(), 2);
+    assert!(layers[1..3].iter().all(|id| matched.survivors.contains(id)));
+    let reordered = groups
+        .iter()
+        .find(|group| group.element == layers[5])
+        .context("reordered candidate")?;
+    assert!(
+        !reordered.automatic,
+        "word order cannot be ignored in an automatic repair"
+    );
+    let stamp = readability::stamp(&snapshot, f.page)?;
+    let mut review = readability::Review::default();
+    review.begin(&[f.page])?;
+    review.audit(stamp, report);
+    review.viewed(f.page, stamp, None);
+    LayerEdit::Delete(vec![layers[0]]).validate_review(&snapshot, &review)?;
+    LayerEdit::Delete(vec![layers[5]]).validate_review(&snapshot, &review)?;
+    assert!(
+        LayerEdit::Delete(vec![layers[0], layers[1]])
+            .validate_review(&snapshot, &review)
+            .is_err()
+    );
+    assert!(
+        LayerEdit::Delete(vec![layers[3]])
+            .validate_review(&snapshot, &review)
+            .is_err(),
+        "unique words must survive"
+    );
+    assert!(
+        LayerEdit::Delete(vec![layers[4]])
+            .validate_review(&snapshot, &review)
+            .is_err(),
+        "one occurrence cannot cover repeated dialogue"
+    );
+    let hide = snapshot.patch(|edit| {
+        edit.set(
+            layers[2],
+            &koharu_scene::Visibility {
+                origin: Origin::User,
+                visible: false,
+                opacity: 1.0,
+            },
+        )
+    })?;
+    let hidden = snapshot.preview([&hide])?;
+    let mut report = renderer.render(&hidden, f.page).await?.readability();
+    assert!(
+        readability::source_duplicates(&hidden, &mut report)?
+            .iter()
+            .all(|group| group.element != layers[0] && group.element != layers[5])
+    );
     Ok(())
 }
 
@@ -819,14 +976,15 @@ impl NativeHost {
                     binding.review.lock().begin(&scope)?;
                     let frame = self.renderer.render(&project.snapshot(), page).await?;
                     let mut report = frame.readability();
-                    readability::source_duplicates(&project.snapshot(), &mut report)?;
+                    let duplicates =
+                        readability::source_duplicates(&project.snapshot(), &mut report)?;
                     let background = output::frame_image(
                         Arc::new(koharu_rasterizer::Rasterizer::new()?),
                         &frame.without_text()?,
                     )
                     .await?;
                     report.sample_background(&background);
-                    let entries=report.layers.iter().skip(a.offset).take(a.limit).map(|l|json!({"layer":l,"issues":report.issues.iter().filter(|i|i.element==l.element).collect::<Vec<_>>()})).collect();
+                    let entries=report.layers.iter().skip(a.offset).take(a.limit).map(|l|json!({"layer":l,"issues":report.issues.iter().filter(|i|i.element==l.element).collect::<Vec<_>>(),"ocr_duplicate":duplicates.iter().find(|duplicate| duplicate.element==l.element)})).collect();
                     let response = context::window(
                         json!({"page":context::location(&project.snapshot(),page)?,"reader_widths":report.reader_widths,"minimum_font_px":report.minimum_font_px,"issue_count":report.issues.len()}),
                         "entries",
@@ -872,7 +1030,7 @@ impl NativeHost {
                     mutation_result(
                         &project,
                         &commit,
-                        json!({"page":page,"elements":batch.elements,"remaining_issues":batch.report.issues,"declined":batch.declined}),
+                        json!({"page":page,"elements":batch.elements,"removed_duplicates":batch.removed_duplicates,"remaining_issues":batch.report.issues,"declined":batch.declined}),
                     )?
                 }
                 "verify_readability" => {
@@ -1048,12 +1206,17 @@ async fn installed_agent_reviews_readability_with_native_measurements_and_verifi
     let after = project.lock().await.snapshot();
     for page in &pages {
         let mut report = renderer.render(&before, *page).await?.readability();
-        readability::source_duplicates(&before, &mut report)?;
+        let duplicates = readability::source_duplicates(&before, &mut report)?;
+        let surviving = renderer.render(&after, *page).await?.readability();
+        let visible = |id| surviving.layers.iter().any(|layer| layer.element == id);
         for entity in before.descendants(*page)? {
             if let Ok(layer) = before.text_layer(entity.id()) {
                 let Ok(new) = after.text_layer(entity.id()) else {
                     anyhow::ensure!(
-                        report.issues.iter().any(|issue| {
+                        duplicates.iter().any(|duplicate| {
+                            duplicate.element == entity.id()
+                                && duplicate.survivors.iter().copied().all(visible)
+                        }) || report.issues.iter().any(|issue| {
                             if issue.kind != koharu_renderer::ReadabilityKind::DuplicateCandidate {
                                 return false;
                             }
@@ -1064,7 +1227,7 @@ async fn installed_agent_reviews_readability_with_native_measurements_and_verifi
                             } else {
                                 None
                             };
-                            survivor.is_some_and(|id| after.text_layer(id).is_ok())
+                            survivor.is_some_and(visible)
                         }),
                         "agent deleted dialogue without a surviving audited copy"
                     );

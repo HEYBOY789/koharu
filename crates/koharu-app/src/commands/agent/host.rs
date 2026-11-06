@@ -385,15 +385,18 @@ impl KoharuHost {
         &self,
         snapshot: &Snapshot,
         page: EntityId,
-    ) -> Result<koharu_renderer::ReadabilityReport> {
+    ) -> Result<(
+        koharu_renderer::ReadabilityReport,
+        Vec<super::redundancy::RedundantText>,
+    )> {
         let desktop = self.handle.state::<Desktop>();
         let frame = desktop.renderer().render(snapshot, page).await?;
         let background =
             output::frame_image(desktop.rasterizer().await?, &frame.without_text()?).await?;
         let mut report = frame.readability();
-        readability::source_duplicates(snapshot, &mut report)?;
+        let duplicates = readability::source_duplicates(snapshot, &mut report)?;
         report.sample_background(&background);
-        Ok(report)
+        Ok((report, duplicates))
     }
 
     async fn audit_readability(&self, query: InspectPage) -> Result<Invocation> {
@@ -410,9 +413,10 @@ impl KoharuHost {
             .context("Choose set_edit_scope before reviewing")?;
         scope::check(&project.snapshot(), Some(&pages), &[page])?;
         binding.review.lock().begin(&pages)?;
-        let report = self.measured(&project.snapshot(), page).await?;
+        let (report, duplicates) = self.measured(&project.snapshot(), page).await?;
         let entries = report.layers.iter().skip(query.offset).take(query.limit).map(|layer| json!({
-            "layer":layer,"issues":report.issues.iter().filter(|i| i.element==layer.element).collect::<Vec<_>>()
+            "layer":layer,"issues":report.issues.iter().filter(|i| i.element==layer.element).collect::<Vec<_>>(),
+            "ocr_duplicate":duplicates.iter().find(|duplicate| duplicate.element==layer.element)
         })).collect();
         let result = context::window(
             json!({"page":context::location(&project.snapshot(),page)?, "revision":project.revision(), "reader_widths":report.reader_widths, "minimum_font_px":report.minimum_font_px,"issue_count":report.issues.len(), "note":"Measurements are triage. Inspect crops; a dense balloon that cannot fit readable text needs review, not silent shrinking."}),
@@ -529,7 +533,7 @@ impl KoharuHost {
                 let commit = project.commit(batch.patch).await?;
                 Ok((
                     commit,
-                    json!({"page":page,"elements":batch.elements,"remaining_issues":batch.report.issues,"declined":batch.declined,"verification_required":true}),
+                    json!({"page":page,"elements":batch.elements,"removed_duplicates":batch.removed_duplicates,"remaining_issues":batch.report.issues,"declined":batch.declined,"verification_required":true}),
                 ))
             })
         })
@@ -874,26 +878,35 @@ impl LayerEdit {
                         .before_edit(page, readability::stamp(&snapshot, page)?)?
                         .context("Audit before removing duplicates")?;
                     let targets = self.targets();
-                    let survivor = report
-                        .issues
-                        .iter()
-                        .filter(|issue| {
-                            issue.kind == koharu_renderer::ReadabilityKind::DuplicateCandidate
-                        })
-                        .find_map(|issue| {
-                            let other = if issue.element == target {
-                                issue.related
-                            } else if issue.related == Some(target) {
-                                Some(issue.element)
-                            } else {
-                                None
-                            }?;
-                            (!targets.contains(&other)
-                                && report.layers.iter().any(|layer| layer.element == other))
-                            .then_some(other)
-                        });
-                    if survivor.is_none() {
-                        return Err(readability::DeclinedEdit("Only an audited duplicate can be removed, keeping another visible copy. Never remove ordinary dialogue or every duplicate copy.".into()).into());
+                    let groups = super::redundancy::OriginalText::read(snapshot, &report)?.groups();
+                    let covered = if let Some(group) =
+                        groups.iter().find(|group| group.element == target)
+                    {
+                        group.survivors.iter().all(|id| !targets.contains(id))
+                    } else {
+                        report
+                            .issues
+                            .iter()
+                            .filter(|issue| {
+                                issue.kind == koharu_renderer::ReadabilityKind::DuplicateCandidate
+                                    && !issue.id.starts_with("source_coverage:")
+                            })
+                            .any(|issue| {
+                                let other = if issue.element == target {
+                                    issue.related
+                                } else if issue.related == Some(target) {
+                                    Some(issue.element)
+                                } else {
+                                    None
+                                };
+                                other.is_some_and(|other| {
+                                    !targets.contains(&other)
+                                        && report.layers.iter().any(|layer| layer.element == other)
+                                })
+                            })
+                    };
+                    if !covered {
+                        return Err(readability::DeclinedEdit("Only an audited duplicate can be removed. Keep all listed survivors visible and preserve any distinct dialogue.".into()).into());
                     }
                 }
                 if let LayerEdit::Visibility(_, _, Some(opacity)) = &self {
@@ -1101,8 +1114,8 @@ fn editor_tools() -> Vec<Tool> {
                         "view_page",
                         "Render the actual page. Optional element crops around a rendered text layer at useful resolution, preserving nearby artwork. Omit element for the whole page; display_width=390 simulates phone width, 960 desktop. Always view the full page after edits before verify_readability, and inspect crops for border/overlap fixes.",
                     ),
-                    definition::<InspectPage>("audit_readability", "Measure actual rendered text at phone (390px) and desktop (960px) widths, not stored Auto overrides. Requires a chosen edit scope. Activates native review for the ENTIRE scope. Returns actual font sizes, overflow, overlap/duplicate candidates, outline ratios and background/contrast sampled with translated text hidden. Follow pagination.next_offset for all layers. Call before edits and again after every edit. Rectangular overlap is a candidate, not proof; inspect view_page crops."),
-                    definition::<RepairText>("repair_text", "Improve audited, visually inspected translated text on ONE page. Supply page alone to repair all layers flagged for small text, thick outlines or low contrast. Optional elements limits the repair to specific layer IDs. At most 50 layers per call. Native tries larger text and reflows it inside the existing balloon, reduces excessive outlines and fixes contrast on uniform backgrounds. Previews candidates and rejects regressions before saving one reversible page edit. Preserve words, font faces, alignment, artwork and balloon geometry. Re-audit/view and report remaining issues as needs_review."),
+                    definition::<InspectPage>("audit_readability", "Measure actual rendered text at phone (390px) and desktop (960px) widths. Requires a chosen edit scope and activates review for the entire scope. Returns fitted font sizes, overflow, overlap candidates, outline ratios and background contrast. An ocr_duplicate entry lists the layers that must remain visible. If automatic is false, inspect the rendered candidate and all survivors before deciding whether they carry the same dialogue. Follow pagination.next_offset and inspect view_page crops."),
+                    definition::<RepairText>("repair_text", "Repair audited, visually inspected translated text on one page. Supply page alone, or limit the repair to up to 50 visible layer IDs in elements. Native removes OCR duplicates only when their translation is preserved by the visible survivors. It also tries larger text and reflow within the existing balloon, reduces excessive outlines and fixes contrast on uniform backgrounds. Returns removed_duplicates and remaining findings. Re-audit and view the result. Use geometry/typography for distinct overlapping text and mark unresolved issues needs_review."),
                     definition::<VerifyReadability>("verify_readability", "Finish one page only after a fresh audit and a full view_page of the current result. Supply one issue decision for every remaining issue ID. keep is ONLY for visual collision/duplicate false positives; measured small text/overflow/contrast/thick outline must be fixed or marked needs_review with a concrete reason. Native completion requires every scoped page verified; do not claim needs_review pages repaired."),
                     definition::<RenamePage>("rename_page", "Rename a project page."),
                     definition::<MovePage>("move_page", "Move a page to a zero-based GLOBAL project index. This can change its chapter membership. Inspect the returned page position after moving. Both source and destination pages must be in the edit scope."),
@@ -1125,7 +1138,7 @@ fn editor_tools() -> Vec<Tool> {
                         "set_visibility",
                         "Change visibility (boolean) and/or opacity (number from 0 to 1, not 0 to 100). Omitted properties are preserved. Target inspected layer IDs.",
                     ),
-                    definition::<DeleteElements>("delete_elements", "Delete elements and descendants. During a readability review only an audited duplicate with another visible surviving copy can be removed. Similar wording or a shared balloon is not sufficient proof. A candidate_rejected reply is non-mutating feedback: preserve the text and fix its typography/layout, or verify remaining issues as needs_review. Never hide it instead or move/rewrite it to manufacture duplicate evidence."),
+                    definition::<DeleteElements>("delete_elements", "Delete elements and descendants. During readability review, only remove an audited duplicate after checking the rendered text. Keep every listed survivor visible and preserve all distinct dialogue. On candidate_rejected, keep the text and fix its layout or mark the issue needs_review."),
                     definition::<ReorderElement>(
                         "reorder_element",
                         "Reorder the LAYER TREE only. Requires element (ID from inspect_page), parent (page/group ID), index (zero-based). This does not move text on the image: use set_geometry for that.",

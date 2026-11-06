@@ -1457,7 +1457,9 @@ fn optimal_uniform_line_breaks(
 
     let mut dp = vec![f32::INFINITY; len + 1];
     let mut prev = vec![None; len + 1];
+    let mut overflows = vec![true; len + 1];
     dp[0] = 0.0;
+    overflows[0] = false;
 
     for start in 0..len {
         if !dp[start].is_finite() {
@@ -1484,8 +1486,10 @@ fn optimal_uniform_line_breaks(
                 cost += segments[end - 1].break_penalty;
             }
 
-            if cost < dp[end] {
+            let overflow = overflows[start] || line_advance > max_extent + f32::EPSILON;
+            if (overflow, cost) < (overflows[end], dp[end]) {
                 dp[end] = cost;
+                overflows[end] = overflow;
                 prev[end] = Some(start);
             }
             if segments[end - 1].is_mandatory || advance > max_extent {
@@ -3042,6 +3046,20 @@ mod tests {
                 .any(|line| (tower + 1..tower + "tower".len()).contains(&line.range.end))
         );
         Ok(())
+    }
+
+    #[test]
+    fn uniform_line_breaks_prefer_a_fit_to_a_slightly_overfull_line() {
+        let segment = |advance| LineBreakMeasure {
+            advance,
+            trailing_advance: 0.0,
+            break_suffix_advance: 0.0,
+            break_penalty: 0.0,
+            is_mandatory: false,
+        };
+        let result = optimal_uniform_line_breaks(&[segment(51.0), segment(50.0)], 100.0, false);
+        assert!(!result.overflowed);
+        assert_eq!(result.breaks, [1, 2]);
     }
 
     #[test]

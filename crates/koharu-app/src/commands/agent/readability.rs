@@ -3,87 +3,22 @@ use std::collections::HashMap;
 
 use anyhow::{Context as _, Result, ensure};
 use koharu_renderer::{Frame, LayerKind, ReadabilityKind, ReadabilityReport};
-use koharu_scene::{BlobId, EntityId, RegionSpec as _, Snapshot};
+use koharu_scene::{BlobId, EntityId, Snapshot};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use specta::Type;
 
 use crate::commands::project::Project;
 
-/// OCR can detect the same sentence twice, then automatic placement separates
-/// the rendered copies. Compare immutable source regions, never edited frames.
-pub(super) fn source_duplicates(snapshot: &Snapshot, report: &mut ReadabilityReport) -> Result<()> {
-    let mut sources = Vec::new();
-    for layer in &report.layers {
-        let text = snapshot.text_layer(layer.element)?;
-        let content = text.content()?;
-        let Some(source) = content.source()? else {
-            continue;
-        };
-        let source = source
-            .text
-            .value
-            .split_whitespace()
-            .collect::<Vec<_>>()
-            .join(" ")
-            .to_lowercase();
-        if source.chars().filter(|c| c.is_alphanumeric()).count() < 12 {
-            continue;
-        }
-        let (Some(target), Some(region)) = (text.automatic_target()?, content.source_region()?)
-        else {
-            continue;
-        };
-        if target.region()?.kind != koharu_scene::BubbleRegion::kind() {
-            continue;
-        }
-        let geometry = region.geometry()?;
-        if geometry.points.len() < 3 {
-            continue;
-        }
-        let bounds = geometry.points.iter().fold(
-            [
-                f64::INFINITY,
-                f64::INFINITY,
-                f64::NEG_INFINITY,
-                f64::NEG_INFINITY,
-            ],
-            |b, p| [b[0].min(p.x), b[1].min(p.y), b[2].max(p.x), b[3].max(p.y)],
-        );
-        sources.push((layer.element, target.id(), source, bounds));
-    }
-    for (index, left) in sources.iter().enumerate() {
-        for right in &sources[index + 1..] {
-            if left.1 != right.1 || left.2 != right.2 {
-                continue;
-            }
-            let [lx, ly, lr, lb] = left.3;
-            let [rx, ry, rr, rb] = right.3;
-            let area = ((lr - lx) * (lb - ly)).min((rr - rx) * (rb - ry));
-            if area <= 0.0 {
-                continue;
-            }
-            let ratio =
-                ((lr.min(rr) - lx.max(rx)).max(0.0) * (lb.min(rb) - ly.max(ry)).max(0.0)) / area;
-            if ratio < 0.8
-                || report.issues.iter().any(|issue| {
-                    issue.kind == ReadabilityKind::DuplicateCandidate
-                        && ((issue.element == left.0 && issue.related == Some(right.0))
-                            || (issue.element == right.0 && issue.related == Some(left.0)))
-                })
-            {
-                continue;
-            }
-            report.issues.push(koharu_renderer::ReadabilityIssue {
-                id: format!("source_duplicate:{}:{}", left.0, right.0),
-                element: left.0,
-                related: Some(right.0),
-                kind: ReadabilityKind::DuplicateCandidate,
-                value: ratio as f32,
-            });
-        }
-    }
-    Ok(())
+/// Compare original OCR regions even if automatic layout separated the rendered text.
+pub(super) fn source_duplicates(
+    snapshot: &Snapshot,
+    report: &mut ReadabilityReport,
+) -> Result<Vec<super::redundancy::RedundantText>> {
+    let original = super::redundancy::OriginalText::read(snapshot, report)?;
+    let groups = original.groups();
+    original.audit(report, &groups);
+    Ok(groups)
 }
 
 pub(super) async fn checked_candidate(
@@ -146,6 +81,7 @@ pub(super) struct RepairBatch {
     pub patch: koharu_scene::Patch,
     pub report: ReadabilityReport,
     pub elements: Vec<EntityId>,
+    pub removed_duplicates: Vec<EntityId>,
     pub declined: Vec<String>,
 }
 
@@ -291,13 +227,9 @@ pub(super) async fn repair_batch(
             .iter()
             .filter(|layer| {
                 before.issues.iter().any(|issue| {
-                    issue.element == layer.element
-                        && matches!(
-                            issue.kind,
-                            ReadabilityKind::SmallText
-                                | ReadabilityKind::ThickOutline
-                                | ReadabilityKind::LowContrast
-                        )
+                    (issue.element == layer.element && issue.kind != ReadabilityKind::OutsidePage)
+                        || (issue.kind == ReadabilityKind::DuplicateCandidate
+                            && issue.related == Some(layer.element))
                 })
             })
             .map(|layer| layer.element)
@@ -314,10 +246,31 @@ pub(super) async fn repair_batch(
             patch: snapshot.patch(|_| Ok(()))?,
             report: before.clone(),
             elements,
+            removed_duplicates: vec![],
             declined: vec![],
         });
     }
-    let mut preview = snapshot.clone();
+    let mut seen = std::collections::HashSet::new();
+    for element in &elements {
+        ensure!(seen.insert(*element), "Duplicate element ID");
+        ensure!(
+            before.layers.iter().any(|layer| layer.element == *element),
+            "Batch layers must be audited, visible translated text on the requested page"
+        );
+    }
+    let removed_duplicates = super::redundancy::OriginalText::read(snapshot, before)?
+        .groups()
+        .into_iter()
+        .filter(|group| group.automatic && seen.contains(&group.element))
+        .map(|group| group.element)
+        .collect::<Vec<_>>();
+    let removal = snapshot.patch(|edit| {
+        for id in &removed_duplicates {
+            edit.remove_entity(*id, koharu_scene::RemovePolicy::Cascade)?;
+        }
+        Ok(())
+    })?;
+    let mut preview = snapshot.preview([&removal])?;
     let background = crate::commands::output::frame_image(
         rasterizer.clone(),
         &renderer
@@ -327,14 +280,11 @@ pub(super) async fn repair_batch(
     )
     .await?;
     let mut updates = vec![];
-    let mut seen = std::collections::HashSet::new();
     let mut declined = vec![];
     for element in &elements {
-        ensure!(seen.insert(*element), "Duplicate element ID");
-        ensure!(
-            super::scope::page_for(snapshot, *element)? == before.page,
-            "Batch layers must belong to the requested page"
-        );
+        if removed_duplicates.contains(element) {
+            continue;
+        }
         let frame = renderer.render(&preview, before.page).await?;
         let mut current = frame.readability();
         current.sample_background(&background);
@@ -359,22 +309,48 @@ pub(super) async fn repair_batch(
             continue;
         }
         preview = preview.preview([&patch])?;
-        let typography = preview
-            .text_layer(*element)?
-            .typography()?
-            .context("repaired typography")?;
-        updates.push(crate::commands::editing::TypographyUpdate {
-            layer: *element,
-            typography: serde_json::from_value(serde_json::to_value(typography)?)?,
-        });
+        updates.push(*element);
     }
-    let patch = Project::typography_patch(snapshot, updates)?;
-    let report =
-        checked_candidate(renderer, rasterizer, snapshot, &patch, before.page, before).await?;
+    let patch = snapshot.patch(|edit| {
+        edit.observe_subtree(before.page)?;
+        for id in &removed_duplicates {
+            edit.remove_entity(*id, koharu_scene::RemovePolicy::Cascade)?;
+        }
+        for id in &updates {
+            let layer = preview.text_layer(*id)?;
+            edit.promote_entity_to_user(*id)?;
+            edit.promote_entity_to_user(layer.content()?.id())?;
+            let style = layer.typography()?.ok_or_else(|| {
+                koharu_scene::Error::Invalid("repaired typography is missing".into())
+            })?;
+            edit.set(*id, &style)?;
+        }
+        Ok(())
+    })?;
+    let mut protected = before.clone();
+    protected
+        .layers
+        .retain(|layer| !removed_duplicates.contains(&layer.element));
+    protected.issues.retain(|issue| {
+        !removed_duplicates.contains(&issue.element)
+            && issue
+                .related
+                .is_none_or(|id| !removed_duplicates.contains(&id))
+    });
+    let report = checked_candidate(
+        renderer,
+        rasterizer,
+        snapshot,
+        &patch,
+        before.page,
+        &protected,
+    )
+    .await?;
     Ok(RepairBatch {
         patch,
         report,
         elements,
+        removed_duplicates,
         declined,
     })
 }
@@ -828,6 +804,7 @@ mod tests {
             )
             .await?;
             let mut before = before_frame.readability();
+            let duplicates = source_duplicates(&initial, &mut before)?;
             before.sample_background(&background);
             // The guard is deliberately exercised with an actual destructive candidate.
             if let Some(layer) = before.layers.first() {
@@ -871,13 +848,34 @@ mod tests {
             let final_snapshot = project.snapshot();
             let after_frame = renderer.render(&final_snapshot, page).await?;
             let mut after = after_frame.readability();
+            source_duplicates(&final_snapshot, &mut after)?;
             after.sample_background(&background);
+            let mut protected = before.clone();
+            protected
+                .layers
+                .retain(|layer| !batch.removed_duplicates.contains(&layer.element));
             ensure!(
-                before.regressions(&after).is_empty(),
+                protected.regressions(&after).is_empty(),
                 "sample {sample} regressed"
             );
             for layer in &before.layers {
                 let old = initial.text_layer(layer.element)?;
+                if batch.removed_duplicates.contains(&layer.element) {
+                    ensure!(
+                        duplicates.iter().any(|group| group.element == layer.element
+                            && group.automatic
+                            && group
+                                .survivors
+                                .iter()
+                                .all(|id| after.layers.iter().any(|layer| layer.element == *id))),
+                        "removed OCR needs visible source-backed survivors"
+                    );
+                    ensure!(
+                        final_snapshot.text_content(old.content()?.id()).is_ok(),
+                        "removing a rendered duplicate must retain its OCR provenance"
+                    );
+                    continue;
+                }
                 let new = final_snapshot.text_layer(layer.element)?;
                 ensure!(
                     old.content()?.translation()? == new.content()?.translation()?,
@@ -929,7 +927,7 @@ mod tests {
                     )?;
                 }
             }
-            evidence.push(serde_json::json!({"location":super::super::context::location(&final_snapshot,page)?,"changes":changes,"attempted_layers":batch.elements,"rejected_candidates":batch.declined,"before":before,"after":after}));
+            evidence.push(serde_json::json!({"location":super::super::context::location(&final_snapshot,page)?,"changes":changes,"attempted_layers":batch.elements,"ocr_duplicates":duplicates,"removed_duplicates":batch.removed_duplicates,"rejected_candidates":batch.declined,"before":before,"after":after}));
         }
         std::fs::write(
             output.join("native-readability.json"),

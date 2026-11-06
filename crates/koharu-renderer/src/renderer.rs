@@ -778,8 +778,16 @@ impl Traversal<'_> {
             } else {
                 None
             };
-        let writing_mode =
-            resolve_writing_mode(&text, frame.bounds, typography.as_ref(), analysis.as_ref());
+        let writing_mode = resolve_writing_mode(
+            &text,
+            frame.bounds,
+            typography.as_ref(),
+            analysis.as_ref(),
+            translation
+                .language
+                .as_ref()
+                .map(koharu_scene::LanguageTag::as_str),
+        );
         let (direction, _) = shaping_direction_for_text(&text, writing_mode);
         let alignment = resolve_alignment(
             typography.as_ref().and_then(|value| value.alignment),
@@ -1405,6 +1413,7 @@ fn resolve_writing_mode(
     bounds: LayoutBox,
     typography: Option<&Typography>,
     analysis: Option<&OcrAnalysis>,
+    language: Option<&str>,
 ) -> WritingMode {
     let typography_mode = typography
         .and_then(|value| value.writing_mode)
@@ -1417,7 +1426,17 @@ fn resolve_writing_mode(
     {
         return mode;
     }
-    if !is_chinese_or_japanese_text(text) {
+    let horizontal_language = language.is_some_and(|tag| {
+        !matches!(
+            tag.split(['-', '_'])
+                .next()
+                .unwrap_or_default()
+                .to_ascii_lowercase()
+                .as_str(),
+            "ja" | "zh" | "yue" | "und"
+        )
+    });
+    if horizontal_language || !is_chinese_or_japanese_text(text) {
         return WritingMode::Horizontal;
     }
     if let Some(mode) = typography_mode {
@@ -1731,12 +1750,12 @@ mod tests {
         };
 
         assert_eq!(
-            resolve_writing_mode("rokuna", bounds, Some(&typography), None),
+            resolve_writing_mode("rokuna", bounds, Some(&typography), None, Some("vi-VN")),
             WritingMode::VerticalRl
         );
         typography.writing_mode = Some(koharu_scene::WritingMode::Horizontal);
         assert_eq!(
-            resolve_writing_mode("日本語", bounds, Some(&typography), None),
+            resolve_writing_mode("日本語", bounds, Some(&typography), None, Some("ja-JP")),
             WritingMode::Horizontal
         );
     }
@@ -1767,11 +1786,22 @@ mod tests {
         };
 
         assert_eq!(
-            resolve_writing_mode("rokuna", bounds, Some(&typography), None),
+            resolve_writing_mode("rokuna", bounds, Some(&typography), None, None),
             WritingMode::Horizontal
         );
         assert_eq!(
-            resolve_writing_mode("繁體中文", bounds, Some(&typography), None),
+            resolve_writing_mode(
+                "Giấy Tatoukami (たとう紙) dùng để gói kimono.",
+                bounds,
+                Some(&typography),
+                None,
+                Some("vi-VN"),
+            ),
+            WritingMode::Horizontal,
+            "quoted Japanese characters must not turn a Vietnamese paragraph vertical",
+        );
+        assert_eq!(
+            resolve_writing_mode("繁體中文", bounds, Some(&typography), None, Some("zh-Hant")),
             WritingMode::VerticalRl
         );
     }
