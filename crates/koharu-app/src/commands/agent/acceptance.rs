@@ -1030,7 +1030,7 @@ impl NativeHost {
                     mutation_result(
                         &project,
                         &commit,
-                        json!({"page":page,"elements":batch.elements,"removed_duplicates":batch.removed_duplicates,"remaining_issues":batch.report.issues,"declined":batch.declined}),
+                        json!({"page":page,"elements":batch.elements,"removed_duplicates":batch.removed_duplicates,"balanced_groups":batch.balanced_groups,"remaining_issues":batch.report.issues,"declined":batch.declined}),
                     )?
                 }
                 "verify_readability" => {
@@ -1233,8 +1233,19 @@ async fn installed_agent_reviews_readability_with_native_measurements_and_verifi
                     );
                     continue;
                 };
+                let mut expected = layer.content()?.translation()?;
+                if let Some(restore) = duplicates
+                    .iter()
+                    .filter(|group| after.text_layer(group.element).is_err())
+                    .filter_map(|group| group.restore.as_ref())
+                    .find(|restore| restore.element == entity.id())
+                    && let Some(translation) = &mut expected
+                {
+                    translation.text.value =
+                        format!("{} {}", restore.word, translation.text.value.trim_start());
+                }
                 anyhow::ensure!(
-                    layer.content()?.translation()?.map(|v| v
+                    expected.map(|v| v
                         .text
                         .value
                         .split_whitespace()

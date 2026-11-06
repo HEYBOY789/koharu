@@ -2,13 +2,18 @@
 use std::collections::HashMap;
 
 use anyhow::{Context as _, Result, ensure};
-use koharu_renderer::{Frame, LayerKind, ReadabilityKind, ReadabilityReport};
-use koharu_scene::{BlobId, EntityId, Snapshot};
+use koharu_renderer::{
+    Frame, LayerKind, ReadabilityKind, ReadabilityReport, ReadableText, TextAlign, WritingMode,
+};
+use koharu_scene::{BlobId, EntityId, Geometry, Snapshot};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use specta::Type;
 
-use crate::commands::project::Project;
+use crate::commands::{
+    editing::TypographyUpdate,
+    project::{Project, Typography},
+};
 
 /// Compare original OCR regions even if automatic layout separated the rendered text.
 pub(super) fn source_duplicates(
@@ -82,44 +87,106 @@ pub(super) struct RepairBatch {
     pub report: ReadabilityReport,
     pub elements: Vec<EntityId>,
     pub removed_duplicates: Vec<EntityId>,
+    pub balanced_groups: Vec<Vec<EntityId>>,
     pub declined: Vec<String>,
 }
 
-/// Try larger settings in the existing layout. Fixed-size rendering can
-/// reflow in a wider part of the balloon while keeping its original contour.
-/// The final patch uses the same scene builder as Properties.
-async fn repair(
-    renderer: &koharu_renderer::Renderer,
-    rasterizer: std::sync::Arc<koharu_rasterizer::Rasterizer>,
-    snapshot: &Snapshot,
-    frame: &Frame,
-    element: EntityId,
-    before: &ReadabilityReport,
-) -> Result<koharu_scene::Patch> {
-    use crate::commands::{editing::TypographyUpdate, project::Typography};
-    let layer = before
-        .layers
-        .iter()
-        .find(|l| l.element == element)
-        .context("target must be visible translated text")?;
-    let LayerKind::Text(rendered) = frame.layer(element).context("rendered text layer")?.kind()
-    else {
-        anyhow::bail!("repair target is not rendered text");
-    };
-    let mut typography: Typography =
+fn typography(snapshot: &Snapshot, element: EntityId) -> Result<Typography> {
+    Ok(
         if let Some(value) = snapshot.text_layer(element)?.typography()? {
             serde_json::from_value(serde_json::to_value(value)?)?
         } else {
             serde_json::from_value(serde_json::json!({"auto_fit":true}))?
+        },
+    )
+}
+
+#[derive(PartialEq)]
+struct DialogueStyle {
+    balloon: EntityId,
+    typography: Typography,
+    alignment: TextAlign,
+    direction: WritingMode,
+}
+
+fn lettering_groups(
+    snapshot: &Snapshot,
+    frame: &Frame,
+    report: &ReadabilityReport,
+    requested: &[EntityId],
+) -> Result<Vec<Vec<EntityId>>> {
+    let mut groups: Vec<(Option<DialogueStyle>, Vec<EntityId>)> = vec![];
+    for entry in &report.layers {
+        let id = entry.element;
+        if !requested.is_empty() && !requested.contains(&id) {
+            continue;
+        }
+        let layer = snapshot.text_layer(id)?;
+        let style = if let Some(balloon) = layer.balloon_target()?
+            && snapshot.component::<Geometry>(id)?.is_none()
+            && layer
+                .content()?
+                .role()?
+                .is_some_and(|role| role.role == "dev.koharu.text.dialogue")
+            && let Some(LayerKind::Text(rendered)) = frame.layer(id).map(|layer| layer.kind())
+        {
+            let mut typography = typography(snapshot, id)?;
+            typography.size = None;
+            typography.auto_fit = true;
+            typography.color = Some(rendered.color);
+            typography.alignment = None;
+            typography.writing_mode = None;
+            Some(DialogueStyle {
+                balloon: balloon.id(),
+                typography,
+                alignment: rendered.alignment,
+                direction: rendered.writing_mode,
+            })
+        } else {
+            None
         };
+        if style.is_some()
+            && let Some((_, elements)) = groups.iter_mut().find(|(key, _)| *key == style)
+        {
+            elements.push(id);
+        } else {
+            groups.push((style, vec![id]));
+        }
+    }
+    Ok(groups.into_iter().map(|(_, elements)| elements).collect())
+}
+
+fn balance_floor(report: &mut ReadabilityReport, group: &[EntityId]) {
+    let Some(smallest) = report
+        .layers
+        .iter()
+        .filter(|layer| group.contains(&layer.element))
+        .min_by(|left, right| left.source_font_px.total_cmp(&right.source_font_px))
+        .map(|layer| layer.display_font_px.clone())
+    else {
+        return;
+    };
+    // Equalizing the existing dialogue can reduce an outlier. The smallest
+    // size may only improve, and text meeting the reader minimum keeps it.
+    for layer in &mut report.layers {
+        if group.contains(&layer.element) && layer.display_font_px[0] < report.minimum_font_px {
+            layer.display_font_px.clone_from(&smallest);
+        }
+    }
+}
+
+fn repair_style(
+    mut typography: Typography,
+    layer: &ReadableText,
+    direction: WritingMode,
+) -> Typography {
     // Detection can infer vertical source lettering that the renderer ignores
     // for a Latin translation. Promoting the style must not activate it.
     if typography.writing_mode.is_some_and(|mode| {
-        (mode == koharu_scene::WritingMode::Vertical) != rendered.writing_mode.is_vertical()
+        (mode == koharu_scene::WritingMode::Vertical) != direction.is_vertical()
     }) {
         typography.writing_mode = None;
     }
-    let original = typography.clone();
     if let Some(bg) = &layer.background {
         let thick = layer.stroke_width / layer.source_font_px.max(1.0) > 0.08;
         if bg.light_fraction > 0.95 || bg.dark_fraction > 0.95 {
@@ -143,40 +210,95 @@ async fn repair(
             typography.stroke_width = Some(layer.source_font_px * 0.035);
         }
     }
-    let base = typography.clone();
+    typography
+}
+
+/// Find the largest common size that fits the existing cells of one balloon.
+/// A single layer uses the same search and its own existing size as the floor.
+async fn repair(
+    renderer: &koharu_renderer::Renderer,
+    rasterizer: std::sync::Arc<koharu_rasterizer::Rasterizer>,
+    snapshot: &Snapshot,
+    frame: &Frame,
+    elements: &[EntityId],
+    before: &ReadabilityReport,
+) -> Result<(koharu_scene::Patch, bool)> {
+    let shared = elements.len() > 1;
+    let mut styles = vec![];
+    let mut low = f32::INFINITY;
+    let mut largest = 0.0f32;
+    for element in elements {
+        let layer = before
+            .layers
+            .iter()
+            .find(|l| l.element == *element)
+            .context("target must be visible translated text")?;
+        let LayerKind::Text(rendered) =
+            frame.layer(*element).context("rendered text layer")?.kind()
+        else {
+            anyhow::bail!("repair target is not rendered text");
+        };
+        let original = typography(snapshot, *element)?;
+        let adjusted = repair_style(original.clone(), layer, rendered.writing_mode);
+        styles.push((*element, original, adjusted, rendered.writing_mode));
+        low = low.min(layer.source_font_px);
+        largest = largest.max(layer.source_font_px);
+    }
+    let patch_for = |size: Option<f32>| {
+        Project::typography_patch(
+            snapshot,
+            styles
+                .iter()
+                .filter_map(|(layer, original, adjusted, _)| {
+                    let mut typography = adjusted.clone();
+                    if let Some(size) = size {
+                        typography.size = Some(size);
+                        typography.auto_fit = false;
+                    }
+                    (typography != *original).then_some(TypographyUpdate {
+                        layer: *layer,
+                        typography,
+                    })
+                })
+                .collect(),
+        )
+    };
+    let mut protected = before.clone();
+    if shared {
+        balance_floor(&mut protected, elements);
+    }
     let desired = before.minimum_font_px * before.page_width as f32
         / koharu_renderer::READER_WIDTHS[0]
             .min(before.page_width)
             .max(1) as f32;
-    let mut low = layer.source_font_px;
-    let mut high = desired.max(low);
-    let mut best = typography;
-    for step in 0..7 {
-        if high - low < 0.25 {
-            break;
-        }
-        let size = if step == 0 { high } else { (low + high) * 0.5 };
-        let mut trial = base.clone();
-        trial.size = Some(size);
-        trial.auto_fit = false;
-        let patch = Project::typography_patch(
-            snapshot,
-            vec![TypographyUpdate {
-                layer: element,
-                typography: trial.clone(),
-            }],
-        )?;
+    let mut high = desired.max(largest);
+    let mut best = None;
+    for step in 0..8 {
+        let at_floor = step == 7 || high - low < 0.25;
+        let size = if at_floor {
+            if !shared || best.is_some() || largest - low < 0.25 {
+                break;
+            }
+            low
+        } else if step == 0 {
+            high
+        } else {
+            (low + high) * 0.5
+        };
+        let patch = patch_for(Some(size))?;
         let candidate = snapshot.preview([&patch])?;
         let candidate_frame = renderer.render(&candidate, before.page).await?;
-        let direction_preserved = candidate_frame.layer(element).is_some_and(|layer| {
-            matches!(layer.kind(), LayerKind::Text(text) if text.writing_mode == rendered.writing_mode)
+        let direction_preserved = styles.iter().all(|(id, _, _, direction)| {
+            matches!(candidate_frame.layer(*id).map(|layer| layer.kind()),
+                Some(LayerKind::Text(text)) if text.writing_mode == *direction)
         });
         let report = candidate_frame.readability();
         let new_overlap = report.issues.iter().any(|i| {
             matches!(
                 i.kind,
                 ReadabilityKind::OverlapCandidate | ReadabilityKind::DuplicateCandidate
-            ) && (i.element == element || i.related == Some(element))
+            ) && (elements.contains(&i.element)
+                || i.related.is_some_and(|id| elements.contains(&id)))
                 && before
                     .issues
                     .iter()
@@ -184,34 +306,43 @@ async fn repair(
                     .is_none_or(|old| i.value > old.value + 0.01)
         });
         if direction_preserved
-            && before.regressions(&report).is_empty()
+            && protected.regressions(&report).is_empty()
             && !new_overlap
             && !report
                 .issues
                 .iter()
-                .any(|i| i.element == element && i.kind == ReadabilityKind::Overflow)
+                .any(|i| elements.contains(&i.element) && i.kind == ReadabilityKind::Overflow)
         {
-            best = trial;
+            best = Some(patch);
             low = size;
-            if size >= desired {
+            if size == high {
                 break;
             }
         } else {
             high = size;
         }
+        if at_floor {
+            break;
+        }
     }
-    if best == original {
-        return Ok(snapshot.patch(|_| Ok(()))?);
+    let balanced = shared && best.is_some();
+    let patch = match best {
+        Some(patch) => patch,
+        None => patch_for(None)?,
+    };
+    if !patch.is_empty() {
+        let baseline = if balanced { &protected } else { before };
+        checked_candidate(
+            renderer,
+            rasterizer,
+            snapshot,
+            &patch,
+            before.page,
+            baseline,
+        )
+        .await?;
     }
-    let patch = Project::typography_patch(
-        snapshot,
-        vec![TypographyUpdate {
-            layer: element,
-            typography: best,
-        }],
-    )?;
-    checked_candidate(renderer, rasterizer, snapshot, &patch, before.page, before).await?;
-    Ok(patch)
+    Ok((patch, balanced))
 }
 
 pub(super) async fn repair_batch(
@@ -222,18 +353,7 @@ pub(super) async fn repair_batch(
     before: &ReadabilityReport,
 ) -> Result<RepairBatch> {
     let elements = if elements.is_empty() {
-        before
-            .layers
-            .iter()
-            .filter(|layer| {
-                before.issues.iter().any(|issue| {
-                    (issue.element == layer.element && issue.kind != ReadabilityKind::OutsidePage)
-                        || (issue.kind == ReadabilityKind::DuplicateCandidate
-                            && issue.related == Some(layer.element))
-                })
-            })
-            .map(|layer| layer.element)
-            .collect()
+        before.layers.iter().map(|layer| layer.element).collect()
     } else {
         elements.to_vec()
     };
@@ -247,6 +367,7 @@ pub(super) async fn repair_batch(
             report: before.clone(),
             elements,
             removed_duplicates: vec![],
+            balanced_groups: vec![],
             declined: vec![],
         });
     }
@@ -258,15 +379,25 @@ pub(super) async fn repair_batch(
             "Batch layers must be audited, visible translated text on the requested page"
         );
     }
-    let removed_duplicates = super::redundancy::OriginalText::read(snapshot, before)?
+    let duplicates = super::redundancy::OriginalText::read(snapshot, before)?
         .groups()
         .into_iter()
-        .filter(|group| group.automatic && seen.contains(&group.element))
+        .filter(|group| {
+            group.automatic
+                && seen.contains(&group.element)
+                && group
+                    .restore
+                    .as_ref()
+                    .is_none_or(|restore| elements.contains(&restore.element))
+        })
+        .collect::<Vec<_>>();
+    let removed_duplicates = duplicates
+        .iter()
         .map(|group| group.element)
         .collect::<Vec<_>>();
     let removal = snapshot.patch(|edit| {
-        for id in &removed_duplicates {
-            edit.remove_entity(*id, koharu_scene::RemovePolicy::Cascade)?;
+        for group in &duplicates {
+            group.apply(snapshot, edit)?;
         }
         Ok(())
     })?;
@@ -279,42 +410,46 @@ pub(super) async fn repair_batch(
             .without_text()?,
     )
     .await?;
+    let frame = renderer.render(&preview, before.page).await?;
+    let current = frame.readability();
+    let groups = lettering_groups(&preview, &frame, &current, &elements)?;
     let mut updates = vec![];
+    let mut balanced_groups = vec![];
     let mut declined = vec![];
-    for element in &elements {
-        if removed_duplicates.contains(element) {
-            continue;
-        }
+    for group in groups {
         let frame = renderer.render(&preview, before.page).await?;
         let mut current = frame.readability();
         current.sample_background(&background);
-        let patch = match repair(
+        let (patch, balanced) = match repair(
             renderer,
             rasterizer.clone(),
             &preview,
             &frame,
-            *element,
+            &group,
             &current,
         )
         .await
         {
             Ok(result) => result,
             Err(error) if error.is::<CandidateRegression>() => {
-                declined.push(format!("{element}: {error}"));
+                declined.push(format!("{group:?}: {error}"));
                 continue;
             }
             Err(error) => return Err(error),
         };
+        if balanced {
+            balanced_groups.push(group.clone());
+        }
         if patch.is_empty() {
             continue;
         }
         preview = preview.preview([&patch])?;
-        updates.push(*element);
+        updates.extend(group);
     }
     let patch = snapshot.patch(|edit| {
         edit.observe_subtree(before.page)?;
-        for id in &removed_duplicates {
-            edit.remove_entity(*id, koharu_scene::RemovePolicy::Cascade)?;
+        for group in &duplicates {
+            group.apply(snapshot, edit)?;
         }
         for id in &updates {
             let layer = preview.text_layer(*id)?;
@@ -337,6 +472,9 @@ pub(super) async fn repair_batch(
                 .related
                 .is_none_or(|id| !removed_duplicates.contains(&id))
     });
+    for group in &balanced_groups {
+        balance_floor(&mut protected, group);
+    }
     let report = checked_candidate(
         renderer,
         rasterizer,
@@ -351,6 +489,7 @@ pub(super) async fn repair_batch(
         report,
         elements,
         removed_duplicates,
+        balanced_groups,
         declined,
     })
 }
@@ -854,6 +993,20 @@ mod tests {
             protected
                 .layers
                 .retain(|layer| !batch.removed_duplicates.contains(&layer.element));
+            for group in &batch.balanced_groups {
+                balance_floor(&mut protected, group);
+                let sizes = after
+                    .layers
+                    .iter()
+                    .filter(|layer| group.contains(&layer.element))
+                    .map(|layer| layer.source_font_px)
+                    .collect::<Vec<_>>();
+                ensure!(
+                    sizes.len() == group.len()
+                        && sizes.iter().all(|size| (*size - sizes[0]).abs() < 0.25),
+                    "dialogue in a balanced balloon must use one fitted size"
+                );
+            }
             ensure!(
                 protected.regressions(&after).is_empty(),
                 "sample {sample} regressed"
@@ -877,10 +1030,21 @@ mod tests {
                     continue;
                 }
                 let new = final_snapshot.text_layer(layer.element)?;
-                ensure!(
-                    old.content()?.translation()? == new.content()?.translation()?,
-                    "wording changed"
-                );
+                let restored = duplicates
+                    .iter()
+                    .filter_map(|group| group.restore.as_ref())
+                    .find(|restore| restore.element == layer.element);
+                let mut expected = old.content()?.translation()?;
+                if let Some(restore) = restored
+                    && let Some(translation) = &mut expected
+                {
+                    translation.text = koharu_scene::Authored::user(format!(
+                        "{} {}",
+                        restore.word,
+                        translation.text.value.trim_start()
+                    ));
+                }
+                ensure!(expected == new.content()?.translation()?, "wording changed");
                 ensure!(old.frame()? == new.frame()?, "bubble geometry changed");
                 let mode = |frame: &Frame| match frame.layer(layer.element).map(|l| l.kind()) {
                     Some(LayerKind::Text(text)) => Some(text.writing_mode),
@@ -927,14 +1091,14 @@ mod tests {
                     )?;
                 }
             }
-            evidence.push(serde_json::json!({"location":super::super::context::location(&final_snapshot,page)?,"changes":changes,"attempted_layers":batch.elements,"ocr_duplicates":duplicates,"removed_duplicates":batch.removed_duplicates,"rejected_candidates":batch.declined,"before":before,"after":after}));
+            evidence.push(serde_json::json!({"location":super::super::context::location(&final_snapshot,page)?,"changes":changes,"attempted_layers":batch.elements,"ocr_duplicates":duplicates,"removed_duplicates":batch.removed_duplicates,"balanced_groups":batch.balanced_groups,"rejected_candidates":batch.declined,"before":before,"after":after}));
         }
         std::fs::write(
             output.join("native-readability.json"),
             serde_json::to_vec_pretty(&evidence)?,
         )?;
         println!(
-            "{} detached manga pages validated; no words, bubble geometry, font faces or artwork changed. Remaining findings are recorded for review.",
+            "{} detached manga pages validated with OCR reconciliation and balanced lettering. Surviving dialogue and unchanged artwork are checked. Remaining findings are recorded for review.",
             evidence.len()
         );
         Ok(())

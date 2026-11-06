@@ -3,7 +3,10 @@ use std::collections::{HashMap, HashSet};
 
 use anyhow::Result;
 use koharu_renderer::{ReadabilityIssue, ReadabilityKind, ReadabilityReport};
-use koharu_scene::{BubbleRegion, EntityId, RegionSpec as _, Snapshot};
+use koharu_scene::{
+    Authored, BubbleRegion, Edit, EntityId, LanguageTag, Origin, RegionSpec as _, RemovePolicy,
+    Snapshot,
+};
 use serde::Serialize;
 
 #[derive(Serialize)]
@@ -11,6 +14,35 @@ pub(super) struct RedundantText {
     pub element: EntityId,
     pub survivors: Vec<EntityId>,
     pub automatic: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub restore: Option<LeadingWord>,
+}
+
+#[derive(Serialize)]
+pub(super) struct LeadingWord {
+    pub element: EntityId,
+    pub word: String,
+}
+
+impl RedundantText {
+    pub(super) fn apply(&self, snapshot: &Snapshot, edit: &mut Edit) -> koharu_scene::Result<()> {
+        if let Some(restore) = &self.restore {
+            let layer = snapshot.text_layer(restore.element)?;
+            let content = layer.content()?;
+            let mut translation = content.translation()?.ok_or_else(|| {
+                koharu_scene::Error::Invalid("missing surviving translation".into())
+            })?;
+            translation.text = Authored::user(format!(
+                "{} {}",
+                restore.word,
+                translation.text.value.trim_start()
+            ));
+            edit.promote_entity_to_user(layer.id())?;
+            edit.promote_entity_to_user(content.id())?;
+            edit.set(content.id(), &translation)?;
+        }
+        edit.remove_entity(self.element, RemovePolicy::Cascade)
+    }
 }
 
 pub(super) struct OriginalText(Vec<Source>);
@@ -23,6 +55,8 @@ struct Source {
     words: Vec<String>,
     translation: Vec<String>,
     translated_words: Vec<String>,
+    language: Option<LanguageTag>,
+    generated_translation: bool,
 }
 
 impl Source {
@@ -82,6 +116,7 @@ impl OriginalText {
                 Some(target) if target.region()?.kind == BubbleRegion::kind() => Some(target.id()),
                 _ => None,
             };
+            let translation = content.translation()?;
             sources.push(Source {
                 element: layer.element,
                 balloon,
@@ -96,6 +131,10 @@ impl OriginalText {
                     .to_lowercase(),
                 translation: layer.text.split_whitespace().map(str::to_owned).collect(),
                 translated_words: words(&layer.text),
+                generated_translation: translation
+                    .as_ref()
+                    .is_some_and(|value| matches!(value.text.origin, Origin::Generated(_))),
+                language: translation.and_then(|value| value.language),
             });
         }
         Ok(Self(sources))
@@ -161,7 +200,7 @@ impl OriginalText {
         order.sort_by(|(a, left), (b, right)| right.area().total_cmp(&left.area()).then(b.cmp(a)));
         let mut reserved = HashSet::new();
         let mut redundant = HashSet::new();
-        let mut groups = vec![];
+        let mut groups: Vec<RedundantText> = vec![];
         for (index, source) in &order {
             if reserved.contains(&source.element) || !source.enough_source_text() {
                 continue;
@@ -177,7 +216,7 @@ impl OriginalText {
                     && source.overlap(other, 2.0) >= 0.8
                 })
                 .collect::<Vec<_>>();
-            let (survivors, automatic) = if let Some((_, other)) =
+            let (survivors, mut automatic, restore) = if let Some((_, other)) =
                 candidates.iter().rev().find(|(other_index, other)| {
                     if source.source == other.source && source.translation == other.translation {
                         (source.area(), *index) > (other.area(), *other_index)
@@ -195,23 +234,40 @@ impl OriginalText {
                             && other.translation.starts_with(&source.translation)
                     }
                 }) {
-                (vec![other.element], true)
+                (vec![other.element], true, None)
             } else {
                 let parts = merged_parts(source, &candidates);
                 if parts.is_empty() {
                     continue;
                 }
-                (
-                    parts.iter().map(|part| part.element).collect(),
-                    preserves_translation(source, parts),
-                )
+                let survivors = parts.iter().map(|part| part.element).collect();
+                if preserves_translation(source, parts.clone()) {
+                    (survivors, true, None)
+                } else {
+                    let repair = reconcile_pair(source, &parts);
+                    (survivors, repair.is_some(), repair.flatten())
+                }
             };
+            // Two overlapping merged detections can disagree on a leading
+            // word. Keep that second candidate for review rather than
+            // overwriting the first restoration in the same scene patch.
+            if let Some(restore) = &restore
+                && groups.iter().any(|group| {
+                    group.automatic
+                        && group.restore.as_ref().is_some_and(|earlier| {
+                            earlier.element == restore.element && earlier.word != restore.word
+                        })
+                })
+            {
+                automatic = false;
+            }
             redundant.insert(source.element);
             reserved.extend(survivors.iter().copied());
             groups.push(RedundantText {
                 element: source.element,
                 survivors,
                 automatic,
+                restore,
             });
         }
         groups
@@ -282,4 +338,168 @@ fn preserves_translation(source: &Source, mut parts: Vec<&Source>) -> bool {
         remaining = &remaining[part.translation.len()..];
     }
     original.is_empty() && remaining.is_empty()
+}
+
+enum Fragment<'a> {
+    Same,
+    Plural,
+    Restore(&'a str),
+}
+
+/// Reconcile one wording difference in a proven pair of OCR fragments. A
+/// unique sentence boundary prevents moving a word to the wrong speech.
+fn reconcile_pair(source: &Source, parts: &[&Source]) -> Option<Option<LeadingWord>> {
+    let &[first, second] = parts else {
+        return None;
+    };
+    let language = source.language.as_ref()?;
+    if parts
+        .iter()
+        .any(|part| part.language.as_ref() != Some(language))
+        || source.translation.len() > 256
+    {
+        return None;
+    }
+    let vietnamese = language
+        .as_str()
+        .split('-')
+        .next()
+        .is_some_and(|tag| tag.eq_ignore_ascii_case("vi"));
+    let mut repair = None;
+    for (left, right) in [(first, second), (second, first)] {
+        for split in 1..source.translation.len() {
+            let (opening, ending) = source.translation.split_at(split);
+            if !opening
+                .last()
+                .is_some_and(|word| word.ends_with(['.', '!', '?']))
+            {
+                continue;
+            }
+            let candidate = match (
+                match_fragment(opening, left, vietnamese),
+                match_fragment(ending, right, vietnamese),
+            ) {
+                (Some(Fragment::Restore(word)), Some(Fragment::Same)) => Some(LeadingWord {
+                    element: left.element,
+                    word: word.to_owned(),
+                }),
+                (Some(Fragment::Same), Some(Fragment::Restore(word))) => Some(LeadingWord {
+                    element: right.element,
+                    word: word.to_owned(),
+                }),
+                (Some(Fragment::Plural), Some(Fragment::Same))
+                | (Some(Fragment::Same), Some(Fragment::Plural)) => None,
+                _ => continue,
+            };
+            if repair.is_some() {
+                return None;
+            }
+            repair = Some(candidate);
+        }
+    }
+    repair
+}
+
+fn match_fragment<'a>(
+    fragment: &'a [String],
+    part: &Source,
+    vietnamese: bool,
+) -> Option<Fragment<'a>> {
+    let kept = part.translation.as_slice();
+    if kept.starts_with(fragment)
+        && fragment
+            .last()
+            .is_some_and(|word| word.ends_with(['.', '!', '?']))
+    {
+        return Some(Fragment::Same);
+    }
+    if part.generated_translation
+        && let Some((word, rest)) = fragment.split_first()
+        && rest == kept
+        && word.chars().all(char::is_alphabetic)
+    {
+        return Some(Fragment::Restore(word));
+    }
+    // A split Vietnamese line can already spell out a plural in the same
+    // source. Preserve that complete line and every other word as written.
+    if vietnamese && kept.len() == fragment.len() + 1 {
+        let extra = kept.iter().zip(fragment).position(|(a, b)| a != b)?;
+        if kept[extra].eq_ignore_ascii_case("các") && kept[extra + 1..] == fragment[extra..] {
+            return Some(Fragment::Plural);
+        }
+    }
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn source(text: &str, generated: bool) -> Source {
+        Source {
+            element: EntityId::new(),
+            balloon: None,
+            bounds: [0.0, 0.0, 100.0, 100.0],
+            source: "overlapping OCR verified by the calling code".into(),
+            words: vec![],
+            translation: text.split_whitespace().map(str::to_owned).collect(),
+            translated_words: words(text),
+            language: Some(LanguageTag::new("vi-VN").unwrap()),
+            generated_translation: generated,
+        }
+    }
+
+    #[test]
+    fn reconciliation_keeps_missing_words_and_declines_changed_meaning() {
+        let merged = source("Tôi đã gọi rồi... Cảm ơn bạn!", true);
+        let mut opening = source("đã gọi rồi...", true);
+        let ending = source("Cảm ơn bạn!", true);
+        let restore = reconcile_pair(&merged, &[&ending, &opening])
+            .expect("all fragments have one unambiguous matching boundary")
+            .expect("a unique leading word must move to its surviving fragment");
+        assert_eq!(restore.element, opening.element);
+        assert_eq!(restore.word, merged.translation[0]);
+        opening.generated_translation = false;
+        assert!(reconcile_pair(&merged, &[&ending, &opening]).is_none());
+
+        let merged = source("Cảm ơn bạn! Ủng hộ tác giả và nhà xuất bản.", true);
+        let explicit_plural = source("Ủng hộ tác giả và các nhà xuất bản.", true);
+        assert!(matches!(
+            reconcile_pair(&merged, &[&ending, &explicit_plural]),
+            Some(None)
+        ));
+        let negated = source("Không ủng hộ tác giả và nhà xuất bản.", true);
+        assert!(reconcile_pair(&merged, &[&ending, &negated]).is_none());
+
+        let changed = source("Tôi đã gọi rồi... Cảm ơn bạn! Mang thuốc.", true);
+        opening.generated_translation = true;
+        assert!(reconcile_pair(&changed, &[&ending, &opening]).is_none());
+    }
+
+    #[test]
+    fn conflicting_merged_detections_cannot_overwrite_a_restored_word() {
+        let make = |original: &str, translated: &str, bounds| {
+            let mut source = source(translated, true);
+            source.source = original.to_lowercase();
+            source.words = words(original);
+            source.bounds = bounds;
+            source
+        };
+        let first = make(
+            "Already called. Thank you.",
+            "Tôi đã gọi. Cảm ơn.",
+            [0.0, 0.0, 200.0, 100.0],
+        );
+        let second = make(
+            "Already called. Thank you.",
+            "Ta đã gọi. Cảm ơn.",
+            [0.0, 0.0, 200.0, 100.0],
+        );
+        let opening = make("Already called.", "đã gọi.", [0.0, 0.0, 90.0, 100.0]);
+        let ending = make("Thank you.", "Cảm ơn.", [110.0, 0.0, 200.0, 100.0]);
+        let groups = OriginalText(vec![first, second, opening, ending]).groups();
+        assert_eq!(groups.len(), 2);
+        assert_eq!(groups.iter().filter(|group| group.automatic).count(), 1);
+        assert!(groups.iter().all(|group| group.restore.is_some()));
+    }
 }

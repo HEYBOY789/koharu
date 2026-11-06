@@ -1568,13 +1568,13 @@ fn comic_line_breaks(
     } else {
         balloon.height
     };
-    let block_air = if writing_mode.is_vertical() {
-        air_x
-    } else {
-        air_y
-    };
-    let available_block_extent = (block_extent - block_air * 2.0).max(0.0);
-    let select = |allow_hyphenation: bool, leading: f32, shift_block: bool| {
+    let select = |allow_hyphenation: bool, leading: f32, shift_block: bool, air: (f32, f32)| {
+        let block_air = if writing_mode.is_vertical() {
+            air.0
+        } else {
+            air.1
+        };
+        let available_block_extent = (block_extent - block_air * 2.0).max(0.0);
         let maximum_lines = if line_ink.thickness() <= available_block_extent {
             1 + ((available_block_extent - line_ink.thickness()) / leading).floor() as usize
         } else {
@@ -1590,8 +1590,8 @@ fn comic_line_breaks(
                         line_count,
                         leading,
                         line_ink,
-                        air_x,
-                        air_y,
+                        air.0,
+                        air.1,
                         shift_block,
                     )
                     .into_iter()
@@ -1610,25 +1610,33 @@ fn comic_line_breaks(
     };
 
     let place = |allow_hyphens| {
-        let centered = select(allow_hyphens, line_height, false);
+        let centered = select(allow_hyphens, line_height, false, (air_x, air_y));
         if !fixed_size || centered.as_ref().is_some_and(|result| !result.overflowed) {
             return centered;
         }
         // The ink band includes accents and descenders across the whole text.
         // Retain air between those bands even when tighter leading is needed.
         let compact = (line_height * 0.9).max(line_ink.thickness() + line_height * 0.1);
-        if compact < line_height
-            && let Some(result) = select(allow_hyphens, compact, false).filter(|r| !r.overflowed)
-        {
-            return Some(result);
-        }
-        if balloon.contour.len() >= 3 {
+        // A fixed size is a deliberate repair. The default one-ink-band air
+        // can consume most of a narrow flow cell. Keep its explicit minimum
+        // and the contour while testing a closer setting before shrinking.
+        let closer_air = (
+            (air_x * 0.5).max(balloon.minimum_air),
+            (air_y * 0.5).max(balloon.minimum_air),
+        );
+        for air in [(air_x, air_y), closer_air] {
             for leading in [line_height, compact.min(line_height)] {
-                if let Some(result) = select(allow_hyphens, leading, true).filter(|r| !r.overflowed)
-                {
-                    return Some(result);
+                for shift in [false, true] {
+                    if shift && balloon.contour.len() < 3 {
+                        continue;
+                    }
+                    if let Some(result) =
+                        select(allow_hyphens, leading, shift, air).filter(|r| !r.overflowed)
+                    {
+                        return Some(result);
+                    }
                 }
-                if compact >= line_height {
+                if leading == compact || compact >= line_height {
                     break;
                 }
             }
@@ -1669,7 +1677,9 @@ fn exact_profiled_line_breaks(
     }
     let mut dp = vec![vec![f32::INFINITY; len + 1]; line_count + 1];
     let mut previous = vec![vec![None; len + 1]; line_count + 1];
+    let mut overflows = vec![vec![true; len + 1]; line_count + 1];
     dp[0][0] = 0.0;
+    overflows[0][0] = false;
 
     for line in 0..line_count {
         let remaining_lines = line_count - line - 1;
@@ -1703,8 +1713,10 @@ fn exact_profiled_line_breaks(
                 if end < len {
                     cost += segments[end - 1].break_penalty;
                 }
-                if cost < dp[line + 1][end] {
+                let overfull = overflows[line][start] || line_advance > width + f32::EPSILON;
+                if (overfull, cost) < (overflows[line + 1][end], dp[line + 1][end]) {
                     dp[line + 1][end] = cost;
+                    overflows[line + 1][end] = overfull;
                     previous[line + 1][end] = Some(start);
                 }
                 if segments[end - 1].is_mandatory || advance > width {
@@ -1832,9 +1844,7 @@ impl ComicBalloon {
             return Vec::new();
         };
         let center = (first + last) * 0.5;
-        let shift_room = ((last - first) * 0.5)
-            .min(block_extent * 0.2)
-            .min(line_height);
+        let shift_room = (last - first) * 0.5;
         let offsets: &[f32] = if shift_block {
             if shift_room < 1.0 {
                 return Vec::new();
@@ -2649,33 +2659,35 @@ mod tests {
     #[test]
     fn fixed_comic_size_uses_room_in_the_wide_part_of_an_irregular_balloon() -> anyhow::Result<()> {
         let font = any_system_font();
-        let layout = TextLayout::new(&font)
-            .with_font_size(28.0)
-            .with_line_height(1.2)
-            .with_max_width(200.0)
-            .with_max_height(180.0)
-            .with_comic_balloon(
-                200.0,
-                180.0,
-                vec![
-                    (0.0, 0.0),
-                    (200.0, 0.0),
-                    (200.0, 180.0),
-                    (164.0, 180.0),
-                    (164.0, 90.0),
-                    (0.0, 90.0),
-                ],
-                4.0,
-            )
-            .run("WIDE LETTERING")?;
+        for height in [180.0, 380.0] {
+            let layout = TextLayout::new(&font)
+                .with_font_size(28.0)
+                .with_line_height(1.2)
+                .with_max_width(200.0)
+                .with_max_height(height)
+                .with_comic_balloon(
+                    200.0,
+                    height,
+                    vec![
+                        (0.0, 0.0),
+                        (200.0, 0.0),
+                        (200.0, height),
+                        (164.0, height),
+                        (164.0, 90.0),
+                        (0.0, 90.0),
+                    ],
+                    4.0,
+                )
+                .run("WIDE LETTERING")?;
 
-        assert_eq!(layout.font_size, 28.0);
-        assert!(
-            !layout.overflowed(),
-            "the wide lobe has space for this size without crossing the contour"
-        );
-        let top = (180.0 - layout.height) * 0.5 + layout.placement_offset_y();
-        assert!(top >= 0.0 && top + layout.height <= 90.0);
+            assert_eq!(layout.font_size, 28.0);
+            assert!(
+                !layout.overflowed(),
+                "the wide lobe has space for this size without crossing the contour"
+            );
+            let top = (height - layout.height) * 0.5 + layout.placement_offset_y();
+            assert!(top >= 0.0 && top + layout.height <= 90.0);
+        }
         Ok(())
     }
 
@@ -3046,6 +3058,71 @@ mod tests {
                 .any(|line| (tower + 1..tower + "tower".len()).contains(&line.range.end))
         );
         Ok(())
+    }
+
+    #[test]
+    fn fixed_comic_size_can_reduce_internal_air_within_the_contour() {
+        let segments = [LineBreakMeasure {
+            advance: 20.0,
+            trailing_advance: 0.0,
+            break_suffix_advance: 0.0,
+            break_penalty: 0.0,
+            is_mandatory: false,
+        }; 12];
+        let balloon = comic_balloon(
+            100.0,
+            200.0,
+            vec![(0.0, 0.0), (100.0, 0.0), (100.0, 200.0), (0.0, 200.0)],
+            4.0,
+        );
+        let layout = |fixed| {
+            comic_line_breaks(
+                &segments,
+                &balloon,
+                WritingMode::Horizontal,
+                28.0,
+                InkBand {
+                    before: 18.0,
+                    after: 6.0,
+                },
+                (24.0, 24.0),
+                HyphenationPolicy::Disabled,
+                fixed,
+            )
+        };
+        assert!(layout(false).overflowed);
+        let repaired = layout(true);
+        assert!(!repaired.overflowed);
+        assert!(
+            repaired
+                .profiles
+                .iter()
+                .all(|profile| profile.width <= 92.0)
+        );
+    }
+
+    #[test]
+    fn profiled_breaks_keep_a_fitting_path_when_a_small_overflow_costs_less() {
+        let segment = |advance| LineBreakMeasure {
+            advance,
+            trailing_advance: 0.0,
+            break_suffix_advance: 0.0,
+            break_penalty: 0.0,
+            is_mandatory: false,
+        };
+        let profile = |width| LineProfile {
+            width,
+            center_offset: 0.0,
+            block_baseline: 0.0,
+        };
+        let result = exact_profiled_line_breaks(
+            &[segment(20.0), segment(30.1), segment(100.0)],
+            vec![profile(50.0), profile(200.0)],
+            false,
+        )
+        .unwrap();
+        assert!(!result.overflowed);
+        assert_eq!(result.breaks, [1, 3]);
     }
 
     #[test]

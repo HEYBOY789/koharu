@@ -533,7 +533,7 @@ impl KoharuHost {
                 let commit = project.commit(batch.patch).await?;
                 Ok((
                     commit,
-                    json!({"page":page,"elements":batch.elements,"removed_duplicates":batch.removed_duplicates,"remaining_issues":batch.report.issues,"declined":batch.declined,"verification_required":true}),
+                    json!({"page":page,"elements":batch.elements,"removed_duplicates":batch.removed_duplicates,"balanced_groups":batch.balanced_groups,"remaining_issues":batch.report.issues,"declined":batch.declined,"verification_required":true}),
                 ))
             })
         })
@@ -882,6 +882,9 @@ impl LayerEdit {
                     let covered = if let Some(group) =
                         groups.iter().find(|group| group.element == target)
                     {
+                        if group.restore.is_some() {
+                            return Err(readability::DeclinedEdit("Use repair_text on this page to preserve the leading word in its surviving dialogue before removing the merged OCR.".into()).into());
+                        }
                         group.survivors.iter().all(|id| !targets.contains(id))
                     } else {
                         report
@@ -1115,7 +1118,7 @@ fn editor_tools() -> Vec<Tool> {
                         "Render the actual page. Optional element crops around a rendered text layer at useful resolution, preserving nearby artwork. Omit element for the whole page; display_width=390 simulates phone width, 960 desktop. Always view the full page after edits before verify_readability, and inspect crops for border/overlap fixes.",
                     ),
                     definition::<InspectPage>("audit_readability", "Measure actual rendered text at phone (390px) and desktop (960px) widths. Requires a chosen edit scope and activates review for the entire scope. Returns fitted font sizes, overflow, overlap candidates, outline ratios and background contrast. An ocr_duplicate entry lists the layers that must remain visible. If automatic is false, inspect the rendered candidate and all survivors before deciding whether they carry the same dialogue. Follow pagination.next_offset and inspect view_page crops."),
-                    definition::<RepairText>("repair_text", "Repair audited, visually inspected translated text on one page. Supply page alone, or limit the repair to up to 50 visible layer IDs in elements. Native removes OCR duplicates only when their translation is preserved by the visible survivors. It also tries larger text and reflow within the existing balloon, reduces excessive outlines and fixes contrast on uniform backgrounds. Returns removed_duplicates and remaining findings. Re-audit and view the result. Use geometry/typography for distinct overlapping text and mark unresolved issues needs_review."),
+                    definition::<RepairText>("repair_text", "Repair audited, visually inspected translated text on one page. Supply page alone, or limit the repair to up to 50 visible layer IDs in elements. Native reconciles proven merged OCR, moving a missing leading word into the surviving fragment when it is unambiguous. Comparable dialogue in the same balloon receives a common fitted size. Native tries closer spacing and positions inside the contour, adjusts outlines and contrast, then saves one reversible edit. Returns removed_duplicates, balanced_groups and remaining findings. Re-audit and view the result, and mark unresolved issues needs_review."),
                     definition::<VerifyReadability>("verify_readability", "Finish one page only after a fresh audit and a full view_page of the current result. Supply one issue decision for every remaining issue ID. keep is ONLY for visual collision/duplicate false positives; measured small text/overflow/contrast/thick outline must be fixed or marked needs_review with a concrete reason. Native completion requires every scoped page verified; do not claim needs_review pages repaired."),
                     definition::<RenamePage>("rename_page", "Rename a project page."),
                     definition::<MovePage>("move_page", "Move a page to a zero-based GLOBAL project index. This can change its chapter membership. Inspect the returned page position after moving. Both source and destination pages must be in the edit scope."),
