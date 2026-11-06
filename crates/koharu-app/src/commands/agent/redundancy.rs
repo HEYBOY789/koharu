@@ -14,6 +14,7 @@ pub(super) struct RedundantText {
     pub element: EntityId,
     pub survivors: Vec<EntityId>,
     pub automatic: bool,
+    pub requires_source_review: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub restore: Option<LeadingWord>,
 }
@@ -125,9 +126,10 @@ impl OriginalText {
                 source: source
                     .text
                     .value
-                    .split_whitespace()
+                    .lines()
+                    .map(|line| line.split_whitespace().collect::<Vec<_>>().join(" "))
                     .collect::<Vec<_>>()
-                    .join(" ")
+                    .join("\n")
                     .to_lowercase(),
                 translation: layer.text.split_whitespace().map(str::to_owned).collect(),
                 translated_words: words(&layer.text),
@@ -216,38 +218,56 @@ impl OriginalText {
                     && source.overlap(other, 2.0) >= 0.8
                 })
                 .collect::<Vec<_>>();
-            let (survivors, mut automatic, restore) = if let Some((_, other)) =
-                candidates.iter().rev().find(|(other_index, other)| {
+            let (survivors, mut automatic, restore, requires_source_review) =
+                if let Some((_, other)) = candidates.iter().rev().find(|(other_index, other)| {
                     if source.source == other.source && source.translation == other.translation {
                         (source.area(), *index) > (other.area(), *other_index)
                     } else {
                         other.area() > source.area()
-                            && source.source.ends_with(['.', '!', '?'])
-                            && other
+                            && (other
                                 .source
                                 .strip_prefix(&source.source)
-                                .is_some_and(|tail| tail.starts_with(' '))
-                            && source
-                                .translation
-                                .last()
-                                .is_some_and(|last| last.ends_with(['.', '!', '?']))
+                                .is_some_and(|tail| tail.starts_with('\n'))
+                                || (source.source.ends_with(['.', '!', '?'])
+                                    && other
+                                        .source
+                                        .strip_prefix(&source.source)
+                                        .is_some_and(|tail| tail.starts_with(' '))
+                                    && source
+                                        .translation
+                                        .last()
+                                        .is_some_and(|last| last.ends_with(['.', '!', '?']))))
                             && other.translation.starts_with(&source.translation)
                     }
                 }) {
-                (vec![other.element], true, None)
-            } else {
-                let parts = merged_parts(source, &candidates);
-                if parts.is_empty() {
-                    continue;
-                }
-                let survivors = parts.iter().map(|part| part.element).collect();
-                if preserves_translation(source, parts.clone()) {
-                    (survivors, true, None)
+                    (vec![other.element], true, None, false)
+                } else if let Some((_, other)) = candidates.iter().find(|(_, other)| {
+                    other.area() > source.area() && conflicting_clocks(source, other)
+                }) {
+                    (vec![other.element], false, None, true)
                 } else {
-                    let repair = reconcile_pair(source, &parts);
-                    (survivors, repair.is_some(), repair.flatten())
-                }
-            };
+                    let parts = merged_parts(source, &candidates);
+                    if parts.is_empty() {
+                        let parts = translated_parts(source, &candidates);
+                        if parts.is_empty() {
+                            continue;
+                        }
+                        (
+                            parts.iter().map(|part| part.element).collect(),
+                            true,
+                            None,
+                            false,
+                        )
+                    } else {
+                        let survivors = parts.iter().map(|part| part.element).collect();
+                        if preserves_translation(source, parts.clone()) {
+                            (survivors, true, None, false)
+                        } else {
+                            let repair = reconcile_pair(source, &parts);
+                            (survivors, repair.is_some(), repair.flatten(), false)
+                        }
+                    }
+                };
             // Two overlapping merged detections can disagree on a leading
             // word. Keep that second candidate for review rather than
             // overwriting the first restoration in the same scene patch.
@@ -267,11 +287,76 @@ impl OriginalText {
                 element: source.element,
                 survivors,
                 automatic,
+                requires_source_review,
                 restore,
             });
         }
         groups
     }
+}
+
+/// A merged OCR box can scramble columns even when its generated translation
+/// repeats the complete translations of disjoint detections. Every normalized
+/// word occurrence must survive, including negation and numbers.
+fn translated_parts<'a>(source: &Source, candidates: &[(usize, &'a Source)]) -> Vec<&'a Source> {
+    if !source.generated_translation || source.language.is_none() {
+        return vec![];
+    }
+    let mut remaining = source.translated_words.as_slice();
+    let mut parts: Vec<&Source> = vec![];
+    while !remaining.is_empty() {
+        let Some((_, part)) = candidates
+            .iter()
+            .filter(|(_, part)| {
+                part.generated_translation
+                    && part.language == source.language
+                    && part.area() < source.area()
+                    && part.translated_words.len() >= 3
+                    && !parts.iter().any(|other| {
+                        other.element == part.element || part.overlap(other, 0.0) >= 0.2
+                    })
+                    && remaining.starts_with(&part.translated_words)
+            })
+            .max_by_key(|(_, part)| part.translated_words.len())
+        else {
+            return vec![];
+        };
+        remaining = &remaining[part.translated_words.len()..];
+        parts.push(*part);
+    }
+    if parts.len() >= 2 { parts } else { vec![] }
+}
+
+/// Conflicting clock digits are only a visual-review candidate. Never choose
+/// one reading automatically or use this rule for ordinary dialogue.
+fn conflicting_clocks(fragment: &Source, aggregate: &Source) -> bool {
+    let numeric = |word: &String| !word.is_empty() && word.chars().all(|c| c.is_ascii_digit());
+    if fragment.source.matches(':').count() < 2
+        || fragment.words.len() < 6
+        || !fragment.words.iter().all(numeric)
+        || fragment.words != fragment.translated_words
+    {
+        return false;
+    }
+    let numbers = aggregate
+        .words
+        .iter()
+        .filter(|word| numeric(word))
+        .collect::<Vec<_>>();
+    let translated = aggregate
+        .translated_words
+        .iter()
+        .filter(|word| numeric(word))
+        .collect::<Vec<_>>();
+    numbers == translated
+        && numbers.len() == fragment.words.len()
+        && fragment
+            .words
+            .iter()
+            .zip(numbers)
+            .filter(|(left, right)| left != right)
+            .count()
+            == 1
 }
 
 fn contains(haystack: &[String], needle: &[String]) -> bool {
@@ -434,6 +519,94 @@ fn match_fragment<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn detection(original: &str, translated: &str, bounds: [f64; 4]) -> Source {
+        let mut value = source(translated, true);
+        value.source = original.to_lowercase();
+        value.words = words(original);
+        value.bounds = bounds;
+        value
+    }
+
+    #[test]
+    fn garbled_merged_ocr_keeps_complete_generated_translation_fragments() {
+        let merged = detection(
+            "AND THERE THAT REALLY WHY WAS JLIST AT MOTHER CORE",
+            "Sâu thẳm là tình yêu... và đó là lý do bà ấy không thể chỉ là mẹ.",
+            [0.0, 0.0, 240.0, 160.0],
+        );
+        let opening = detection(
+            "There really was love at the core...",
+            "Sâu thẳm là tình yêu...",
+            [0.0, 0.0, 100.0, 160.0],
+        );
+        let ending = detection(
+            "...And that's why she couldn't stop at being a mother.",
+            "...Và đó là lý do bà ấy không thể chỉ là mẹ.",
+            [140.0, 0.0, 240.0, 160.0],
+        );
+        let merged_id = merged.element;
+        let opening_id = opening.element;
+        let ending_id = ending.element;
+        let mut original = OriginalText(vec![merged, opening, ending]);
+        let groups = original.groups();
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].element, merged_id);
+        assert!(groups[0].automatic);
+        assert!(groups[0].survivors.contains(&opening_id));
+        assert!(groups[0].survivors.contains(&ending_id));
+
+        original.0[0].translated_words.insert(0, "không".into());
+        assert!(original.groups().iter().all(|group| !group.automatic));
+        original.0[0].translated_words.remove(0);
+        original.0[1].generated_translation = false;
+        assert!(original.groups().iter().all(|group| !group.automatic));
+        original.0[1].generated_translation = true;
+        original.0[2].bounds = [20.0, 0.0, 120.0, 160.0];
+        assert!(original.groups().iter().all(|group| !group.automatic));
+    }
+
+    #[test]
+    fn free_text_heading_requires_a_complete_source_line_and_preserved_translation() {
+        let heading = detection("Midterm exams", "Kỳ thi giữa kỳ", [0.0, 0.0, 220.0, 30.0]);
+        let aggregate = detection(
+            "Midterm exams\nJapanese 9:50 - 16\nEnglish 10:55 -\nMath 13:10 -",
+            "Kỳ thi giữa kỳ\nQuốc ngữ 9:50 - 16\nTiếng Anh 10:55 -\nToán 13:10 -",
+            [0.0, 0.0, 240.0, 180.0],
+        );
+        let id = heading.element;
+        let survivor = aggregate.element;
+        let mut original = OriginalText(vec![heading, aggregate]);
+        let groups = original.groups();
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].element, id);
+        assert_eq!(groups[0].survivors, vec![survivor]);
+        assert!(groups[0].automatic);
+        original.0[1].source = original.0[1].source.replace("exams\n", "exams postponed\n");
+        assert!(original.groups().is_empty());
+    }
+
+    #[test]
+    fn conflicting_clock_ocr_is_never_removed_automatically() {
+        let clocks = detection(
+            "9:50-14\n10:55-\n13:10-",
+            "9:50-14\n10:55-\n13:10-",
+            [130.0, 40.0, 220.0, 170.0],
+        );
+        let aggregate = detection(
+            "Midterm exams\nJapanese 9:50 - 16\nEnglish 10:55 -\nMath 13:10 -",
+            "Kỳ thi giữa kỳ\nQuốc ngữ 9:50 - 16\nTiếng Anh 10:55 -\nToán 13:10 -",
+            [0.0, 0.0, 240.0, 180.0],
+        );
+        let id = clocks.element;
+        let mut original = OriginalText(vec![clocks, aggregate]);
+        let groups = original.groups();
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].element, id);
+        assert!(!groups[0].automatic);
+        original.0[0].words[3] = "11".into();
+        assert!(original.groups().is_empty());
+    }
 
     fn source(text: &str, generated: bool) -> Source {
         Source {

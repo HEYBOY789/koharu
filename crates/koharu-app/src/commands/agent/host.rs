@@ -662,7 +662,7 @@ impl KoharuHost {
                 let rasterizer = desktop.rasterizer().await?;
                 let frame = renderer.render(&snapshot, page).await?;
                 let review_active = self.binding.as_ref().unwrap().review.lock().active();
-                let review_report = if review_active {
+                let review_report = if review_active && !arguments.original {
                     let mut report = frame.readability();
                     readability::source_duplicates(&snapshot, &mut report)?;
                     report.sample_background(
@@ -685,26 +685,19 @@ impl KoharuHost {
                 } else {
                     None
                 };
-                let crop = arguments
-                    .element
-                    .as_deref()
-                    .map(entity)
-                    .transpose()?
-                    .map(|element| {
-                        let layer = frame
-                            .layer(element)
-                            .context("element is not rendered on this page")?;
-                        let b = layer.bounds();
-                        let margin = 32.0;
-                        Ok::<_, anyhow::Error>([
-                            b.x - margin,
-                            b.y - margin,
-                            b.width + margin * 2.0,
-                            b.height + margin * 2.0,
-                        ])
-                    })
-                    .transpose()?;
+                let crop = readability::view_crop(
+                    &snapshot,
+                    &frame,
+                    arguments.element.as_deref().map(entity).transpose()?,
+                    arguments.original,
+                )?;
+                let frame = if arguments.original {
+                    frame.original_artwork()?
+                } else {
+                    frame
+                };
                 let dual = crop.is_none()
+                    && !arguments.original
                     && arguments.display_width.is_none()
                     && self.binding.as_ref().unwrap().review.lock().active();
                 let width = if dual {
@@ -713,8 +706,8 @@ impl KoharuHost {
                     arguments.display_width
                 };
                 let bytes = output::frame_preview(rasterizer.clone(), &frame, crop, width).await?;
-                let mut result = Invocation::read(json!({ "page": page, "label": label, "crop":crop,"display_width":width,"phone_and_desktop":dual,"readability":review_report }))?.with_image(
-                    format!("Rendered page {label} ({page}), width {width:?}"), format!("data:image/webp;base64,{}", STANDARD.encode(bytes)));
+                let mut result = Invocation::read(json!({ "page": page, "label": label, "original":arguments.original,"crop":crop,"display_width":width,"phone_and_desktop":dual,"readability":review_report }))?.with_image(
+                    format!("{} page {label} ({page}), width {width:?}", if arguments.original { "Original artwork" } else { "Rendered" }), format!("data:image/webp;base64,{}", STANDARD.encode(bytes)));
                 if dual {
                     let bytes = output::frame_preview(rasterizer, &frame, None, Some(390)).await?;
                     result = result.with_image(
@@ -722,7 +715,14 @@ impl KoharuHost {
                         format!("data:image/webp;base64,{}", STANDARD.encode(bytes)),
                     );
                 }
-                if crop.is_none() {
+                if arguments.original {
+                    self.binding
+                        .as_ref()
+                        .unwrap()
+                        .review
+                        .lock()
+                        .source_viewed(page, readability::stamp(&snapshot, page)?);
+                } else if crop.is_none() {
                     self.binding.as_ref().unwrap().review.lock().viewed(
                         page,
                         readability::stamp(&snapshot, page)?,
@@ -882,6 +882,12 @@ impl LayerEdit {
                     let covered = if let Some(group) =
                         groups.iter().find(|group| group.element == target)
                     {
+                        anyhow::ensure!(
+                            !group.requires_source_review
+                                || review
+                                    .source_was_viewed(page, readability::stamp(snapshot, page)?),
+                            "Conflicting OCR clock digits require view_page with original=true before removing this candidate. Compare the original numbers with the surviving layer; keep uncertain readings as needs_review."
+                        );
                         if group.restore.is_some() {
                             return Err(readability::DeclinedEdit("Use repair_text on this page to preserve the leading word in its surviving dialogue before removing the merged OCR.".into()).into());
                         }
@@ -1115,9 +1121,9 @@ fn editor_tools() -> Vec<Tool> {
                     ),
                     definition::<ViewPage>(
                         "view_page",
-                        "Render the actual page. Optional element crops around a rendered text layer at useful resolution, preserving nearby artwork. Omit element for the whole page; display_width=390 simulates phone width, 960 desktop. Always view the full page after edits before verify_readability, and inspect crops for border/overlap fixes.",
+                        "Render the actual page. Optional element crops around a text layer, preserving nearby artwork. Set original=true to inspect unmodified source artwork without cleanup or translated text; element then crops its ORIGINAL OCR region. Use original=true for conflicting OCR numbers before deleting a duplicate. Original views do not verify the translated page. Omit element for the whole page; display_width=390 simulates phone width, 960 desktop. View the translated full page after edits before verify_readability.",
                     ),
-                    definition::<InspectPage>("audit_readability", "Measure actual rendered text at phone (390px) and desktop (960px) widths. Requires a chosen edit scope and activates review for the entire scope. Returns fitted font sizes, overflow, overlap candidates, outline ratios and background contrast. An ocr_duplicate entry lists the layers that must remain visible. If automatic is false, inspect the rendered candidate and all survivors before deciding whether they carry the same dialogue. Follow pagination.next_offset and inspect view_page crops."),
+                    definition::<InspectPage>("audit_readability", "Measure rendered text at phone (390px) and desktop (960px) widths. Requires an edit scope and activates review for the scope. Returns fitted font sizes, overflow, overlap candidates, outline ratios and background contrast. An ocr_duplicate entry lists required survivors. If automatic=false, inspect the candidate and all survivors. requires_source_review=true means conflicting OCR clock digits: use view_page original=true and compare them before choosing a copy. Keep uncertain readings needs_review. Follow pagination.next_offset."),
                     definition::<RepairText>("repair_text", "Repair audited, visually inspected translated text on one page. Supply page alone, or limit the repair to up to 50 visible layer IDs in elements. Native reconciles proven merged OCR, moving a missing leading word into the surviving fragment when it is unambiguous. Comparable dialogue in the same balloon receives a common fitted size. Native tries closer spacing and positions inside the contour, adjusts outlines and contrast, then saves one reversible edit. Returns removed_duplicates, balanced_groups and remaining findings. Re-audit and view the result, and mark unresolved issues needs_review."),
                     definition::<VerifyReadability>("verify_readability", "Finish one page only after a fresh audit and a full view_page of the current result. Supply one issue decision for every remaining issue ID. keep is ONLY for visual collision/duplicate false positives; measured small text/overflow/contrast/thick outline must be fixed or marked needs_review with a concrete reason. Native completion requires every scoped page verified; do not claim needs_review pages repaired."),
                     definition::<RenamePage>("rename_page", "Rename a project page."),
@@ -1566,6 +1572,9 @@ struct ViewPage {
     page: String,
     element: Option<String>,
     display_width: Option<u32>,
+    /// Show unmodified source artwork. Use it to resolve OCR conflicts; it does not verify the translated page.
+    #[serde(default)]
+    original: bool,
 }
 
 #[derive(Deserialize, JsonSchema)]

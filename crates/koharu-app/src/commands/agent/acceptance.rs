@@ -678,6 +678,89 @@ async fn merged_ocr_requires_visible_survivors_and_preserves_translation_order()
 }
 
 #[tokio::test]
+async fn conflicting_clock_duplicate_requires_original_artwork_before_native_removal() -> Result<()>
+{
+    use koharu_scene::{
+        Authored, FitsTo, Geometry, Origin, RecognizedFrom, SourceText, TextLayout, TextLayoutKind,
+        TextRegion, Translation,
+    };
+    let mut fixture = Fixture::new().await?;
+    let mut ids = vec![];
+    let patch = fixture.project.snapshot().patch(|edit| {
+        for (source, translated, geometry) in [
+            (
+                "9:50-14\n10:55-\n13:10-",
+                "9:50-14\n10:55-\n13:10-",
+                Geometry::rectangle(230.0, 140.0, 90.0, 130.0),
+            ),
+            (
+                "Midterm exams\nJapanese 9:50 - 16\nEnglish 10:55 -\nMath 13:10 -",
+                "Kỳ thi giữa kỳ\nQuốc ngữ 9:50 - 16\nTiếng Anh 10:55 -\nToán 13:10 -",
+                Geometry::rectangle(100.0, 100.0, 240.0, 180.0),
+            ),
+        ] {
+            let region =
+                edit.add_analysis_region::<TextRegion>(fixture.page, At::End, &geometry, None)?;
+            let content = edit.add_text_content(fixture.page, At::End)?;
+            edit.set(
+                content,
+                &SourceText {
+                    text: Authored::user(source.into()),
+                    language: None,
+                },
+            )?;
+            edit.set(
+                content,
+                &Translation {
+                    text: Authored::user(translated.into()),
+                    language: None,
+                },
+            )?;
+            edit.relate::<RecognizedFrom>(content, region)?;
+            let layer = edit.add_text_layer(
+                fixture.page,
+                At::End,
+                content,
+                &TextLayout {
+                    origin: Origin::User,
+                    kind: TextLayoutKind::Paragraph,
+                    angle_degrees: None,
+                },
+            )?;
+            edit.relate::<FitsTo>(layer, region)?;
+            ids.push(layer);
+        }
+        Ok(())
+    })?;
+    let snapshot = fixture.project.session.commit(patch).await?.snapshot;
+    let mut report = koharu_renderer::Renderer::new()?
+        .render(&snapshot, fixture.page)
+        .await?
+        .readability();
+    let groups = readability::source_duplicates(&snapshot, &mut report)?;
+    assert!(
+        groups.iter().any(|group| group.element == ids[0]
+            && group.requires_source_review
+            && !group.automatic)
+    );
+    let mut review = readability::Review::default();
+    let version = readability::stamp(&snapshot, fixture.page)?;
+    review.begin(&[fixture.page])?;
+    review.audit(version, report);
+    review.viewed(fixture.page, version, None);
+    let removal = LayerEdit::Delete(vec![ids[0]]);
+    assert!(removal.validate_review(&snapshot, &review).is_err());
+    review.source_viewed(fixture.page, version);
+    removal.validate_review(&snapshot, &review)?;
+    assert!(
+        LayerEdit::Delete(ids)
+            .validate_review(&snapshot, &review)
+            .is_err()
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn native_failed_layer_is_not_cleared_by_other_page_edits_or_wrong_target_retry() -> Result<()>
 {
     let mut f = Fixture::new().await?;
@@ -1048,7 +1131,7 @@ impl NativeHost {
                     let page = entity(&a.page)?;
                     let rasterizer = Arc::new(koharu_rasterizer::Rasterizer::new()?);
                     let frame = self.renderer.render(&project.snapshot(), page).await?;
-                    let review_report = if binding.review.lock().active() {
+                    let review_report = if binding.review.lock().active() && !a.original {
                         let mut report = frame.readability();
                         readability::source_duplicates(&project.snapshot(), &mut report)?;
                         let background =
@@ -1070,22 +1153,19 @@ impl NativeHost {
                     } else {
                         None
                     };
-                    let crop = a
-                        .element
-                        .as_deref()
-                        .map(entity)
-                        .transpose()?
-                        .map(|id| {
-                            let b = frame.layer(id).context("rendered layer")?.bounds();
-                            Ok::<_, anyhow::Error>([
-                                b.x - 32.0,
-                                b.y - 32.0,
-                                b.width + 64.0,
-                                b.height + 64.0,
-                            ])
-                        })
-                        .transpose()?;
+                    let crop = readability::view_crop(
+                        &project.snapshot(),
+                        &frame,
+                        a.element.as_deref().map(entity).transpose()?,
+                        a.original,
+                    )?;
+                    let frame = if a.original {
+                        frame.original_artwork()?
+                    } else {
+                        frame
+                    };
                     let dual = crop.is_none()
+                        && !a.original
                         && a.display_width.is_none()
                         && binding.review.lock().active();
                     let bytes = output::frame_preview(
@@ -1096,9 +1176,9 @@ impl NativeHost {
                     )
                     .await?;
                     let mut output =
-                        Invocation::read(json!({"page":context::location(&project.snapshot(), page)?,"readability":review_report}))?
+                        Invocation::read(json!({"page":context::location(&project.snapshot(), page)?,"original":a.original,"readability":review_report}))?
                             .with_image(
-                                "Native rendered fixture",
+                                if a.original { "Original source artwork" } else { "Native rendered fixture" },
                                 format!("data:image/webp;base64,{}", STANDARD.encode(bytes)),
                             );
                     if dual {
@@ -1113,7 +1193,12 @@ impl NativeHost {
                             ),
                         );
                     }
-                    if crop.is_none() {
+                    if a.original {
+                        binding
+                            .review
+                            .lock()
+                            .source_viewed(page, readability::stamp(&project.snapshot(), page)?);
+                    } else if crop.is_none() {
                         binding.review.lock().viewed(
                             page,
                             readability::stamp(&project.snapshot(), page)?,

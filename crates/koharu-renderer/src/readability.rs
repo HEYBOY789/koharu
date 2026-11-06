@@ -321,10 +321,19 @@ impl Frame {
 
     /// Keep all visible raster content, including cleanup, at its authored opacity.
     pub fn without_text(&self) -> crate::Result<Self> {
+        self.filtered_layers(|layer| !matches!(layer.kind(), LayerKind::Text(_)))
+    }
+
+    /// Show source artwork before translated lettering, cleanup and paint.
+    pub fn original_artwork(&self) -> crate::Result<Self> {
+        self.filtered_layers(|layer| matches!(layer.kind(), LayerKind::Image(image) if image.kind == crate::ImageKind::Source))
+    }
+
+    fn filtered_layers(&self, keep: impl Fn(&crate::Layer) -> bool) -> crate::Result<Self> {
         let layers: std::sync::Arc<[crate::Layer]> = self
             .layers()
             .iter()
-            .filter(|l| !matches!(l.kind(), LayerKind::Text(_)))
+            .filter(|layer| keep(layer))
             .cloned()
             .collect::<Vec<_>>()
             .into();

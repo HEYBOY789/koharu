@@ -26,6 +26,57 @@ pub(super) fn source_duplicates(
     Ok(groups)
 }
 
+pub(super) fn view_crop(
+    snapshot: &Snapshot,
+    frame: &Frame,
+    element: Option<EntityId>,
+    original: bool,
+) -> Result<Option<[f32; 4]>> {
+    let Some(element) = element else {
+        return Ok(None);
+    };
+    ensure!(
+        super::scope::page_for(snapshot, element)? == frame.page(),
+        "element is not on this page"
+    );
+    let bounds = if original {
+        let geometry = snapshot
+            .text_layer(element)?
+            .content()?
+            .source_region()?
+            .context("layer has no original OCR region; view the full original page")?
+            .geometry()?;
+        ensure!(!geometry.points.is_empty(), "original OCR region is empty");
+        let b = geometry.points.iter().fold(
+            [
+                f64::INFINITY,
+                f64::INFINITY,
+                f64::NEG_INFINITY,
+                f64::NEG_INFINITY,
+            ],
+            |b, p| [b[0].min(p.x), b[1].min(p.y), b[2].max(p.x), b[3].max(p.y)],
+        );
+        [
+            b[0] as f32,
+            b[1] as f32,
+            (b[2] - b[0]) as f32,
+            (b[3] - b[1]) as f32,
+        ]
+    } else {
+        let b = frame
+            .layer(element)
+            .context("element is not rendered on this page")?
+            .bounds();
+        [b.x, b.y, b.width, b.height]
+    };
+    Ok(Some([
+        bounds[0] - 32.0,
+        bounds[1] - 32.0,
+        bounds[2] + 64.0,
+        bounds[3] + 64.0,
+    ]))
+}
+
 pub(super) async fn checked_candidate(
     renderer: &koharu_renderer::Renderer,
     rasterizer: std::sync::Arc<koharu_rasterizer::Rasterizer>,
@@ -505,6 +556,7 @@ pub struct ReadabilityProgress {
 pub(super) struct Review {
     scope: Option<Vec<EntityId>>,
     pages: HashMap<EntityId, PageReview>,
+    source_views: HashMap<EntityId, BlobId>,
 }
 
 struct PageReview {
@@ -611,6 +663,14 @@ impl Review {
 
     pub fn changed(&mut self, page: EntityId) {
         self.pages.remove(&page);
+    }
+
+    pub fn source_viewed(&mut self, page: EntityId, stamp: BlobId) {
+        self.source_views.insert(page, stamp);
+    }
+
+    pub fn source_was_viewed(&self, page: EntityId, stamp: BlobId) -> bool {
+        self.source_views.get(&page) == Some(&stamp)
     }
 
     pub fn viewed(&mut self, page: EntityId, stamp: BlobId, width: Option<u32>) {
@@ -727,6 +787,22 @@ mod tests {
             layers: vec![],
             issues: vec![],
         }
+    }
+    #[test]
+    fn original_artwork_review_never_counts_as_translated_page_verification() -> Result<()> {
+        let page = EntityId::new();
+        let version = BlobId::for_bytes(b"before");
+        let mut review = Review::default();
+        review.begin(&[page])?;
+        review.audit(version, report(page));
+        review.source_viewed(page, version);
+        assert!(review.source_was_viewed(page, version));
+        assert!(review.before_edit(page, version).is_err());
+        assert!(review.verify(page, version, vec![]).is_err());
+        review.viewed(page, version, None);
+        review.verify(page, version, vec![])?;
+        assert!(!review.source_was_viewed(page, BlobId::for_bytes(b"changed")));
+        Ok(())
     }
     #[test]
     fn coverage_requires_each_scoped_page_and_a_fresh_view_after_edits() -> Result<()> {
