@@ -204,7 +204,7 @@ impl OriginalText {
         let mut redundant = HashSet::new();
         let mut groups: Vec<RedundantText> = vec![];
         for (index, source) in &order {
-            if reserved.contains(&source.element) || !source.enough_source_text() {
+            if reserved.contains(&source.element) {
                 continue;
             }
             let candidates = order
@@ -218,28 +218,44 @@ impl OriginalText {
                     && source.overlap(other, 2.0) >= 0.8
                 })
                 .collect::<Vec<_>>();
+            let prefix = candidates
+                .iter()
+                .find(|(_, other)| heading_fragment(source, other));
+            if !source.enough_source_text() && prefix.is_none() {
+                continue;
+            }
             let (survivors, mut automatic, restore, requires_source_review) =
-                if let Some((_, other)) = candidates.iter().rev().find(|(other_index, other)| {
-                    if source.source == other.source && source.translation == other.translation {
-                        (source.area(), *index) > (other.area(), *other_index)
-                    } else {
-                        other.area() > source.area()
-                            && (other
-                                .source
-                                .strip_prefix(&source.source)
-                                .is_some_and(|tail| tail.starts_with('\n'))
-                                || (source.source.ends_with(['.', '!', '?'])
-                                    && other
-                                        .source
-                                        .strip_prefix(&source.source)
-                                        .is_some_and(|tail| tail.starts_with(' '))
-                                    && source
-                                        .translation
-                                        .last()
-                                        .is_some_and(|last| last.ends_with(['.', '!', '?']))))
-                            && other.translation.starts_with(&source.translation)
-                    }
-                }) {
+                if let Some((_, other)) = prefix {
+                    (
+                        vec![other.element],
+                        source.generated_translation && other.generated_translation,
+                        None,
+                        false,
+                    )
+                } else if let Some((_, other)) =
+                    candidates.iter().rev().find(|(other_index, other)| {
+                        if source.source == other.source && source.translation == other.translation
+                        {
+                            (source.area(), *index) > (other.area(), *other_index)
+                        } else {
+                            other.area() > source.area()
+                                && (other
+                                    .source
+                                    .strip_prefix(&source.source)
+                                    .is_some_and(|tail| tail.starts_with('\n'))
+                                    || (source.source.ends_with(['.', '!', '?'])
+                                        && other
+                                            .source
+                                            .strip_prefix(&source.source)
+                                            .is_some_and(|tail| tail.starts_with(' '))
+                                        && source
+                                            .translation
+                                            .last()
+                                            .is_some_and(|last| last.ends_with(['.', '!', '?']))))
+                                && other.translation.starts_with(&source.translation)
+                        }
+                    })
+                {
                     (vec![other.element], true, None, false)
                 } else if let Some((_, other)) = candidates.iter().find(|(_, other)| {
                     other.area() > source.area() && conflicting_clocks(source, other)
@@ -293,6 +309,23 @@ impl OriginalText {
         }
         groups
     }
+}
+
+fn heading_fragment(fragment: &Source, aggregate: &Source) -> bool {
+    fragment.balloon.is_none()
+        && aggregate.balloon.is_none()
+        && fragment.language.is_some()
+        && fragment.language == aggregate.language
+        && fragment.words.len() >= 3
+        && fragment.translated_words.len() >= 3
+        && fragment.words.len() < aggregate.words.len()
+        && fragment.translated_words.len() < aggregate.translated_words.len()
+        && fragment.area() < aggregate.area()
+        && fragment.overlap(aggregate, 0.0) >= 0.95
+        && aggregate.words.starts_with(&fragment.words)
+        && aggregate
+            .translated_words
+            .starts_with(&fragment.translated_words)
 }
 
 /// A merged OCR box can scramble columns even when its generated translation
@@ -584,6 +617,26 @@ mod tests {
         assert!(groups[0].automatic);
         original.0[1].source = original.0[1].source.replace("exams\n", "exams postponed\n");
         assert!(original.groups().is_empty());
+    }
+
+    #[test]
+    fn generated_heading_fragment_keeps_the_complete_title_and_its_punctuation() {
+        let fragment = detection("Mother's Love", "Tình mẫu tử", [0.0, 0.0, 110.0, 40.0]);
+        let aggregate = detection(
+            "Mother's Love Daughter's Prison",
+            "Tình mẫu tử, ngục tù của con gái",
+            [0.0, 0.0, 240.0, 70.0],
+        );
+        let id = fragment.element;
+        let survivor = aggregate.element;
+        let mut original = OriginalText(vec![fragment, aggregate]);
+        let groups = original.groups();
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].element, id);
+        assert_eq!(groups[0].survivors, vec![survivor]);
+        assert!(groups[0].automatic);
+        original.0[0].generated_translation = false;
+        assert!(original.groups().iter().all(|group| !group.automatic));
     }
 
     #[test]

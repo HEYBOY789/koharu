@@ -239,8 +239,32 @@ fn repair_style(
         typography.writing_mode = None;
     }
     if let Some(bg) = &layer.background {
-        let thick = layer.stroke_width / layer.source_font_px.max(1.0) > 0.08;
-        if bg.light_fraction > 0.95 || bg.dark_fraction > 0.95 {
+        let thick = layer.stroke_width > layer.maximum_outline_px();
+        if bg.required_outline_px > 0.0 {
+            let neutral = |color: [u8; 4]| {
+                color[..3].iter().max().unwrap() - color[..3].iter().min().unwrap() < 16
+            };
+            if neutral(layer.color) && layer.stroke_color.is_none_or(neutral) {
+                let light_fill = bg.dark_fraction >= 0.5;
+                typography.color = Some(if light_fill {
+                    [255, 255, 255, 255]
+                } else {
+                    [0, 0, 0, 255]
+                });
+                typography.stroke_color = Some(if light_fill {
+                    [0, 0, 0, 255]
+                } else {
+                    [255, 255, 255, 255]
+                });
+            } else if layer.stroke_color.is_none() {
+                typography.stroke_color = Some(if bg.dark_fraction >= 0.5 {
+                    [255, 255, 255, 255]
+                } else {
+                    [0, 0, 0, 255]
+                });
+            }
+            typography.stroke_width = Some(layer.outline_target_px());
+        } else if bg.light_fraction > 0.95 || bg.dark_fraction > 0.95 {
             let replace_fill = bg.fill_contrast < 4.5 && bg.outline_contrast < 4.5;
             if replace_fill {
                 typography.color = Some(if bg.light_fraction > 0.95 {
@@ -273,6 +297,7 @@ async fn repair(
     frame: &Frame,
     elements: &[EntityId],
     before: &ReadabilityReport,
+    background: &image::RgbaImage,
 ) -> Result<(koharu_scene::Patch, bool)> {
     let shared = elements.len() > 1;
     let mut styles = vec![];
@@ -290,8 +315,7 @@ async fn repair(
             anyhow::bail!("repair target is not rendered text");
         };
         let original = typography(snapshot, *element)?;
-        let adjusted = repair_style(original.clone(), layer, rendered.writing_mode);
-        styles.push((*element, original, adjusted, rendered.writing_mode));
+        styles.push((*element, original, layer.clone(), rendered.writing_mode));
         low = low.min(layer.source_font_px);
         largest = largest.max(layer.source_font_px);
     }
@@ -300,8 +324,12 @@ async fn repair(
             snapshot,
             styles
                 .iter()
-                .filter_map(|(layer, original, adjusted, _)| {
-                    let mut typography = adjusted.clone();
+                .filter_map(|(layer, original, measured, direction)| {
+                    let mut measured = measured.clone();
+                    if let Some(size) = size {
+                        measured.source_font_px = size;
+                    }
+                    let mut typography = repair_style(original.clone(), &measured, *direction);
                     if let Some(size) = size {
                         typography.size = Some(size);
                         typography.auto_fit = false;
@@ -343,7 +371,8 @@ async fn repair(
             matches!(candidate_frame.layer(*id).map(|layer| layer.kind()),
                 Some(LayerKind::Text(text)) if text.writing_mode == *direction)
         });
-        let report = candidate_frame.readability();
+        let mut report = candidate_frame.readability();
+        report.sample_background(background);
         let new_overlap = report.issues.iter().any(|i| {
             matches!(
                 i.kind,
@@ -478,6 +507,7 @@ pub(super) async fn repair_batch(
             &frame,
             &group,
             &current,
+            &background,
         )
         .await
         {
@@ -777,6 +807,39 @@ impl Review {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn outline_repair_preserves_colored_lettering_palette() -> Result<()> {
+        let style: Typography = serde_json::from_value(serde_json::json!({
+            "auto_fit":false,"size":24.0,"color":[255,255,255,255],"stroke_color":[141,57,114,255],"stroke_width":4.0
+        }))?;
+        let measured = ReadableText {
+            element: EntityId::new(),
+            text: "Colored title".into(),
+            source_font_px: 24.0,
+            display_font_px: vec![9.75, 24.0],
+            fonts: vec![],
+            bounds: [0.0, 0.0, 100.0, 100.0],
+            layout_bounds: [0.0, 0.0, 100.0, 100.0],
+            color: [255, 255, 255, 255],
+            stroke_color: Some([141, 57, 114, 255]),
+            stroke_width: 4.0,
+            opacity: 1.0,
+            background: Some(koharu_renderer::Background {
+                dark_fraction: 0.3,
+                light_fraction: 0.2,
+                luminance_spread: 0.9,
+                fill_contrast: 1.0,
+                outline_contrast: 2.0,
+                paired_contrast: 3.2,
+                required_outline_px: 960.0 / 390.0,
+            }),
+        };
+        let repaired = repair_style(style.clone(), &measured, WritingMode::Horizontal);
+        assert_eq!(repaired.color, style.color);
+        assert_eq!(repaired.stroke_color, style.stroke_color);
+        assert!(repaired.stroke_width.unwrap() < 4.0);
+        Ok(())
+    }
     fn report(page: EntityId) -> ReadabilityReport {
         ReadabilityReport {
             page,
@@ -965,6 +1028,10 @@ mod tests {
             }
             let mut report = frame.readability();
             source_duplicates(&snapshot, &mut report)?;
+            report.sample_background(
+                &crate::commands::output::frame_image(rasterizer.clone(), &frame.without_text()?)
+                    .await?,
+            );
             reports.push(report);
         }
         std::fs::write(

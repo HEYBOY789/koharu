@@ -43,6 +43,21 @@ pub struct Background {
     pub luminance_spread: f32,
     pub fill_contrast: f32,
     pub outline_contrast: f32,
+    pub paired_contrast: f32,
+    /// Source pixels needed for one outline pixel at the smallest reader width.
+    pub required_outline_px: f32,
+}
+
+impl ReadableText {
+    pub fn outline_target_px(&self) -> f32 {
+        self.background.as_ref().map_or(0.0, |bg| {
+            bg.required_outline_px.min(self.source_font_px * 0.12)
+        })
+    }
+
+    pub fn maximum_outline_px(&self) -> f32 {
+        (self.source_font_px * 0.08).max(self.outline_target_px() * 1.1)
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
@@ -71,8 +86,18 @@ impl ReadabilityReport {
     /// Sample artwork + cleanup, with translated text excluded. Sampling the final
     /// outline would mistake the text's own white border for a white balloon.
     pub fn sample_background(&mut self, background: &image::RgbaImage) {
-        self.issues
-            .retain(|issue| issue.kind != ReadabilityKind::LowContrast);
+        self.issues.retain(|issue| {
+            !matches!(
+                issue.kind,
+                ReadabilityKind::LowContrast | ReadabilityKind::ThickOutline
+            )
+        });
+        let reader_scale = self
+            .reader_widths
+            .iter()
+            .map(|width| (*width).min(self.page_width) as f32 / self.page_width.max(1) as f32)
+            .fold(1.0f32, f32::min)
+            .max(f32::EPSILON);
         for layer in &mut self.layers {
             let [x, y, w, h] = layer.bounds;
             let mut samples = Vec::with_capacity(144);
@@ -113,6 +138,26 @@ impl ReadabilityReport {
                     layer.opacity * layer.stroke_color.unwrap()[3] as f32 / 255.0,
                 )
             });
+            let mut paired = samples
+                .iter()
+                .map(|v| {
+                    let body = contrast_on(*v, fill, layer.opacity * layer.color[3] as f32 / 255.0);
+                    stroke.map_or(body, |s| {
+                        body.max(contrast_on(
+                            *v,
+                            s,
+                            layer.opacity * layer.stroke_color.unwrap()[3] as f32 / 255.0,
+                        ))
+                    })
+                })
+                .collect::<Vec<_>>();
+            paired.sort_by(f32::total_cmp);
+            let paired_contrast = paired[n / 10];
+            let required_outline_px = if fill_contrast < 4.5 {
+                1.0 / reader_scale
+            } else {
+                0.0
+            };
             let spread = samples[n * 9 / 10] - samples[n / 10];
             layer.background = Some(Background {
                 dark_fraction: samples.iter().filter(|v| **v < 0.1).count() as f32 / n as f32,
@@ -120,16 +165,31 @@ impl ReadabilityReport {
                 luminance_spread: spread,
                 fill_contrast,
                 outline_contrast,
+                paired_contrast,
+                required_outline_px,
             });
-            // Mixed artwork needs visual judgement. Contrast here is a conservative
-            // flag for nearly uniform backgrounds, not a claim of WCAG compliance.
-            let contrast = fill_contrast.max(outline_contrast);
-            if spread < 0.1 && contrast < 4.5 {
+            // A thin halo disappears on a phone even when its stored color
+            // contrasts well. Check the two colors together on mixed artwork.
+            let deficit = if required_outline_px > 0.0 {
+                (4.5 - paired_contrast)
+                    .max((required_outline_px - layer.stroke_width) * reader_scale)
+            } else {
+                0.0
+            };
+            if deficit > 0.01 {
                 self.issues.push(issue(
                     layer.element,
                     None,
                     ReadabilityKind::LowContrast,
-                    4.5 - contrast,
+                    deficit,
+                ));
+            }
+            if layer.stroke_width > layer.maximum_outline_px() + 0.01 {
+                self.issues.push(issue(
+                    layer.element,
+                    None,
+                    ReadabilityKind::ThickOutline,
+                    layer.stroke_width / layer.source_font_px.max(1.0),
                 ));
             }
         }
@@ -414,13 +474,15 @@ fn luminance(c: [u8; 4]) -> f32 {
 fn percentile_contrast(samples: &[f32], value: f32, alpha: f32) -> f32 {
     let mut contrasts = samples
         .iter()
-        .map(|v| {
-            let composited = value * alpha + v * (1.0 - alpha);
-            (v.max(composited) + 0.05) / (v.min(composited) + 0.05)
-        })
+        .map(|v| contrast_on(*v, value, alpha))
         .collect::<Vec<_>>();
     contrasts.sort_by(f32::total_cmp);
     contrasts[contrasts.len() / 10]
+}
+
+fn contrast_on(background: f32, foreground: f32, alpha: f32) -> f32 {
+    let composited = foreground * alpha + background * (1.0 - alpha);
+    (background.max(composited) + 0.05) / (background.min(composited) + 0.05)
 }
 
 #[cfg(test)]
@@ -588,6 +650,80 @@ mod tests {
     }
 
     #[test]
+    fn textured_background_requires_a_visible_contrasting_outline_at_reader_width() {
+        let id = EntityId::new();
+        let mut report = ReadabilityReport {
+            page: EntityId::new(),
+            page_width: 960,
+            page_height: 1378,
+            reader_widths: READER_WIDTHS.to_vec(),
+            minimum_font_px: MINIMUM_READER_FONT,
+            layers: vec![ReadableText {
+                element: id,
+                text: "Narration over screentones".into(),
+                source_font_px: 30.0,
+                display_font_px: vec![12.1875, 30.0],
+                fonts: vec![],
+                bounds: [0.0, 0.0, 120.0, 120.0],
+                layout_bounds: [0.0, 0.0, 120.0, 120.0],
+                color: [0, 0, 0, 255],
+                opacity: 1.0,
+                stroke_width: 0.84,
+                stroke_color: Some([255, 255, 255, 255]),
+                background: None,
+            }],
+            issues: vec![],
+        };
+        let artwork = image::RgbaImage::from_fn(120, 120, |x, y| {
+            image::Rgba(if x < 60 || y % 4 == 0 {
+                [0, 0, 0, 255]
+            } else {
+                [230, 230, 230, 255]
+            })
+        });
+        report.sample_background(&artwork);
+        assert!(
+            report
+                .issues
+                .iter()
+                .any(|i| i.kind == ReadabilityKind::LowContrast),
+            "a subpixel halo on screentones must not pass the contrast audit"
+        );
+        let faint = report.clone();
+        report.layers[0].color = [255, 255, 255, 255];
+        report.layers[0].stroke_color = Some([0, 0, 0, 255]);
+        report.layers[0].stroke_width = 960.0 / 390.0;
+        report.sample_background(&artwork);
+        assert!(
+            report.issues.is_empty(),
+            "one reader pixel of contrasting halo must remain valid"
+        );
+        assert!(
+            !report.regressions(&faint).is_empty(),
+            "thinning the halo must be a rejected regression"
+        );
+        let fixed = report.clone();
+        report.layers[0].stroke_color = Some([255, 255, 255, 255]);
+        report.sample_background(&artwork);
+        assert!(
+            report
+                .issues
+                .iter()
+                .any(|i| i.kind == ReadabilityKind::LowContrast),
+            "an outline matching the fill cannot create separation"
+        );
+        report = fixed;
+        report.layers[0].stroke_width = 58.0;
+        report.sample_background(&artwork);
+        assert!(
+            report
+                .issues
+                .iter()
+                .any(|i| i.kind == ReadabilityKind::ThickOutline)
+        );
+    }
+
+    #[test]
     fn background_sampling_distinguishes_light_dark_and_mixed_art_without_sampling_text() {
         let id = EntityId::new();
         let text = ReadableText {
@@ -672,8 +808,11 @@ mod tests {
                 > 0.8
         );
         assert!(
-            report.issues.is_empty(),
-            "mixed artwork requires visual judgement"
+            report
+                .issues
+                .iter()
+                .any(|i| i.kind == ReadabilityKind::LowContrast),
+            "unoutlined text disappearing into mixed artwork needs repair"
         );
         let mut title = dark;
         title.layers[0].color = [160, 70, 140, 255];
