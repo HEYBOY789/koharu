@@ -500,6 +500,135 @@ async fn native_layout_candidates_enlarge_cramped_text_atomically_and_reject_sta
 }
 
 #[tokio::test]
+async fn free_text_layout_preserves_original_lettering_footprint_on_artwork() -> Result<()> {
+    let mut f = Fixture::new().await?;
+    f.edit(
+        "set_geometry",
+        json!({"element":f.layer,"points":[
+            {"x":100,"y":100},{"x":200,"y":100},{"x":200,"y":240},{"x":100,"y":240}
+        ]}),
+    )
+    .await?;
+    f.edit(
+        "set_typography",
+        json!({"element":f.layer,"size":16,"auto_fit":false,"color":[0,0,0,255]}),
+    )
+    .await?;
+    let snapshot = f.project.snapshot();
+    let patch = snapshot.patch(|edit| {
+        let content = snapshot.text_layer(f.layer)?.content()?.id();
+        edit.set(
+            content,
+            &koharu_scene::TextRole {
+                origin: koharu_scene::Origin::User,
+                role: "dev.koharu.text.free-text".into(),
+            },
+        )?;
+        let region = edit.add_analysis_region::<koharu_scene::TextRegion>(
+            f.page,
+            At::End,
+            &koharu_scene::Geometry::rectangle(100.0, 100.0, 100.0, 140.0),
+            None,
+        )?;
+        edit.relate::<koharu_scene::RecognizedFrom>(content, region)?;
+        Ok(())
+    })?;
+    let initial = f.project.commit(patch).await?.snapshot;
+    let renderer = koharu_renderer::Renderer::new()?;
+    let rasterizer = Arc::new(koharu_rasterizer::Rasterizer::new()?);
+    let frame = renderer.render(&initial, f.page).await?;
+    let mut before = frame.readability();
+    before
+        .sample_background(&output::frame_image(rasterizer.clone(), &frame.without_text()?).await?);
+    let proposals = readability::search_layouts(
+        &renderer,
+        rasterizer.clone(),
+        &initial,
+        f.page,
+        serde_json::from_value(
+            json!({"element":f.layer,"area":[70,80,300,300],"avoid":[[240,80,140,300]]}),
+        )?,
+        &before,
+        &Control::default(),
+    )
+    .await?;
+    let result = proposals.invocation(rasterizer).await?;
+    let choices = result.value["candidates"]
+        .as_array()
+        .context("candidates")?;
+    assert!(
+        !choices.is_empty(),
+        "a modest improvement still fits the original lettering area"
+    );
+    for choice in choices {
+        for key in ["bounds", "frame_bounds"] {
+            let b: [f32; 4] = serde_json::from_value(choice[key].clone())?;
+            assert!(
+                b[0] >= 89.99 && b[1] >= 85.99 && b[0] + b[2] <= 210.01 && b[1] + b[3] <= 254.01,
+                "free lettering expanded away from the source composition to reach a generic phone threshold: {b:?}"
+            );
+        }
+    }
+    let oversized = initial.patch(|edit| {
+        edit.set(
+            f.layer,
+            &koharu_scene::Geometry::rectangle(80.0, 80.0, 240.0, 300.0),
+        )?;
+        let mut style = initial
+            .component::<koharu_scene::Typography>(f.layer)?
+            .unwrap();
+        style.size = Some(30.0);
+        style.auto_fit = false;
+        edit.set(f.layer, &style)
+    })?;
+    assert!(
+        readability::checked_candidate(
+            &renderer,
+            Arc::new(koharu_rasterizer::Rasterizer::new()?),
+            &initial,
+            &oversized,
+            f.page,
+            &before
+        )
+        .await
+        .is_err(),
+        "separate geometry/typography edits cannot bypass original-composition protection"
+    );
+    let zoomed = initial.preview([&oversized])?;
+    let zoomed_frame = renderer.render(&zoomed, f.page).await?;
+    let rasterizer = Arc::new(koharu_rasterizer::Rasterizer::new()?);
+    let mut zoomed_report = zoomed_frame.readability();
+    zoomed_report.sample_background(
+        &output::frame_image(rasterizer.clone(), &zoomed_frame.without_text()?).await?,
+    );
+    let restore = zoomed.patch(|edit| {
+        edit.set(
+            f.layer,
+            &initial
+                .component::<koharu_scene::Geometry>(f.layer)?
+                .unwrap(),
+        )?;
+        edit.set(
+            f.layer,
+            &initial
+                .component::<koharu_scene::Typography>(f.layer)?
+                .unwrap(),
+        )
+    })?;
+    readability::checked_candidate(
+        &renderer,
+        rasterizer,
+        &zoomed,
+        &restore,
+        f.page,
+        &zoomed_report,
+    )
+    .await
+    .context("returning an oversized edit to source scale must allow its smaller font")?;
+    Ok(())
+}
+
+#[tokio::test]
 async fn declined_dialogue_removal_does_not_poison_the_readability_run() -> Result<()> {
     let f = Fixture::new().await?;
     let snapshot = f.project.snapshot();

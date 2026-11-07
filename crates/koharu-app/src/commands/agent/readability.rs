@@ -18,6 +18,70 @@ use crate::commands::{
 mod layout;
 pub(super) use layout::{LayoutProposals, LayoutSearch, search_layouts};
 
+#[derive(Clone, Serialize)]
+pub(super) struct SourcePlacement {
+    pub bounds: [f32; 4],
+    pub limit: [f32; 4],
+}
+
+impl SourcePlacement {
+    pub fn excess(&self, bounds: [f32; 4]) -> f32 {
+        let [x, y, w, h] = self.limit;
+        (x - bounds[0])
+            .max(y - bounds[1])
+            .max(bounds[0] + bounds[2] - x - w)
+            .max(bounds[1] + bounds[3] - y - h)
+            .max(0.0)
+    }
+}
+
+pub(super) fn source_placement(
+    snapshot: &Snapshot,
+    element: EntityId,
+) -> Result<Option<SourcePlacement>> {
+    let content = snapshot.text_layer(element)?.content()?;
+    if !content
+        .role()?
+        .is_some_and(|role| role.role == "dev.koharu.text.free-text")
+    {
+        return Ok(None);
+    }
+    let Some(region) = content.source_region()? else {
+        return Ok(None);
+    };
+    let points = region.geometry()?.points;
+    if points.is_empty() {
+        return Ok(None);
+    }
+    let b = points.iter().fold(
+        [
+            f64::INFINITY,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+            f64::NEG_INFINITY,
+        ],
+        |b, p| [b[0].min(p.x), b[1].min(p.y), b[2].max(p.x), b[3].max(p.y)],
+    );
+    let bounds = [
+        b[0] as f32,
+        b[1] as f32,
+        (b[2] - b[0]) as f32,
+        (b[3] - b[1]) as f32,
+    ];
+    if bounds[2] <= 0.0 || bounds[3] <= 0.0 {
+        return Ok(None);
+    }
+    // OCR boxes are approximate. A small allowance accommodates translated
+    // line breaks and outlines while retaining the source's composition.
+    let limit = [
+        bounds[0] - bounds[2] * 0.1,
+        bounds[1] - bounds[3] * 0.1,
+        bounds[2] * 1.2,
+        bounds[3] * 1.2,
+    ];
+    Ok(Some(SourcePlacement { bounds, limit }))
+}
+
 /// Compare original OCR regions even if automatic layout separated the rendered text.
 pub(super) fn source_duplicates(
     snapshot: &Snapshot,
@@ -95,7 +159,39 @@ pub(super) async fn checked_candidate(
     let background =
         crate::commands::output::frame_image(rasterizer, &frame.without_text()?).await?;
     report.sample_background(&background);
-    let regressions = before.regressions(&report);
+    let mut protected = before.clone();
+    let mut placement_errors = vec![];
+    for old in &before.layers {
+        if let Some(reference) = source_placement(snapshot, old.element)?
+            && let Some(next) = report
+                .layers
+                .iter()
+                .find(|layer| layer.element == old.element)
+        {
+            let old_excess = reference
+                .excess(old.bounds)
+                .max(reference.excess(old.layout_bounds));
+            let next_excess = reference
+                .excess(next.bounds)
+                .max(reference.excess(next.layout_bounds));
+            if next_excess > old_excess + 0.25 {
+                placement_errors.push(format!("{}: free text expanded beyond its original lettering footprint. Keep its source scale/placement; the phone-size warning is not a mandatory enlargement target",old.element));
+            }
+            if old_excess > 0.25 && next_excess <= 0.25 {
+                // Correcting an oversized prior edit may reduce its font. The
+                // saved result still receives the normal small-text warning.
+                protected
+                    .layers
+                    .iter_mut()
+                    .find(|l| l.element == old.element)
+                    .unwrap()
+                    .display_font_px
+                    .clone_from(&next.display_font_px);
+            }
+        }
+    }
+    let mut regressions = protected.regressions(&report);
+    regressions.extend(placement_errors);
     if !regressions.is_empty() {
         return Err(CandidateRegression(regressions.join("; ")).into());
     }
@@ -1047,6 +1143,17 @@ mod tests {
                 )
                 .await?;
                 std::fs::write(output.join(format!("page-{page}-{width}.webp")), bytes)?;
+                let original = crate::commands::output::frame_preview(
+                    rasterizer.clone(),
+                    &frame.original_artwork()?,
+                    None,
+                    Some(width),
+                )
+                .await?;
+                std::fs::write(
+                    output.join(format!("page-{page}-original-{width}.webp")),
+                    original,
+                )?;
             }
             let mut report = frame.readability();
             source_duplicates(&snapshot, &mut report)?;

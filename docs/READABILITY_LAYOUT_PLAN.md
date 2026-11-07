@@ -26,6 +26,10 @@ saved page.
 - Use the native prepared frame and renderer for all measurements and previews.
   Reject overflow, new text overlaps, worse measured readability, and placement
   outside permitted space or over protected areas.
+- Preserve source composition for free text on artwork. Intersect placement with
+  original OCR bounds plus a small allowance, and protect the same boundary in
+  direct geometry/typography edits. A phone-size warning does not justify enlarging
+  small source narration into surrounding art.
 - Search is bounded and read-only. Return up to three distinct candidates with
   phone (390 px) and desktop (960 px) previews, measured sizes and remaining issues.
 - Applying a candidate requires the same project/page revision and review scope.
@@ -75,3 +79,22 @@ unchanged. Both 390px and 960px before/after renders were inspected.
 The debug Windows executable was built, installed and checked with `--version`;
 the previous executable is retained as a backup. Samples, renders and installation
 receipts remain in ignored `temp/`, outside source control.
+
+### Source-scale correction
+
+The user's original panel exposed a quality error in the previous acceptance:
+reaching 12px made the narration much larger than its English reference. A new
+native regression reproduces that expansion and requires modest improvement
+inside the original footprint. The fix uses 10% padding per side, anchors search
+to the source, and guards direct edits too. Agent guidance now prioritizes source
+scale and placement; remaining small-text warnings are reported honestly. The
+original English frame is included in new visual captures for comparison.
+
+The regression passed for both bounded layout search and rejection of a direct
+oversized patch. It also confirms that returning an already oversized edit to
+the source footprint may reduce its font. Six related native checks passed.
+Pi then reviewed the same six-layer translated checkpoint: hair narration grew
+from 6.53px to 8.76px at phone width, retaining its source-side placement instead
+of spreading toward the eye. Four phone-size warnings remain explicitly reported.
+All six translations and the user's current project state hashes are unchanged.
+Original-English / oversized-previous / corrected comparisons were inspected.

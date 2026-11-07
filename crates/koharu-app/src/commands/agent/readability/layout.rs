@@ -10,7 +10,7 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use super::{repair_style, source_duplicates, typography};
+use super::{SourcePlacement, repair_style, source_duplicates, source_placement, typography};
 use crate::commands::{editing::TypographyUpdate, output, project::Project};
 
 #[derive(Deserialize, JsonSchema)]
@@ -43,6 +43,7 @@ pub(in crate::commands::agent) struct LayoutProposals {
     area: [f32; 4],
     attempts: usize,
     candidates: Vec<Candidate>,
+    reference: Option<SourcePlacement>,
 }
 
 impl LayoutProposals {
@@ -51,7 +52,7 @@ impl LayoutProposals {
         rasterizer: Arc<koharu_rasterizer::Rasterizer>,
     ) -> Result<Invocation> {
         let mut result = Invocation::read(json!({
-            "page":self.page,"element":self.element,"area":self.area,"attempts":self.attempts,
+            "page":self.page,"element":self.element,"area":self.area,"attempts":self.attempts,"source_placement":self.reference,
             "candidates":self.candidates.iter().map(|c| json!({
                 "candidate":c.id,"frame":c.geometry,"angle_degrees":c.angle_degrees,"bounds":c.measured.bounds,"frame_bounds":c.measured.layout_bounds,
                 "source_font_px":c.measured.source_font_px,"display_font_px":c.measured.display_font_px,
@@ -59,7 +60,7 @@ impl LayoutProposals {
                 "remaining_issues":c.report.issues.iter().filter(|i|i.element==self.element || i.related==Some(self.element)).collect::<Vec<_>>()
             })).collect::<Vec<_>>(),
             "next":if self.candidates.is_empty() {
-                "The bounded search found no improving layout in this permitted area. Inspect the original/crop, try a different safe area, or report the remaining defect as needs_review. No edit was saved."
+                "The bounded search found no improving layout in this permitted area and original lettering footprint. Inspect the source; preserve its visual scale rather than expanding narration to reach the phone-size warning. No edit was saved."
             } else {
                 "No edit was saved. Compare the candidate images at phone and desktop sizes, then call repair_text with page and candidate (the chosen ID). Re-audit and view the saved page before verification."
             }
@@ -294,9 +295,26 @@ pub(in crate::commands::agent) async fn search_layouts(
         area: query.area,
         attempts: 0,
         candidates: vec![],
+        reference: source_placement(snapshot, element)?,
     };
+    let area = if let Some(reference) = &proposals.reference {
+        let x = query.area[0].max(reference.limit[0]);
+        let y = query.area[1].max(reference.limit[1]);
+        let w = (query.area[0] + query.area[2]).min(reference.limit[0] + reference.limit[2]) - x;
+        let h = (query.area[1] + query.area[3]).min(reference.limit[1] + reference.limit[3]) - y;
+        if w <= 0.0 || h <= 0.0 {
+            return Ok(proposals);
+        }
+        [x, y, w, h]
+    } else {
+        query.area
+    };
+    let anchor = proposals
+        .reference
+        .as_ref()
+        .map_or(measured.layout_bounds, |r| r.bounds);
     let mut variants = vec![];
-    for rect in frames(query.area, &avoid, measured.layout_bounds) {
+    for rect in frames(area, &avoid, anchor) {
         for angle in &angles {
             variants.push((rect, *angle));
         }
@@ -350,9 +368,9 @@ pub(in crate::commands::agent) async fn search_layouts(
                 .find(|l| l.element == element)
                 .cloned()
                 .context("candidate text disappeared")?;
-            let valid = contains(query.area, rect)
-                && contains(query.area, layer.bounds)
-                && contains(query.area, layer.layout_bounds)
+            let valid = contains(area, rect)
+                && contains(area, layer.bounds)
+                && contains(area, layer.layout_bounds)
                 && avoid.iter().all(|r| {
                     !intersects(*r, rect)
                         && !intersects(*r, layer.bounds)
