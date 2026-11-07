@@ -344,17 +344,17 @@ fn repair_style(
                 color[..3].iter().max().unwrap() - color[..3].iter().min().unwrap() < 16
             };
             if neutral(layer.color) && layer.stroke_color.is_none_or(neutral) {
-                let light_fill = bg.dark_fraction >= 0.5;
-                typography.color = Some(if light_fill {
-                    [255, 255, 255, 255]
-                } else {
-                    [0, 0, 0, 255]
-                });
-                typography.stroke_color = Some(if light_fill {
-                    [0, 0, 0, 255]
-                } else {
-                    [255, 255, 255, 255]
-                });
+                // Background luminance cannot identify the source lettering's
+                // polarity. Keep the letter faces and strengthen their halo.
+                if layer.stroke_color.is_none() || bg.paired_contrast < 4.5 {
+                    let light_fill =
+                        layer.color[..3].iter().map(|c| u16::from(*c)).sum::<u16>() >= 384;
+                    typography.stroke_color = Some(if light_fill {
+                        [0, 0, 0, 255]
+                    } else {
+                        [255, 255, 255, 255]
+                    });
+                }
             } else if layer.stroke_color.is_none() {
                 typography.stroke_color = Some(if bg.dark_fraction >= 0.5 {
                     [255, 255, 255, 255]
@@ -925,6 +925,45 @@ impl Review {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn outline_repair_keeps_black_letter_faces_inside_white_halos_on_dark_art() -> Result<()> {
+        let style: Typography = serde_json::from_value(serde_json::json!({
+            "auto_fit":false,"size":24.0,"color":[0,0,0,255],"stroke_color":[255,255,255,255],"stroke_width":0.5
+        }))?;
+        let mut measured = ReadableText {
+            element: EntityId::new(),
+            text: "Narration on artwork".into(),
+            source_font_px: 24.0,
+            display_font_px: vec![9.75, 24.0],
+            fonts: vec![],
+            bounds: [0.0, 0.0, 100.0, 100.0],
+            layout_bounds: [0.0, 0.0, 100.0, 100.0],
+            color: [0, 0, 0, 255],
+            stroke_color: Some([255, 255, 255, 255]),
+            stroke_width: 0.5,
+            opacity: 1.0,
+            background: None,
+        };
+        for dark_fraction in [0.3, 0.8, 1.0] {
+            measured.background = Some(koharu_renderer::Background {
+                dark_fraction,
+                light_fraction: 1.0 - dark_fraction,
+                luminance_spread: 1.0,
+                fill_contrast: 1.0,
+                outline_contrast: if dark_fraction == 1.0 { 21.0 } else { 1.0 },
+                paired_contrast: 21.0,
+                required_outline_px: 960.0 / 390.0,
+            });
+            let repaired = repair_style(style.clone(), &measured, WritingMode::Horizontal);
+            assert_eq!(repaired.color, style.color, "retain the black letter faces");
+            assert_eq!(
+                repaired.stroke_color, style.stroke_color,
+                "retain the white halo"
+            );
+            assert!(repaired.stroke_width.unwrap() > measured.stroke_width);
+        }
+        Ok(())
+    }
     #[test]
     fn outline_repair_preserves_colored_lettering_palette() -> Result<()> {
         let style: Typography = serde_json::from_value(serde_json::json!({
