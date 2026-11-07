@@ -334,6 +334,172 @@ struct NativeHost {
 }
 
 #[tokio::test]
+async fn native_layout_candidates_enlarge_cramped_text_atomically_and_reject_stale_choices()
+-> Result<()> {
+    let mut f = Fixture::new().await?;
+    f.edit(
+        "set_geometry",
+        json!({"element":f.layer,"points":[
+            {"x":10,"y":20},{"x":210,"y":20},{"x":210,"y":60},{"x":10,"y":60}
+        ]}),
+    )
+    .await?;
+    f.edit(
+        "set_typography",
+        json!({"element":f.layer,"size":12,"auto_fit":false,"color":[0,0,0,255]}),
+    )
+    .await?;
+    let snapshot = f.project.snapshot();
+    let rotated = snapshot.patch(|edit| {
+        let mut layout = snapshot
+            .component::<koharu_scene::TextLayout>(f.layer)?
+            .unwrap();
+        layout.angle_degrees = Some(18.0);
+        edit.set(f.layer, &layout)
+    })?;
+    f.project.commit(rotated).await?;
+    let _directory = f.directory;
+    let page = f.page;
+    let element = f.layer;
+    let project = Arc::new(tokio::sync::Mutex::new(f.project));
+    let raw = NativeHost {
+        project: project.clone(),
+        binding: None,
+        renderer: koharu_renderer::Renderer::new()?,
+        calls: Default::default(),
+        argument_faults: Default::default(),
+    };
+    let control = Control::default();
+    let host = raw.bind(RunId::new(), control.clone()).await?;
+    host.context().await?;
+    host.invoke(
+        call(
+            "set_edit_scope",
+            json!({"first_page":page,"last_page":page,"readability":true}),
+        ),
+        &control,
+    )
+    .await?;
+    host.invoke(call("audit_readability", json!({"page":page})), &control)
+        .await?;
+    host.invoke(call("view_page", json!({"page":page})), &control)
+        .await?;
+    let initial = project.lock().await.snapshot();
+    let mut report = raw.renderer.render(&initial, page).await?.readability();
+    let rasterizer = Arc::new(koharu_rasterizer::Rasterizer::new()?);
+    report.sample_background(
+        &output::frame_image(
+            rasterizer.clone(),
+            &raw.renderer.render(&initial, page).await?.without_text()?,
+        )
+        .await?,
+    );
+    let fixed_frame =
+        readability::repair_batch(&raw.renderer, rasterizer, &initial, &[element], &report).await?;
+    assert!(
+        fixed_frame
+            .report
+            .layers
+            .iter()
+            .find(|l| l.element == element)
+            .unwrap()
+            .display_font_px[0]
+            < 12.0,
+        "size-only fitting must reproduce cramped text before layout search"
+    );
+    let before = serde_json::to_value(Project::page(&initial, page)?)?;
+    let revision = initial.revision();
+    let proposals = host
+        .invoke(
+            call(
+                "repair_text",
+                json!({"page":page,"layout":{
+                    "element":element,"area":[10,20,350,360],"avoid":[[220,20,140,360]]
+                }}),
+            ),
+            &control,
+        )
+        .await?;
+    assert!(!proposals.changed);
+    assert_eq!(
+        project.lock().await.revision(),
+        revision,
+        "preview must not save"
+    );
+    let candidates = proposals.value["candidates"]
+        .as_array()
+        .context("layout candidates")?;
+    assert!(!candidates.is_empty() && candidates.len() <= 3);
+    assert_eq!(
+        proposals.images.len(),
+        candidates.len() * 2,
+        "phone and desktop for each choice"
+    );
+    for candidate in candidates {
+        for key in ["bounds", "frame_bounds"] {
+            let bounds: [f32; 4] = serde_json::from_value(candidate[key].clone())?;
+            assert!(
+                bounds[0] >= 9.99 && bounds[1] >= 19.99,
+                "rotated {key} crossed permitted space: {bounds:?}"
+            );
+            assert!(
+                bounds[0] + bounds[2] <= 220.01 && bounds[1] + bounds[3] <= 380.01,
+                "rotated candidate {key} crosses protected artwork: {bounds:?}"
+            );
+        }
+    }
+    let chosen = candidates
+        .iter()
+        .find(|c| c["display_font_px"][0].as_f64().unwrap_or(0.0) >= 12.0)
+        .with_context(||format!("cramped text must reach the phone minimum in the taller permitted frame: {candidates:?}"))?;
+    let candidate = chosen["candidate"]
+        .as_str()
+        .context("candidate ID")?
+        .to_owned();
+    let applied = host
+        .invoke(
+            call("repair_text", json!({"page":page,"candidate":candidate})),
+            &control,
+        )
+        .await?;
+    assert!(applied.changed);
+    let mut locked = project.lock().await;
+    let after = locked.snapshot();
+    assert_eq!(
+        initial.text_layer(element)?.content()?.translation()?,
+        after.text_layer(element)?.content()?.translation()?
+    );
+    assert_ne!(
+        initial.component::<koharu_scene::Geometry>(element)?,
+        after.component::<koharu_scene::Geometry>(element)?
+    );
+    locked.undo().await?;
+    assert_eq!(
+        serde_json::to_value(Project::page(&locked.snapshot(), page)?)?,
+        before,
+        "one undo must restore geometry and typography together"
+    );
+    drop(locked);
+    host.context().await?;
+    host.invoke(call("audit_readability", json!({"page":page})), &control)
+        .await?;
+    host.invoke(call("view_page", json!({"page":page})), &control)
+        .await?;
+    let revision = project.lock().await.revision();
+    assert!(
+        host.invoke(
+            call("repair_text", json!({"page":page,"candidate":candidate})),
+            &control
+        )
+        .await
+        .is_err(),
+        "a visually identical page after undo still has a different base revision"
+    );
+    assert_eq!(project.lock().await.revision(), revision);
+    Ok(())
+}
+
+#[tokio::test]
 async fn declined_dialogue_removal_does_not_poison_the_readability_run() -> Result<()> {
     let f = Fixture::new().await?;
     let snapshot = f.project.snapshot();
@@ -1083,6 +1249,7 @@ impl NativeHost {
                 }
                 "repair_text" => {
                     let a: RepairText = arguments(&call)?;
+                    a.validate()?;
                     let page = entity(&a.page)?;
                     let elements = entities(&a.elements)?;
                     scope::check(
@@ -1097,24 +1264,61 @@ impl NativeHost {
                         .lock()
                         .before_edit(page, readability::stamp(&snapshot, page)?)?
                         .context("audit and view first")?;
-                    let batch = readability::repair_batch(
-                        &self.renderer,
-                        Arc::new(koharu_rasterizer::Rasterizer::new()?),
-                        &snapshot,
-                        &elements,
-                        &before,
-                    )
-                    .await?;
-                    let commit = project.commit(batch.patch).await?;
-                    project.record_commit(&commit);
-                    if commit.changes.from != commit.changes.to {
-                        binding.review.lock().changed(page);
+                    if let Some(layout) = a.layout {
+                        scope::check(
+                            &snapshot,
+                            binding.pages.lock().as_deref(),
+                            &[page, entity(&layout.element)?],
+                        )?;
+                        let rasterizer = Arc::new(koharu_rasterizer::Rasterizer::new()?);
+                        let proposals = readability::search_layouts(
+                            &self.renderer,
+                            rasterizer.clone(),
+                            &snapshot,
+                            page,
+                            layout,
+                            &before,
+                            control,
+                        )
+                        .await?;
+                        let result = proposals.invocation(rasterizer).await?;
+                        anyhow::ensure!(
+                            !control.is_cancelled(),
+                            "Layout search cancelled; no edit was saved"
+                        );
+                        binding.review.lock().propose_layouts(proposals);
+                        result
+                    } else {
+                        let (patch, value) = if let Some(candidate) = a.candidate {
+                            binding
+                                .review
+                                .lock()
+                                .layout_choice(&snapshot, page, &candidate)?
+                        } else {
+                            let batch = readability::repair_batch(
+                                &self.renderer,
+                                Arc::new(koharu_rasterizer::Rasterizer::new()?),
+                                &snapshot,
+                                &elements,
+                                &before,
+                            )
+                            .await?;
+                            (
+                                batch.patch,
+                                json!({"page":page,"elements":batch.elements,"removed_duplicates":batch.removed_duplicates,"balanced_groups":batch.balanced_groups,"remaining_issues":batch.report.issues,"declined":batch.declined}),
+                            )
+                        };
+                        anyhow::ensure!(
+                            !control.is_cancelled(),
+                            "Agent request cancelled; no edit saved"
+                        );
+                        let commit = project.commit(patch).await?;
+                        project.record_commit(&commit);
+                        if commit.changes.from != commit.changes.to {
+                            binding.review.lock().changed(page);
+                        }
+                        mutation_result(&project, &commit, value)?
                     }
-                    mutation_result(
-                        &project,
-                        &commit,
-                        json!({"page":page,"elements":batch.elements,"removed_duplicates":batch.removed_duplicates,"balanced_groups":batch.balanced_groups,"remaining_issues":batch.report.issues,"declined":batch.declined}),
-                    )?
                 }
                 "verify_readability" => {
                     let a: VerifyReadability = arguments(&call)?;
@@ -1214,7 +1418,11 @@ impl NativeHost {
             }
         };
         *binding.observed.lock() = Some(project.revision());
-        self.calls.lock().push(json!({"tool":call.name,"arguments":serde_json::from_str::<Value>(&call.arguments)?,"changed":result.changed,"coverage":binding.review.lock().progress()}));
+        let mut recorded = json!({"tool":call.name,"arguments":serde_json::from_str::<Value>(&call.arguments)?,"changed":result.changed,"coverage":binding.review.lock().progress()});
+        if result.value.get("candidates").is_some() {
+            recorded["layout_preview"] = result.value.clone();
+        }
+        self.calls.lock().push(recorded);
         Ok(result)
     }
 }

@@ -169,6 +169,7 @@ async fn dispatch(
                     for image in invocation.images {
                         if let Some((header, data)) = image.data_url.split_once(";base64,") {
                             if let Some(mime) = header.strip_prefix("data:") {
+                                content.push(json!({"type":"text","text":image.label}));
                                 content.push(json!({"type":"image","mimeType":mime,"data":data}));
                             }
                         }

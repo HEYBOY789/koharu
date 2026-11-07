@@ -507,7 +507,46 @@ impl KoharuHost {
     }
 
     async fn repair_text(&self, query: RepairText) -> Result<Invocation> {
+        query.validate()?;
         let page = entity(&query.page)?;
+        if let Some(layout) = query.layout {
+            let desktop = self.handle.state::<Desktop>();
+            let rasterizer = desktop.rasterizer().await?;
+            let projects = self.handle.state::<CurrentProject>();
+            let (project, _) = projects.project.target(self.target()?).await?;
+            self.check_project(&project)?;
+            self.check_revision(&project)?;
+            let snapshot = project.snapshot();
+            scope::check(
+                &snapshot,
+                self.binding.as_ref().unwrap().pages.lock().as_deref(),
+                &[page, entity(&layout.element)?],
+            )?;
+            let binding = self.binding.as_ref().unwrap();
+            let before = binding
+                .review
+                .lock()
+                .before_edit(page, readability::stamp(&snapshot, page)?)?
+                .context("Call audit_readability and view_page before layout search")?;
+            let proposals = readability::search_layouts(
+                &desktop.renderer(),
+                rasterizer.clone(),
+                &snapshot,
+                page,
+                layout,
+                &before,
+                &binding.control,
+            )
+            .await?;
+            let result = proposals.invocation(rasterizer).await?;
+            anyhow::ensure!(
+                !binding.control.is_cancelled(),
+                "Layout search cancelled; no edit was saved"
+            );
+            binding.review.lock().propose_layouts(proposals);
+            self.observe(&project);
+            return Ok(result);
+        }
         let elements = entities(&query.elements)?;
         let targets = std::iter::once(page)
             .chain(elements.iter().copied())
@@ -524,6 +563,11 @@ impl KoharuHost {
                     .lock()
                     .before_edit(page, readability::stamp(&snapshot, page)?)?
                     .context("Call audit_readability and view_page before repair_text")?;
+                if let Some(candidate) = query.candidate {
+                    let (patch,value) = review.lock().layout_choice(&snapshot,page,&candidate)?;
+                    anyhow::ensure!(!control.is_cancelled(), "Agent request was cancelled; no candidate edit was saved");
+                    return Ok((project.commit(patch).await?, value));
+                }
                 let batch =
                     readability::repair_batch(&renderer, rasterizer, &snapshot, &elements, &before).await?;
                 anyhow::ensure!(
@@ -1124,7 +1168,7 @@ fn editor_tools() -> Vec<Tool> {
                         "Render the actual page. Optional element crops around a text layer, preserving nearby artwork. Set original=true to inspect unmodified source artwork without cleanup or translated text; element then crops its ORIGINAL OCR region. Use original=true for conflicting OCR numbers before deleting a duplicate. Original views do not verify the translated page. Omit element for the whole page; display_width=390 simulates phone width, 960 desktop. View the translated full page after edits before verify_readability.",
                     ),
                     definition::<InspectPage>("audit_readability", "Measure rendered text at phone (390px) and desktop (960px) widths. Requires an edit scope and activates review for the scope. Returns fitted font sizes, overflow, overlap candidates, outline ratios and background contrast. An ocr_duplicate entry lists required survivors. If automatic=false, inspect the candidate and all survivors. requires_source_review=true means conflicting OCR clock digits: use view_page original=true and compare them before choosing a copy. Keep uncertain readings needs_review. Follow pagination.next_offset."),
-                    definition::<RepairText>("repair_text", "Repair audited, visually inspected translated text on one page. Supply page alone, or limit the repair to up to 50 visible layer IDs in elements. Native reconciles proven merged OCR, moving a missing leading word into the surviving fragment when it is unambiguous. Comparable dialogue in the same balloon receives a common fitted size. Native tries closer spacing and positions inside the contour, adjusts outlines and contrast, then saves one reversible edit. Returns removed_duplicates, balanced_groups and remaining findings. Re-audit and view the result, and mark unresolved issues needs_review."),
+                    definition::<RepairText>("repair_text", "Repair audited, visually inspected text. page alone or elements (up to 50) repairs typography and proven duplicates in one undo step. For remaining small text, supply layout={element,area:[x,y,width,height],avoid:[[x,y,width,height],...]} from artwork inspection. Native tries joint frames/font sizes/contrast in permitted space, protects existing text and avoid regions, and returns up to 3 read-only phone/desktop previews. Compare them, then call with page and candidate (chosen ID) to save that complete patch atomically. A changed project invalidates candidates. Omit elements when using layout or candidate. Re-audit/view saved results and verify; remaining defects need needs_review."),
                     definition::<VerifyReadability>("verify_readability", "Finish one page only after a fresh audit and a full view_page of the current result. Supply one issue decision for every remaining issue ID. keep is ONLY for visual collision/duplicate false positives; measured small text/overflow/contrast/thick outline must be fixed or marked needs_review with a concrete reason. Native completion requires every scoped page verified; do not claim needs_review pages repaired."),
                     definition::<RenamePage>("rename_page", "Rename a project page."),
                     definition::<MovePage>("move_page", "Move a page to a zero-based GLOBAL project index. This can change its chapter membership. Inspect the returned page position after moving. Both source and destination pages must be in the edit scope."),
@@ -1584,6 +1628,21 @@ struct RepairText {
     /// Omit to repair the eligible flagged layers on the page.
     #[serde(default)]
     elements: Vec<String>,
+    /// Preview complete layouts in explicitly permitted space; saves nothing.
+    layout: Option<readability::LayoutSearch>,
+    /// Apply one ID from the most recent layout preview, at the same revision.
+    candidate: Option<String>,
+}
+
+impl RepairText {
+    fn validate(&self) -> Result<()> {
+        anyhow::ensure!(
+            !(self.layout.is_some() && self.candidate.is_some())
+                && (self.elements.is_empty() || self.layout.is_none() && self.candidate.is_none()),
+            "Use page/elements for ordinary repair, page/layout for previews, or page/candidate for selection"
+        );
+        Ok(())
+    }
 }
 
 #[derive(Deserialize, JsonSchema)]

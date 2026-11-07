@@ -200,6 +200,19 @@ impl Target {
                 }
             }
         }
+        if call.name == "repair_text"
+            && let Ok(id) = serde_json::from_value::<EntityId>(args["layout"]["element"].clone())
+            && let Ok(page) = scope::page_for(snapshot, id)
+        {
+            for entity in [id, page] {
+                if !ids.contains(&entity) {
+                    ids.push(entity);
+                }
+            }
+            if !pages.contains(&page) {
+                pages.push(page);
+            }
+        }
         // IDs under unknown keys are diagnostic only; native argument validation still rejects them.
         if ids.is_empty() {
             for value in args

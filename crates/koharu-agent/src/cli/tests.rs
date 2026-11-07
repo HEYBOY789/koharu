@@ -161,8 +161,16 @@ impl Host for Fixture {
     async fn invoke(&self, call: ToolCall, control: &Control) -> Result<Invocation> {
         control.ensure_running()?;
         match call.name.as_str() {
-            "edit" => { self.0.fetch_add(1, Ordering::SeqCst); Invocation::changed(json!({"text":"changed"})) }
-            "view" => Ok(Invocation::read(json!({"page":"fixture"}))?.with_image("Fixture", "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+j/l8AAAAASUVORK5CYII=")),
+            "edit" => {
+                self.0.fetch_add(1, Ordering::SeqCst);
+                Invocation::changed(json!({"text":"changed"}))
+            }
+            "view" => {
+                let data = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+j/l8AAAAASUVORK5CYII=";
+                Ok(Invocation::read(json!({"page":"fixture"}))?
+                    .with_image("Candidate one: phone 390px", data)
+                    .with_image("Candidate one: desktop 960px", data))
+            }
             _ => bail!("Unknown fixture tool"),
         }
     }
@@ -187,8 +195,12 @@ async fn bridge_streams_changes_and_images_and_rejects_revoked_or_unknown_tools(
         let result: Value = client.post(&bridge.url).json(&json!({"jsonrpc":"2.0","id":id,"method":"tools/call","params":{"name":name,"arguments":{}}})).send().await?.json().await?;
         assert_eq!(result["result"]["isError"], false);
         if name == "view" {
-            assert_eq!(result["result"]["content"][1]["type"], "image");
-            assert_eq!(result["result"]["content"][1]["mimeType"], "image/png");
+            let content = &result["result"]["content"];
+            assert_eq!(content[1]["text"], "Candidate one: phone 390px");
+            assert_eq!(content[2]["type"], "image");
+            assert_eq!(content[2]["mimeType"], "image/png");
+            assert_eq!(content[3]["text"], "Candidate one: desktop 960px");
+            assert_eq!(content[4]["type"], "image");
         }
     }
     assert_eq!(host.0.load(Ordering::SeqCst), 1);

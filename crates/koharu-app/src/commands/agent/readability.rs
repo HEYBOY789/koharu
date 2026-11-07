@@ -15,6 +15,9 @@ use crate::commands::{
     project::{Project, Typography},
 };
 
+mod layout;
+pub(super) use layout::{LayoutProposals, LayoutSearch, search_layouts};
+
 /// Compare original OCR regions even if automatic layout separated the rendered text.
 pub(super) fn source_duplicates(
     snapshot: &Snapshot,
@@ -587,6 +590,7 @@ pub(super) struct Review {
     scope: Option<Vec<EntityId>>,
     pages: HashMap<EntityId, PageReview>,
     source_views: HashMap<EntityId, BlobId>,
+    layouts: Option<LayoutProposals>,
 }
 
 struct PageReview {
@@ -633,6 +637,24 @@ pub(super) fn stamp(snapshot: &Snapshot, page: EntityId) -> Result<BlobId> {
 }
 
 impl Review {
+    pub fn propose_layouts(&mut self, proposals: LayoutProposals) {
+        self.layouts = Some(proposals);
+    }
+
+    pub fn layout_choice(
+        &self,
+        snapshot: &Snapshot,
+        page: EntityId,
+        candidate: &str,
+    ) -> Result<(koharu_scene::Patch, serde_json::Value)> {
+        self.before_edit(page, stamp(snapshot, page)?)?
+            .context("Call audit_readability and view_page before choosing a layout")?;
+        self.layouts
+            .as_ref()
+            .context("Call repair_text with layout to preview candidates first")?
+            .choose(snapshot, page, candidate)
+    }
+
     pub fn begin(&mut self, pages: &[EntityId]) -> Result<()> {
         if let Some(scope) = &self.scope {
             ensure!(
