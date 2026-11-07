@@ -629,6 +629,235 @@ async fn free_text_layout_preserves_original_lettering_footprint_on_artwork() ->
 }
 
 #[tokio::test]
+async fn missing_readability_view_is_recoverable_without_exhausting_tool_failures() -> Result<()> {
+    let f = Fixture::new().await?;
+    let snapshot = f.project.snapshot();
+    let revision = snapshot.revision();
+    let stamp = readability::stamp(&snapshot, f.page)?;
+    let mut review = readability::Review::default();
+    review.begin(&[f.page])?;
+    review.audit(
+        stamp,
+        koharu_renderer::ReadabilityReport {
+            page: f.page,
+            page_width: 1000,
+            page_height: 1600,
+            reader_widths: vec![390, 960],
+            minimum_font_px: 12.0,
+            layers: vec![],
+            issues: vec![],
+        },
+    );
+    let mut ledger = Failures::default();
+    let attempt = Attempt::parse(call("delete_elements", json!({"elements":[f.layer]})))?;
+    let edit = LayerEdit::parse(&attempt.call)?.unwrap();
+    for _ in 0..3 {
+        let rejected = edit.validate_review(&snapshot, &review);
+        assert!(rejected.is_err(), "unviewed page must not be edited");
+        let feedback = ledger.finish(
+            &attempt,
+            Target::capture(&snapshot, &attempt.call)?,
+            rejected.and_then(|_| anyhow::bail!("unviewed edit reached the commit seam")),
+        );
+        assert!(
+            feedback.is_ok(),
+            "missing review prerequisites must return actionable feedback: {feedback:?}"
+        );
+        let feedback = feedback?;
+        assert!(!feedback.changed);
+        assert_eq!(feedback.value["review_required"]["tool"], "view_page");
+        assert_eq!(
+            feedback.value["review_required"]["arguments"],
+            json!({"page":f.page})
+        );
+        assert!(!ledger.exhausted());
+        assert_eq!(snapshot.revision(), revision);
+        assert!(snapshot.text_layer(f.layer).is_ok());
+    }
+    ledger.ensure_complete()?;
+    assert!(
+        review.ensure_complete().is_err(),
+        "a refused edit never verifies the page"
+    );
+    review.viewed(f.page, stamp, None);
+    review.before_edit(f.page, stamp)?;
+    review.verify(f.page, stamp, vec![])?;
+    review.ensure_complete()?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn native_review_prerequisite_recovers_after_edits_without_authorizing_dialogue_deletion()
+-> Result<()> {
+    let mut f = Fixture::new().await?;
+    f.edit(
+        "set_geometry",
+        json!({"element":f.layer,"points":[
+            {"x":10,"y":20},{"x":410,"y":20},{"x":410,"y":220},{"x":10,"y":220}
+        ]}),
+    )
+    .await?;
+    f.edit(
+        "set_typography",
+        json!({"element":f.layer,"size":32,"auto_fit":false,"color":[0,0,0,255]}),
+    )
+    .await?;
+    let _directory = f.directory;
+    let page = f.page;
+    let layer = f.layer;
+    let project = Arc::new(tokio::sync::Mutex::new(f.project));
+    let raw = NativeHost {
+        project: project.clone(),
+        binding: None,
+        renderer: koharu_renderer::Renderer::new()?,
+        calls: Default::default(),
+        argument_faults: Default::default(),
+    };
+    let control = Control::default();
+    let host = raw.bind(RunId::new(), control.clone()).await?;
+    host.context().await?;
+    host.invoke(
+        call(
+            "set_edit_scope",
+            json!({"first_page":page,"last_page":page,"readability":true}),
+        ),
+        &control,
+    )
+    .await?;
+    host.invoke(call("audit_readability", json!({"page":page})), &control)
+        .await?;
+    let revision = project.lock().await.revision();
+    for _ in 0..3 {
+        let feedback = host
+            .invoke(
+                call("delete_elements", json!({"elements":[layer]})),
+                &control,
+            )
+            .await?;
+        assert!(!feedback.changed);
+        assert_eq!(
+            feedback.value["review_required"]["arguments"],
+            json!({"page":page})
+        );
+        assert!(!control.is_cancelled());
+    }
+    assert_eq!(project.lock().await.revision(), revision);
+    assert!(host.ensure_complete().await.is_err());
+    for args in [
+        json!({"page":page,"element":layer}),
+        json!({"page":page,"original":true}),
+    ] {
+        host.invoke(call("view_page", args), &control).await?;
+        let feedback = host
+            .invoke(
+                call("delete_elements", json!({"elements":[layer]})),
+                &control,
+            )
+            .await?;
+        assert_eq!(
+            feedback.value["review_required"]["tool"], "view_page",
+            "a crop or original image is not current full-page review"
+        );
+    }
+    let view = host
+        .invoke(call("view_page", json!({"page":page})), &control)
+        .await?;
+    assert_eq!(
+        view.images.len(),
+        2,
+        "refresh supplies phone and desktop images"
+    );
+    let edit = host
+        .invoke(
+            call(
+                "set_typography",
+                json!({"element":layer,"color":[20,20,20,255]}),
+            ),
+            &control,
+        )
+        .await?;
+    assert!(edit.changed);
+    let feedback = host
+        .invoke(
+            call("delete_elements", json!({"elements":[layer]})),
+            &control,
+        )
+        .await?;
+    assert_eq!(
+        feedback.value["review_required"]["tool"], "view_page",
+        "a saved edit requires a fresh view"
+    );
+    let view = host
+        .invoke(call("view_page", json!({"page":page})), &control)
+        .await?;
+    let declined = host
+        .invoke(
+            call("delete_elements", json!({"elements":[layer]})),
+            &control,
+        )
+        .await?;
+    assert!(!declined.changed);
+    assert!(
+        declined.value["candidate_rejected"].is_string(),
+        "fresh review still cannot authorize ordinary dialogue deletion"
+    );
+    assert!(project.lock().await.snapshot().text_layer(layer).is_ok());
+    let issues = view.value["readability"]["issues"].as_array().context("current view issues")?.iter().map(|issue|json!({
+        "issue":issue["id"],"disposition":"needs_review",
+        "reason":"This fixture checks review recovery and preserves the existing lettering for separate visual assessment."
+    })).collect::<Vec<_>>();
+    host.invoke(
+        call("verify_readability", json!({"page":page,"issues":issues})),
+        &control,
+    )
+    .await?;
+    host.ensure_complete().await?;
+    assert!(!control.is_cancelled());
+    Ok(())
+}
+
+#[tokio::test]
+async fn native_exhausted_tool_failures_keep_their_diagnostic_after_internal_cancellation()
+-> Result<()> {
+    let f = Fixture::new().await?;
+    let _directory = f.directory;
+    let layer = f.layer;
+    let project = Arc::new(tokio::sync::Mutex::new(f.project));
+    let revision = project.lock().await.revision();
+    let raw = NativeHost {
+        project: project.clone(),
+        binding: None,
+        renderer: koharu_renderer::Renderer::new()?,
+        calls: Default::default(),
+        argument_faults: Default::default(),
+    };
+    let control = Control::default();
+    let host = raw.bind(RunId::new(), control.clone()).await?;
+    for _ in 0..3 {
+        assert!(
+            host.invoke(
+                call(
+                    "set_typography",
+                    json!({"element":layer,"font_weight":"bold"})
+                ),
+                &control
+            )
+            .await
+            .is_err()
+        );
+    }
+    assert!(control.is_cancelled(), "malformed calls remain bounded");
+    let error = host.ensure_complete().await.unwrap_err().to_string();
+    assert!(
+        error.contains("set_typography") && error.contains("unresolved tool"),
+        "internal cancellation must preserve the tool diagnostic: {error}"
+    );
+    assert!(!error.contains("Agent request was cancelled"));
+    assert_eq!(project.lock().await.revision(), revision);
+    Ok(())
+}
+
+#[tokio::test]
 async fn declined_dialogue_removal_does_not_poison_the_readability_run() -> Result<()> {
     let f = Fixture::new().await?;
     let snapshot = f.project.snapshot();
@@ -1221,11 +1450,8 @@ impl Host for NativeHost {
 
     async fn ensure_complete(&self) -> Result<()> {
         let binding = self.binding.as_ref().context("bound test host")?;
-        binding.failures.lock().ensure_complete()?;
         let project = self.project.lock().await;
-        let review = binding.review.lock();
-        review.ensure_complete()?;
-        review.ensure_fresh(&project.snapshot())
+        binding.ensure_complete(&project)
     }
 }
 

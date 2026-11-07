@@ -23,6 +23,8 @@ Readability repair preserves dialogue wording, artwork and cleanup. It cannot re
 
 A proposal to delete or hide text without duplicate evidence returns `candidate_rejected` with no mutation. It does not create a pending malformed-call failure that could be cleared only by performing the prohibited edit. The agent must choose a safe layout repair or verify the remaining measured defect as `needs_review`. Invalid arguments, stale state and scope errors keep their bounded recovery checks. Production and the native installed-agent fixture execute the same layer review validation.
 
+A valid edit awaiting a current translated full-page view returns `review_required` with the exact `view_page` arguments and saves nothing. This review prerequisite does not consume the malformed-call retry budget. The agent views both reader sizes and then reconsiders its original edit on the same targets. Coverage still blocks completion until every scoped page is verified. If actual malformed calls exhaust recovery, completion reports the unresolved tool even after the internal run has been cancelled.
+
 ## Limits
 
 Bounding rectangles do not prove glyph collisions. Background sampling is a triage measurement and requires visual checks of the filled glyphs; it does not certify accessibility. A dense printed page may still require zoom or a revised balloon layout on a phone. Ordinary batch fitting keeps existing geometry; layout search may resize a text frame only in explicitly permitted space. The agent owns visual identification of protected artwork: native rectangle constraints do not detect faces or panel borders. Review state and layout candidates belong to the current agent turn and are not a persistent project audit database.

@@ -232,6 +232,34 @@ impl DeclinedEdit {
     }
 }
 
+#[derive(Debug)]
+pub(super) struct ReviewRequired(EntityId);
+
+impl std::fmt::Display for ReviewRequired {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "Call view_page for the current translated full page {} before editing; inspect its text and background after the latest change.",
+            self.0
+        )
+    }
+}
+impl std::error::Error for ReviewRequired {}
+
+impl ReviewRequired {
+    pub fn feedback(&self) -> Result<koharu_agent::Invocation> {
+        koharu_agent::Invocation::read(serde_json::json!({
+            "changed": false,
+            "review_required": {
+                "tool": "view_page",
+                "arguments": {"page": self.0},
+                "reason": self.to_string()
+            },
+            "next": "No edit was applied. Call the indicated view_page without original, element or display_width to refresh the audit and inspect BOTH phone and desktop images of the current translated page. Then reconsider the original edit using the same page/layer IDs. An original-artwork view or an element crop does not replace this full-page review."
+        }))
+    }
+}
+
 pub(super) struct RepairBatch {
     pub patch: koharu_scene::Patch,
     pub report: ReadabilityReport,
@@ -794,18 +822,10 @@ impl Review {
         if !self.active() {
             return Ok(None);
         }
-        let audit = self
-            .pages
-            .get(&page)
-            .context("Call audit_readability for this page before editing it")?;
-        ensure!(
-            audit.stamp == stamp,
-            "Page changed. Call audit_readability again before editing."
-        );
-        ensure!(
-            audit.viewed,
-            "Call view_page before editing this page; inspect the text and its background."
-        );
+        let audit = self.pages.get(&page).ok_or(ReviewRequired(page))?;
+        if audit.stamp != stamp || !audit.viewed {
+            return Err(ReviewRequired(page).into());
+        }
         Ok(Some(audit.report.clone()))
     }
 

@@ -421,6 +421,10 @@ impl Failures {
         result: Result<Invocation>,
     ) -> Result<Invocation> {
         let result = match result {
+            Err(error) if error.is::<super::readability::ReviewRequired>() => error
+                .downcast_ref::<super::readability::ReviewRequired>()
+                .unwrap()
+                .feedback(),
             Err(error) if error.is::<super::readability::DeclinedEdit>() => error
                 .downcast_ref::<super::readability::DeclinedEdit>()
                 .unwrap()

@@ -69,6 +69,19 @@ impl Binding {
         );
         Ok(())
     }
+
+    fn ensure_complete(&self, project: &Project) -> Result<()> {
+        anyhow::ensure!(
+            project.instance_id == self.instance,
+            "Agent project has changed; start a new request"
+        );
+        // Completion diagnostics remain readable after internal cancellation;
+        // otherwise cancellation hides the unresolved tool that caused it.
+        self.failures.lock().ensure_complete()?;
+        let review = self.review.lock();
+        review.ensure_complete()?;
+        review.ensure_fresh(&project.snapshot())
+    }
 }
 
 impl KoharuHost {
@@ -372,11 +385,7 @@ impl Host for KoharuHost {
         let binding = self.binding.as_ref().context("Agent host is unbound")?;
         let projects = self.handle.state::<CurrentProject>();
         let (project, _) = projects.project.target(self.target()?).await?;
-        self.check_project(&project)?;
-        binding.failures.lock().ensure_complete()?;
-        let review = binding.review.lock();
-        review.ensure_complete()?;
-        review.ensure_fresh(&project.snapshot())
+        binding.ensure_complete(&project)
     }
 }
 
