@@ -730,10 +730,30 @@ struct PageReview {
 #[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub(super) struct VerifyReadability {
+    /// Actual PAGE ID from inspect_chapter or view_page, never a text layer/region ID.
     pub page: String,
     /// One decision for EVERY remaining issue ID returned by audit_readability.
     /// Never label small text acceptable merely because it fits its box.
     pub issues: Vec<Decision>,
+}
+
+impl VerifyReadability {
+    pub fn resolve_page(&self, snapshot: &Snapshot) -> Result<EntityId> {
+        let page: EntityId = serde_json::from_value(serde_json::json!(self.page))
+            .context("verify_readability.page must be an inspected page ID")?;
+        if snapshot.page(page).is_ok() {
+            return Ok(page);
+        }
+        if let Ok(owner) = super::scope::page_for(snapshot, page) {
+            anyhow::bail!(
+                "verify_readability.page requires a PAGE ID, but {page} is a layer or other entity on {}. Use page=\"{owner}\" and the current issue IDs from audit_readability/view_page. No page was verified.",
+                super::context::Locations::new(snapshot)?.label(owner)?
+            );
+        }
+        anyhow::bail!(
+            "verify_readability.page {page} is not a current page. Read inspect_chapter for the actual page ID, then audit/view that page before verifying. No page was verified."
+        )
+    }
 }
 
 #[derive(Clone, Deserialize, JsonSchema)]

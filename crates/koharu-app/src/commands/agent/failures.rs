@@ -182,15 +182,18 @@ impl Target {
                 let Ok(id) = serde_json::from_value::<EntityId>(value) else {
                     continue;
                 };
-                if matches!(field, "page" | "pages" | "first_page" | "last_page")
-                    && snapshot.page(id).is_err()
-                {
-                    continue;
-                }
                 let Ok(page) = scope::page_for(snapshot, id) else {
                     continue;
                 };
-                for entity in [id, page] {
+                // A layer supplied in a page-only field is invalid input, not
+                // a layer mutation target. Recovery must retain its owning page
+                // without requiring the same mistaken layer ID in that field.
+                let target = if matches!(field, "page" | "pages" | "first_page" | "last_page") {
+                    page
+                } else {
+                    id
+                };
+                for entity in [target, page] {
                     if !ids.contains(&entity) {
                         ids.push(entity);
                     }
@@ -392,7 +395,7 @@ impl Failures {
                     .entities
                     .iter()
                     .all(|id| target.entities.contains(id)),
-                "Retry must retain the original page/layer targets for failure {id}; a different page cannot resolve it"
+                "Retry must retain the original page and any explicit element targets for failure {id}; correct a layer used as a page ID to its owning page, never a different page"
             );
             let complete_scope = entry
                 .target
@@ -503,7 +506,7 @@ impl Failures {
             "target_count":entry.target.entities.len(),
         })).collect::<Vec<_>>();
         bail!(
-            "Agent has {} unresolved tool calls. {} Retry each ORIGINAL tool using its retry_of ID and corrected arguments, retaining the original page/layer IDs. Other pages' successful calls do not resolve these failures. Inspect IDs/schema as needed; do not broaden the edit scope. Pending preview (resolve these to reveal any remainder): {}",
+            "Agent has {} unresolved tool calls. {} Retry each ORIGINAL tool using its retry_of ID and corrected arguments, retaining the original page and any explicit element targets. Correct wrong entity types using the reported owning page ID. Other pages' successful calls do not resolve these failures. Inspect IDs/schema as needed; do not broaden the edit scope. Pending preview (resolve these to reveal any remainder): {}",
             self.entries.len(),
             if self.exhausted {
                 "Recovery limit reached; user attention is required."

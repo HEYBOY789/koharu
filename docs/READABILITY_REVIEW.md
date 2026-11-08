@@ -25,6 +25,8 @@ A proposal to delete or hide text without duplicate evidence returns `candidate_
 
 A valid edit awaiting a current translated full-page view returns `review_required` with the exact `view_page` arguments and saves nothing. This review prerequisite does not consume the malformed-call retry budget. The agent views both reader sizes and then reconsiders its original edit on the same targets. Coverage still blocks completion until every scoped page is verified. If actual malformed calls exhaust recovery, completion reports the unresolved tool even after the internal run has been cancelled.
 
+`verify_readability.page` requires an actual page ID. A layer ID is rejected with its owning page ID; it is never silently accepted as a page. Retry binding preserves the owning page for page-only fields and the exact layer for explicit element fields, so correcting an entity type can recover without retargeting another page or layer.
+
 ## Limits
 
 Bounding rectangles do not prove glyph collisions. Background sampling is a triage measurement and requires visual checks of the filled glyphs; it does not certify accessibility. A dense printed page may still require zoom or a revised balloon layout on a phone. Ordinary batch fitting keeps existing geometry; layout search may resize a text frame only in explicitly permitted space. The agent owns visual identification of protected artwork: native rectangle constraints do not detect faces or panel borders. Review state and layout candidates belong to the current agent turn and are not a persistent project audit database.

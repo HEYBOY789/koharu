@@ -670,13 +670,19 @@ impl KoharuHost {
             "repair_text" => self.repair_text(arguments(&call)?).await,
             "verify_readability" => {
                 let query: VerifyReadability = arguments(&call)?;
-                let page = entity(&query.page)?;
                 let projects = self.handle.state::<CurrentProject>();
                 let (project, _) = projects.project.target(self.target()?).await?;
                 self.check_project(&project)?;
+                let snapshot = project.snapshot();
+                let page = query.resolve_page(&snapshot)?;
+                scope::check(
+                    &snapshot,
+                    self.binding.as_ref().unwrap().pages.lock().as_deref(),
+                    &[page],
+                )?;
                 self.binding.as_ref().unwrap().review.lock().verify(
                     page,
-                    readability::stamp(&project.snapshot(), page)?,
+                    readability::stamp(&snapshot, page)?,
                     query.issues,
                 )?;
                 Invocation::read(

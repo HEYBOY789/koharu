@@ -629,6 +629,96 @@ async fn free_text_layout_preserves_original_lettering_footprint_on_artwork() ->
 }
 
 #[tokio::test]
+async fn verify_readability_wrong_layer_page_can_retry_with_its_actual_page() -> Result<()> {
+    let f = Fixture::new().await?;
+    let _directory = f.directory;
+    let page = f.page;
+    let layer = f.layer;
+    let other = f.other;
+    let project = Arc::new(tokio::sync::Mutex::new(f.project));
+    let raw = NativeHost {
+        project: project.clone(),
+        binding: None,
+        renderer: koharu_renderer::Renderer::new()?,
+        calls: Default::default(),
+        argument_faults: Default::default(),
+    };
+    let control = Control::default();
+    let host = raw.bind(RunId::new(), control.clone()).await?;
+    host.context().await?;
+    host.invoke(
+        call(
+            "set_edit_scope",
+            json!({"first_page":page,"last_page":page,"readability":true}),
+        ),
+        &control,
+    )
+    .await?;
+    let view = host
+        .invoke(call("view_page", json!({"page":page})), &control)
+        .await?;
+    let issues = view.value["readability"]["issues"].as_array().context("current issues")?.iter().map(|issue|json!({
+        "issue":issue["id"],"disposition":"needs_review",
+        "reason":"This fixture preserves the original lettering while checking recovery of a mistaken page identifier."
+    })).collect::<Vec<_>>();
+    let revision = project.lock().await.revision();
+    let error = host
+        .invoke(
+            call("verify_readability", json!({"page":layer,"issues":issues})),
+            &control,
+        )
+        .await
+        .unwrap_err();
+    let message = error.to_string();
+    assert!(
+        message.contains("PAGE ID") && message.contains(&page.to_string()),
+        "wrong entity type must name the actual owning page: {message}"
+    );
+    let retry = error
+        .downcast_ref::<koharu_agent::ToolRejection>()
+        .context("rejection ID")?
+        .failure_id
+        .clone();
+    assert!(
+        host.ensure_complete().await.is_err(),
+        "rejected verification cannot complete review"
+    );
+    assert!(
+        host.invoke(
+            call(
+                "verify_readability",
+                json!({"page":other,"issues":[],"retry_of":retry})
+            ),
+            &control
+        )
+        .await
+        .is_err(),
+        "a different page cannot clear the failure"
+    );
+    let verified = host
+        .invoke(
+            call(
+                "verify_readability",
+                json!({"page":page,"issues":issues,"retry_of":retry}),
+            ),
+            &control,
+        )
+        .await;
+    assert!(
+        verified.is_ok(),
+        "correcting a layer used as page must be admitted on its owning page: {verified:?}"
+    );
+    assert!(
+        !verified?.changed,
+        "verification never mutates project state"
+    );
+    host.ensure_complete().await?;
+    assert_eq!(project.lock().await.revision(), revision);
+    assert!(!control.is_cancelled());
+    Ok(())
+}
+
+#[tokio::test]
 async fn missing_readability_view_is_recoverable_without_exhausting_tool_failures() -> Result<()> {
     let f = Fixture::new().await?;
     let snapshot = f.project.snapshot();
@@ -1677,10 +1767,12 @@ impl NativeHost {
                 }
                 "verify_readability" => {
                     let a: VerifyReadability = arguments(&call)?;
-                    let page = entity(&a.page)?;
+                    let snapshot = project.snapshot();
+                    let page = a.resolve_page(&snapshot)?;
+                    scope::check(&snapshot, binding.pages.lock().as_deref(), &[page])?;
                     binding.review.lock().verify(
                         page,
-                        readability::stamp(&project.snapshot(), page)?,
+                        readability::stamp(&snapshot, page)?,
                         a.issues,
                     )?;
                     Invocation::read(json!({"coverage":binding.review.lock().progress()}))?
