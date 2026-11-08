@@ -629,6 +629,131 @@ async fn free_text_layout_preserves_original_lettering_footprint_on_artwork() ->
 }
 
 #[tokio::test]
+async fn verify_readability_obsolete_issues_refresh_without_cancelling_the_review() -> Result<()> {
+    let f = Fixture::with_chapter_pages(2).await?;
+    let _directory = f.directory;
+    let page = f.page;
+    let other = f.other;
+    let layer = f.layer;
+    let project = Arc::new(tokio::sync::Mutex::new(f.project));
+    let raw = NativeHost {
+        project: project.clone(),
+        binding: None,
+        renderer: koharu_renderer::Renderer::new()?,
+        calls: Default::default(),
+        argument_faults: Default::default(),
+    };
+    let control = Control::default();
+    let host = raw.bind(RunId::new(), control.clone()).await?;
+    host.context().await?;
+    host.invoke(
+        call(
+            "set_edit_scope",
+            json!({"first_page":other,"last_page":page,"readability":true}),
+        ),
+        &control,
+    )
+    .await?;
+    host.invoke(call("view_page", json!({"page":other})), &control)
+        .await?;
+    let verified = host
+        .invoke(
+            call("verify_readability", json!({"page":other,"issues":[]})),
+            &control,
+        )
+        .await?;
+    assert_eq!(verified.value["coverage"]["checked"], 1);
+    host.invoke(call("view_page", json!({"page":page})), &control)
+        .await?;
+    assert!(
+        host.invoke(
+            call(
+                "set_typography",
+                json!({"element":layer,"color":[20,20,20,255]})
+            ),
+            &control,
+        )
+        .await?
+        .changed
+    );
+    let revision = project.lock().await.revision();
+    for _ in 0..3 {
+        let feedback = host
+            .invoke(
+                call("verify_readability", json!({"page":page,"issues":[]})),
+                &control,
+            )
+            .await?;
+        assert!(!feedback.changed);
+        assert_eq!(
+            feedback.value["review_required"]["arguments"],
+            json!({"page":page})
+        );
+        assert!(
+            !control.is_cancelled(),
+            "stale views are refreshable prerequisites"
+        );
+    }
+    let view = host
+        .invoke(call("view_page", json!({"page":page})), &control)
+        .await?;
+    let current = view.value["readability"]["issues"].clone();
+    let repeated = host
+        .invoke(call("view_page", json!({"page":page})), &control)
+        .await?;
+    assert_eq!(
+        repeated.value["readability"]["issues"], current,
+        "unchanged native views must return the same issue identities and measurements"
+    );
+    let decisions = current.as_array().context("current issues")?.iter().map(|issue|json!({
+        "issue":issue["id"],"disposition":"needs_review",
+        "reason":"The existing lettering is preserved while testing recovery from obsolete audit decisions."
+    })).collect::<Vec<_>>();
+    assert!(!decisions.is_empty(), "fixture needs a measured finding");
+    let mut obsolete = decisions.clone();
+    obsolete[0]["issue"] = json!("issue-from-an-older-audit");
+    let mut incomplete = decisions.clone();
+    incomplete.pop();
+    for wrong in [&obsolete, &obsolete, &obsolete, &incomplete] {
+        let feedback = host
+            .invoke(
+                call("verify_readability", json!({"page":page,"issues":wrong})),
+                &control,
+            )
+            .await;
+        assert!(
+            feedback.is_ok(),
+            "an obsolete issue ID must return the current audit without consuming fatal tool recovery: {feedback:?}"
+        );
+        let feedback = feedback?;
+        assert!(!feedback.changed);
+        assert_eq!(feedback.value["verification_required"]["page"], json!(page));
+        assert_eq!(feedback.value["verification_required"]["issues"], current);
+        assert!(!control.is_cancelled());
+        let error = host.ensure_complete().await.unwrap_err();
+        assert!(
+            error.to_string().contains("1 of 2 pages"),
+            "refresh must keep prior coverage and leave only this page unverified: {error}"
+        );
+        assert_eq!(project.lock().await.revision(), revision);
+    }
+    let verified = host
+        .invoke(
+            call(
+                "verify_readability",
+                json!({"page":page,"issues":decisions}),
+            ),
+            &control,
+        )
+        .await?;
+    assert_eq!(verified.value["coverage"]["checked"], 2);
+    host.ensure_complete().await?;
+    assert!(!control.is_cancelled());
+    assert_eq!(project.lock().await.revision(), revision);
+    Ok(())
+}
+
+#[tokio::test]
 async fn verify_readability_wrong_layer_page_can_retry_with_its_actual_page() -> Result<()> {
     let f = Fixture::new().await?;
     let _directory = f.directory;

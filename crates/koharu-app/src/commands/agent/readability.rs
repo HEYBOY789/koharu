@@ -239,7 +239,7 @@ impl std::fmt::Display for ReviewRequired {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "Call view_page for the current translated full page {} before editing; inspect its text and background after the latest change.",
+            "Call view_page for the current translated full page {} before editing or verifying; inspect its text and background after the latest change.",
             self.0
         )
     }
@@ -255,7 +255,41 @@ impl ReviewRequired {
                 "arguments": {"page": self.0},
                 "reason": self.to_string()
             },
-            "next": "No edit was applied. Call the indicated view_page without original, element or display_width to refresh the audit and inspect BOTH phone and desktop images of the current translated page. Then reconsider the original edit using the same page/layer IDs. An original-artwork view or an element crop does not replace this full-page review."
+            "next": "No edit was applied and no page was verified. Call the indicated view_page without original, element or display_width to refresh the audit and inspect BOTH phone and desktop images of the current translated page. Then reconsider the original edit or verification on the same page/layer targets, using the refreshed issue IDs. An original-artwork view or an element crop does not replace this full-page review."
+        }))
+    }
+}
+
+/// Issue identities describe the current audit, not durable project entities.
+/// Reconcile decisions explicitly instead of guessing how obsolete IDs map.
+#[derive(Debug)]
+pub(super) struct VerificationRequired {
+    page: EntityId,
+    issues: Vec<koharu_renderer::ReadabilityIssue>,
+}
+
+impl std::fmt::Display for VerificationRequired {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "Issue decisions do not match the current audit for page {}. No page was verified.",
+            self.page
+        )
+    }
+}
+impl std::error::Error for VerificationRequired {}
+
+impl VerificationRequired {
+    pub fn feedback(&self) -> Result<koharu_agent::Invocation> {
+        koharu_agent::Invocation::read(serde_json::json!({
+            "changed": false,
+            "verified": false,
+            "verification_required": {
+                "page": self.page,
+                "issues": self.issues,
+                "reason": self.to_string()
+            },
+            "next": "Reconsider each current issue on this SAME page, then call verify_readability with exactly one decision per id copied verbatim from verification_required.issues. These issue IDs are not layer IDs and their spelling must not be reconstructed from kind or element. Use needs_review with a concrete reason for real unresolved defects; keep is only for visual collision/duplicate false positives. If you edit the page, view_page again and use its refreshed issue list. This response saved no edit and did not verify the page."
         }))
     }
 }
@@ -732,7 +766,8 @@ struct PageReview {
 pub(super) struct VerifyReadability {
     /// Actual PAGE ID from inspect_chapter or view_page, never a text layer/region ID.
     pub page: String,
-    /// One decision for EVERY remaining issue ID returned by audit_readability.
+    /// One decision for EVERY current issue; copy its exact id from the latest
+    /// full view_page or verification_required.issues (not its kind or element).
     /// Never label small text acceptable merely because it fits its box.
     pub issues: Vec<Decision>,
 }
@@ -877,35 +912,30 @@ impl Review {
         stamp: BlobId,
         decisions: Vec<Decision>,
     ) -> Result<()> {
-        let audit = self
-            .pages
-            .get_mut(&page)
-            .context("Call audit_readability after the latest edit")?;
-        ensure!(
-            audit.stamp == stamp,
-            "Page changed; audit and view it again."
-        );
-        ensure!(
-            audit.viewed && audit.phone && audit.desktop,
-            "View the current page at BOTH phone (390px) and desktop (960px) widths before verifying. view_page without crop/display_width supplies both during review."
-        );
-        ensure!(
-            decisions.len() == audit.report.issues.len(),
-            "Supply exactly one decision per remaining issue, or fix it and audit again."
-        );
+        let audit = self.pages.get_mut(&page).ok_or(ReviewRequired(page))?;
+        if audit.stamp != stamp || !(audit.viewed && audit.phone && audit.desktop) {
+            return Err(ReviewRequired(page).into());
+        }
         let mut seen = std::collections::HashSet::new();
         for decision in &decisions {
-            let issue = audit
-                .report
-                .issues
-                .iter()
-                .find(|i| i.id == decision.issue)
-                .context("Unknown issue ID; use the current audit")?;
             ensure!(seen.insert(&decision.issue), "Duplicate issue decision");
             ensure!(
                 (12..=1000).contains(&decision.reason.trim().len()),
                 "Give a concrete reason (12–1000 bytes)"
             );
+        }
+        let issues = decisions
+            .iter()
+            .map(|decision| audit.report.issues.iter().find(|i| i.id == decision.issue))
+            .collect::<Option<Vec<_>>>();
+        let Some(issues) = issues.filter(|_| decisions.len() == audit.report.issues.len()) else {
+            return Err(VerificationRequired {
+                page,
+                issues: audit.report.issues.clone(),
+            }
+            .into());
+        };
+        for (decision, issue) in decisions.iter().zip(issues) {
             ensure!(
                 decision.disposition != Disposition::Keep
                     || matches!(
@@ -1124,7 +1154,11 @@ mod tests {
             disposition: Disposition::Keep,
             reason: "It fits inside the balloon".into(),
         };
-        assert!(review.verify(page, stamp, vec![decision]).is_err());
+        let error = review.verify(page, stamp, vec![decision]).unwrap_err();
+        assert!(
+            !error.is::<VerificationRequired>() && !error.is::<ReviewRequired>(),
+            "a false claim that a measured defect is acceptable remains a validation failure"
+        );
         review.verify(
             page,
             stamp,
@@ -1136,6 +1170,39 @@ mod tests {
         )?;
         review.ensure_complete()?;
         assert_eq!(review.progress().unwrap().needs_review, 1);
+        Ok(())
+    }
+
+    #[test]
+    fn duplicate_issue_decisions_are_not_an_audit_refresh() -> Result<()> {
+        let page = EntityId::new();
+        let stamp = BlobId::for_bytes(b"current");
+        let mut report = report(page);
+        for id in ["small-1", "small-2"] {
+            report.issues.push(koharu_renderer::ReadabilityIssue {
+                id: id.into(),
+                element: EntityId::new(),
+                related: None,
+                kind: ReadabilityKind::SmallText,
+                value: 4.0,
+            });
+        }
+        let mut review = Review::default();
+        review.begin(&[page])?;
+        review.audit(stamp, report);
+        review.viewed(page, stamp, None);
+        let decision = Decision {
+            issue: "small-1".into(),
+            disposition: Disposition::NeedsReview,
+            reason: "This lettering still needs visual layout review.".into(),
+        };
+        let error = review
+            .verify(page, stamp, vec![decision.clone(), decision])
+            .unwrap_err();
+        assert!(error.to_string().contains("Duplicate issue decision"));
+        assert!(!error.is::<VerificationRequired>() && !error.is::<ReviewRequired>());
+        assert_eq!(review.progress().unwrap().checked, 0);
+        assert!(review.ensure_complete().is_err());
         Ok(())
     }
 

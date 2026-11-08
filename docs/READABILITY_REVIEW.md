@@ -27,6 +27,8 @@ A valid edit awaiting a current translated full-page view returns `review_requir
 
 `verify_readability.page` requires an actual page ID. A layer ID is rejected with its owning page ID; it is never silently accepted as a page. Retry binding preserves the owning page for page-only fields and the exact layer for explicit element fields, so correcting an entity type can recover without retargeting another page or layer.
 
+Issue decisions must match the latest audit exactly. An unknown issue ID or an incomplete decision list returns `verification_required` with the current page and issue records, without spending the malformed-call recovery budget or marking the page checked. The agent copies each record's `id` verbatim and reconsiders its disposition; it cannot derive IDs from `kind`/`element`, reuse removed findings or skip remaining ones. Missing/stale measurements or reader views return `review_required` for a fresh full-page view. Duplicate decisions, invalid arguments and attempts to accept measured defects still fail validation. Previously verified pages retain their coverage.
+
 ## Limits
 
 Bounding rectangles do not prove glyph collisions. Background sampling is a triage measurement and requires visual checks of the filled glyphs; it does not certify accessibility. A dense printed page may still require zoom or a revised balloon layout on a phone. Ordinary batch fitting keeps existing geometry; layout search may resize a text frame only in explicitly permitted space. The agent owns visual identification of protected artwork: native rectangle constraints do not detect faces or panel borders. Review state and layout candidates belong to the current agent turn and are not a persistent project audit database.
