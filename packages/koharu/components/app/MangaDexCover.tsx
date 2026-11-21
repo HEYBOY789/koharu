@@ -4,7 +4,7 @@ import { BookOpen } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
-import { commands } from '@koharu/bridge/protocol'
+import { commands } from '@koharu/ipc/protocol'
 import { Button } from '@koharu/ui/components/button'
 import { cn } from '@koharu/ui/lib/utils'
 

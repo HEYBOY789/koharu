@@ -1,463 +1,284 @@
 'use client'
 
-import { BookOpen, FolderInput, Pencil, Play, Plus, Sparkles, Trash2 } from 'lucide-react'
-import { useEffect, useState } from 'react'
+import { useQuery } from '@tanstack/react-query'
+import { useState, type FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'
-import ReactMarkdown from 'react-markdown'
-import remarkGfm from 'remark-gfm'
 
-import { call } from '@/lib/backend'
-import {
-  chapterKey,
-  chaptersKey,
-  pagesKey,
-  projectKey,
-  refresh,
-  useChapter,
-  useChapters,
-  usePage,
-  useProject,
-  useProjectBusy,
-} from '@/lib/queries'
+import { CommitTextarea } from '@/components/controls/CommitTextarea'
+import { Markdown } from '@/components/controls/Markdown'
+import { queryClient, send, useChapterJobs, useProject, useProjectMetadata } from '@/lib/queries'
 import { useKoharuStore } from '@/lib/store'
-import { commands } from '@koharu/bridge/protocol'
-import { Button } from '@koharu/ui/components/button'
 import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '@koharu/ui/components/dialog'
+  commands,
+  type ChapterEdit,
+  type ChapterMode,
+  type SummarizerConfig,
+} from '@koharu/ipc/protocol'
+import { Button } from '@koharu/ui/components/button'
+import { Checkbox } from '@koharu/ui/components/checkbox'
 import { Input } from '@koharu/ui/components/input'
+import { NativeSelect, NativeSelectOption } from '@koharu/ui/components/native-select'
 import { ScrollArea } from '@koharu/ui/components/scroll-area'
-import { Switch } from '@koharu/ui/components/switch'
-import { Textarea } from '@koharu/ui/components/textarea'
-import { cn } from '@koharu/ui/lib/utils'
-
-import { StopJobButton } from './StopJobButton'
-
-const WIKI_SLUG = /^[a-z0-9_]{1,64}$/
-
-const markdownClass =
-  'min-w-0 text-[11px] leading-5 break-words text-muted-foreground [&_a]:text-primary [&_a]:underline [&_blockquote]:my-2 [&_blockquote]:border-l-2 [&_blockquote]:pl-3 [&_code]:rounded [&_code]:bg-muted [&_code]:px-1 [&_h1]:mt-3 [&_h1]:mb-1.5 [&_h1]:text-sm [&_h1]:font-semibold [&_h1]:text-foreground [&_h2]:mt-3 [&_h2]:mb-1 [&_h2]:text-xs [&_h2]:font-semibold [&_h2]:text-foreground [&_h3]:mt-2 [&_h3]:font-semibold [&_h3]:text-foreground [&_hr]:my-2 [&_li]:my-0.5 [&_ol]:my-1.5 [&_ol]:list-decimal [&_ol]:pl-4 [&_p]:my-1.5 [&_pre]:my-2 [&_pre]:overflow-x-auto [&_pre]:rounded [&_pre]:bg-muted [&_pre]:p-2 [&_table]:my-2 [&_table]:w-full [&_td]:border [&_td]:border-border [&_td]:p-1 [&_th]:border [&_th]:border-border [&_th]:p-1 [&_th]:text-left [&_ul]:my-1.5 [&_ul]:list-disc [&_ul]:pl-4 [&>*:first-child]:mt-0'
-
-type Tab = 'summary' | 'wiki' | 'prompt'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@koharu/ui/components/tabs'
 
 export function ChapterPanel() {
   const { t } = useTranslation()
-  const page = usePage().data
-  const chapterId = page?.chapter ?? undefined
   const project = useProject().data
-  const chapter = useChapter(chapterId)
-  const chapters = useChapters().data ?? []
-  const jobs = useKoharuStore((state) => state.jobs)
-  const [tab, setTab] = useState<Tab>('summary')
-  const [wikiFile, setWikiFile] = useState('characters')
-  const [draft, setDraft] = useState<string | null>(null)
+  const selection = useKoharuStore((state) => state.selectedPages)
+  const metadata = useProjectMetadata(project?.id).data
+  const chapters = metadata?.chapters?.entries ?? []
+  const chapter = chapters.find((entry) => project?.page && entry.pages.includes(project.page))
+  const job = useChapterJobs().data?.find((entry) => entry.project === project?.id)
+  const active = job?.phase === 'summarizing' || job?.phase === 'translating'
+  const [title, setTitle] = useState('')
+  const [wikiSlug, setWikiSlug] = useState('glossary')
   const [editing, setEditing] = useState(false)
-  const [pending, setPending] = useState(false)
-  const [runOpen, setRunOpen] = useState(false)
-  const [resume, setResume] = useState(true)
-  const [wikiOpen, setWikiOpen] = useState(false)
-  const [wikiSlug, setWikiSlug] = useState('')
-
-  const data = chapter.data
-  useEffect(() => {
-    setEditing(false)
-    setDraft(null)
-  }, [chapterId])
-
-  const projectBusy = useProjectBusy()
-  const busy = projectBusy
-  const waiting = Object.values(jobs).find(
-    (job) => job.state === 'queued' && job.project === project?.name,
-  )
-  const currentRunning = Object.values(jobs).find(
-    (job) => job.state === 'running' && job.project === project?.name && job.chapter !== null,
-  )
-  const ownRunning = currentRunning?.chapter === chapterId ? currentRunning : undefined
-  if (!data || !chapterId) return null
-
-  const position = chapters.findIndex((value) => value.id === chapterId)
-  const remaining = chapters.slice(Math.max(position, 0))
-  // A chapter run owns a contiguous slice of the roster. `completed` is the
-  // current chapter's index inside that slice, so the slice start is derivable.
-  const start = currentRunning
-    ? chapters.findIndex((value) => value.id === currentRunning.chapter) - currentRunning.completed
-    : 0
-  const queued =
-    currentRunning !== undefined && position >= start && position < start + currentRunning.total
-  // The summarizer rewrites this chapter's summary, setting, and wiki when it
-  // reaches the chapter, so a save would be overwritten without warning.
-  const summarizing = queued && (ownRunning ? ownRunning.phase === 'summarize' : data.summarize)
-  const files = data.wiki.files
-  const current = files.find((file) => file.slug === wikiFile) ?? files[0]
-  const source =
-    tab === 'summary'
-      ? (data.summary ?? '')
-      : tab === 'prompt'
-        ? (data.setting ?? '')
-        : (current?.body ?? '')
-  const value = draft ?? source
-
-  const invalidate = () =>
-    refresh(chapterKey(chapterId), chaptersKey, projectKey, pagesKey).catch(() => undefined)
-
-  const save = () => {
-    if (draft === null) return
-    const text = draft.trim() ? draft : null
-    const command =
-      tab === 'summary'
-        ? call(commands.setChapterSummary, chapterId, text)
-        : tab === 'prompt'
-          ? call(commands.setChapterSetting, chapterId, text)
-          : call(commands.setWiki, wikiFile, draft)
-    setPending(true)
-    void command
-      .then(() => {
-        setDraft(null)
-        setEditing(false)
-        return invalidate()
-      })
+  const [settingsOpen, setSettingsOpen] = useState(false)
+  if (!project) return null
+  const wiki = metadata?.wiki?.files ?? []
+  const completed = chapters.filter(
+    (entry) =>
+      entry.translated ||
+      (entry.pages.length > 0 &&
+        entry.pages.every((id) => {
+          const page = project.pages.find((page) => page.id === id)
+          return page && page.texts > 0 && page.translated === page.texts
+        })),
+  ).length
+  const edit = (action: ChapterEdit) => send(commands.editChapter, action, project.id)
+  const create = (event: FormEvent) => {
+    event.preventDefault()
+    if (!title.trim() || selection.length === 0) return
+    void commands
+      .editChapter({ action: 'create', title: title.trim(), pages: selection }, project.id)
+      .then(() => setTitle(''))
       .catch(() => undefined)
-      .finally(() => setPending(false))
   }
-
-  const run = (summarize: boolean, translate: boolean, fromHere = false) => {
-    setPending(true)
-    const targets = fromHere ? remaining.map((value) => value.id) : [chapterId]
-    void call(
-      commands.runChapters,
-      targets,
-      summarize ? (fromHere ? null : true) : false,
-      translate,
-      fromHere && resume,
-    )
-      .catch(() => undefined)
-      .finally(() => {
-        setPending(false)
-        setRunOpen(false)
-      })
+  const run = (mode: ChapterMode, fromHere = false) => {
+    if (chapter) send(commands.runChapters, project.id, chapter.id, fromHere, mode)
   }
 
   return (
-    <div className='flex h-full min-h-0 flex-col'>
-      <div className='border-b px-3 py-2'>
-        <div className='flex items-center gap-1.5'>
-          <BookOpen className='size-3.5 shrink-0 text-muted-foreground' />
-          <h2 className='min-w-0 flex-1 truncate text-[11px] font-semibold'>{data.title}</h2>
-          <span className='text-[9px] text-muted-foreground tabular-nums'>
-            {t('chapter.pageCount', { count: data.pages.length })}
-          </span>
-        </div>
-        <label className='mt-2 flex items-center gap-2 text-[10px] text-muted-foreground'>
-          <Switch
-            size='sm'
-            checked={data.summarize}
-            disabled={busy || pending}
-            onCheckedChange={(checked) => {
-              void call(commands.setChapterSummarize, chapterId, checked)
-                .then(() => refresh(chaptersKey, chapterKey(chapterId), projectKey))
-                .catch(() => undefined)
-            }}
-          />
-          {t('chapter.summarizeToggle')}
-        </label>
-        <div className='mt-2 grid grid-cols-2 gap-1'>
-          <Button
-            size='sm'
-            variant='outline'
-            className='h-7 text-[10px]'
-            disabled={pending || busy}
-            onClick={() => {
-              setPending(true)
-              void call(commands.summarizeChapter, chapterId)
-                .catch(() => undefined)
-                .finally(() => setPending(false))
-            }}
-          >
-            <Sparkles className='size-3' /> {t('chapter.summarize')}
-          </Button>
-          <Button
-            size='sm'
-            className='h-7 text-[10px]'
-            disabled={pending || busy}
-            onClick={() => run(false, true)}
-          >
-            <Play className='size-3' /> {t('chapter.translate')}
-          </Button>
-          <Button
-            size='sm'
-            variant='secondary'
-            className='col-span-2 h-7 text-[10px]'
-            disabled={pending || busy}
-            onClick={() => run(true, true)}
-          >
-            <Sparkles className='size-3' /> {t('chapter.summarizeAndTranslate')}
-          </Button>
-          <Button
-            size='sm'
-            variant='ghost'
-            className='col-span-2 h-6 text-[10px] text-muted-foreground'
-            disabled={pending || busy}
-            onClick={() => {
-              setResume(true)
-              setRunOpen(true)
-            }}
-          >
-            {t('chapter.runFromHere', { count: remaining.length })}
-          </Button>
-        </div>
-        {ownRunning ? (
-          <div className='mt-2 rounded-md bg-primary/[0.07] p-2'>
-            <div className='flex items-center gap-1.5 text-[10px] font-medium'>
-              <span className='size-1.5 rounded-full bg-primary' />
-              {ownRunning.phase === 'summarize'
-                ? t('chapter.summarizing')
-                : t('chapter.translating')}
-              <StopJobButton id={ownRunning.id} className='ml-auto' />
+    <ScrollArea className='min-h-0 flex-1' viewportClassName='p-3'>
+      <div className='grid gap-2'>
+        {chapter ? (
+          <>
+            <div className='flex min-w-0 justify-between gap-2'>
+              <h2 className='truncate text-sm font-semibold' title={chapter.title}>
+                {chapter.title}
+              </h2>
+              <span className='shrink-0 text-xs text-muted-foreground tabular-nums'>
+                {completed}/{chapters.length}
+              </span>
             </div>
-            {ownRunning.detail ? (
-              <p className='mt-1 line-clamp-2 text-[9px] leading-3.5 text-muted-foreground'>
-                {ownRunning.detail}
-              </p>
-            ) : null}
-            {ownRunning.retry ? (
-              <p
-                role='status'
-                className='mt-1 text-[9px] leading-3.5 break-words text-muted-foreground'
-              >
-                {t('activity.retrying', {
-                  attempt: ownRunning.retry.attempt,
-                  max: ownRunning.retry.max_attempts,
-                  seconds: ownRunning.retry.delay_seconds,
-                })}
-              </p>
-            ) : null}
-          </div>
-        ) : waiting ? (
-          <div
-            role='status'
-            className='mt-2 flex items-center rounded-md bg-muted/60 p-2 text-[10px]'
-          >
-            {t('activity.queued')}
-            <StopJobButton id={waiting.id} className='ml-auto' />
-          </div>
-        ) : currentRunning ? (
-          <p className='mt-2 rounded-md bg-muted/60 p-2 text-[10px] leading-4 text-muted-foreground'>
-            {t('chapter.otherRunning', {
-              title:
-                [currentRunning.project, currentRunning.chapter_title]
-                  .filter(Boolean)
-                  .join(' · ') || t('chapter.title'),
-            })}
-          </p>
-        ) : null}
-      </div>
-
-      <div className='flex shrink-0 gap-0.5 border-b px-2 py-1'>
-        {(['summary', 'wiki', 'prompt'] as const).map((item) => (
-          <Button
-            key={item}
-            size='sm'
-            variant={tab === item ? 'secondary' : 'ghost'}
-            className='h-6 flex-1 px-1 text-[10px]'
-            onClick={() => {
-              setTab(item)
-              setDraft(null)
-              setEditing(false)
-            }}
-          >
-            {t(`chapter.tab_${item}`)}
-          </Button>
-        ))}
-        <Button
-          size='icon-xs'
-          variant='ghost'
-          className='h-6'
-          aria-label={t('chapter.edit')}
-          disabled={summarizing}
-          onClick={() => {
-            setDraft(source)
-            setEditing((current) => !current)
-          }}
-        >
-          <Pencil className='size-3' />
-        </Button>
-      </div>
-
-      {tab === 'wiki' ? (
-        <div className='flex shrink-0 flex-wrap items-center gap-0.5 border-b px-2 py-1'>
-          {files.map((file) => (
-            <Button
-              key={file.slug}
-              size='sm'
-              variant={current?.slug === file.slug ? 'secondary' : 'ghost'}
-              className='h-6 px-1.5 text-[9px]'
-              onClick={() => {
-                setWikiFile(file.slug)
-                setDraft(null)
-                setEditing(false)
-              }}
-            >
-              {t(`chapter.wiki_${file.slug}`, { defaultValue: file.slug })}
-            </Button>
-          ))}
-          <Button
-            size='icon-xs'
-            variant='ghost'
-            className='h-6'
-            aria-label={t('chapter.wikiImport')}
-            onClick={() => {
-              void call(commands.importWiki)
-                .then(invalidate)
-                .catch(() => undefined)
-            }}
-          >
-            <FolderInput className='size-3' />
-          </Button>
-          <Button
-            size='icon-xs'
-            variant='ghost'
-            className='h-6'
-            aria-label={t('chapter.wikiAdd')}
-            onClick={() => {
-              setWikiSlug('')
-              setWikiOpen(true)
-            }}
-          >
-            <Plus className='size-3' />
-          </Button>
-          {current && files.length > 1 ? (
-            <Button
-              size='icon-xs'
-              variant='ghost'
-              className='h-6'
-              aria-label={t('chapter.wikiRemove')}
-              onClick={() => {
-                void call(commands.deleteWikiFile, current.slug)
-                  .then(invalidate)
-                  .catch(() => undefined)
-              }}
-            >
-              <Trash2 className='size-3' />
-            </Button>
-          ) : null}
-        </div>
-      ) : null}
-
-      <ScrollArea className='min-h-0 flex-1' viewportClassName='p-3'>
-        {summarizing && !ownRunning ? (
-          <p className='mb-2 rounded-md bg-muted/60 p-2 text-[10px] leading-4 text-muted-foreground'>
-            {t('chapter.summarizeLocked')}
-          </p>
-        ) : null}
-        {editing ? (
-          <div className='flex h-full min-h-0 flex-col gap-2'>
-            <Textarea
-              value={value}
-              className='min-h-72 flex-1 resize-none font-mono text-[10px] leading-4'
-              onChange={(event) => setDraft(event.currentTarget.value)}
-            />
-            <div className='flex gap-1'>
+            <label className='flex items-center gap-2 text-xs'>
+              <Checkbox
+                checked={chapter.summarize}
+                onCheckedChange={(checked) =>
+                  edit({
+                    action: 'set_summarize',
+                    chapter: chapter.id,
+                    summarize: checked === true,
+                  })
+                }
+              />
+              {t('chapter.summarizeBefore')}
+            </label>
+            <div className='grid grid-cols-2 gap-2'>
               <Button
                 size='sm'
-                className='h-7 text-[10px]'
-                disabled={pending || summarizing}
-                onClick={save}
+                variant='outline'
+                disabled={active}
+                onClick={() => run('summarize')}
               >
-                {t('common.save')}
+                {t('chapter.summarize')}
               </Button>
+              <Button
+                size='sm'
+                disabled={active}
+                onClick={() => run(chapter.summarize ? 'summarize_translate' : 'translate')}
+              >
+                {t('chapter.translate')}
+              </Button>
+            </div>
+            <Button
+              size='sm'
+              variant='outline'
+              disabled={active}
+              onClick={() => run('summarize_translate', true)}
+            >
+              {t('chapter.runFromHere', { count: chapters.length - chapters.indexOf(chapter) })}
+            </Button>
+            <Tabs defaultValue='summary' className='min-w-0'>
+              <TabsList variant='line'>
+                <TabsTrigger value='summary'>{t('chapter.summary')}</TabsTrigger>
+                <TabsTrigger value='wiki'>{t('chapter.wiki')}</TabsTrigger>
+                <TabsTrigger value='prompt'>{t('chapter.prompt')}</TabsTrigger>
+                <Button
+                  size='sm'
+                  variant='ghost'
+                  onClick={() => setEditing((value) => !value)}
+                  aria-pressed={editing}
+                >
+                  {t('chapter.edit')}
+                </Button>
+              </TabsList>
+              <TabsContent value='summary'>
+                {editing ? (
+                  <CommitTextarea
+                    key={chapter.id}
+                    value={chapter.summary ?? ''}
+                    onCommit={(summary) =>
+                      edit({ action: 'set_summary', chapter: chapter.id, summary })
+                    }
+                  />
+                ) : (
+                  <Markdown>{chapter.summary || t('chapter.noSummary')}</Markdown>
+                )}
+              </TabsContent>
+              <TabsContent value='wiki' className='grid gap-2'>
+                {wiki.length > 0 && (
+                  <NativeSelect
+                    value={wikiSlug}
+                    aria-label={t('chapter.wiki')}
+                    onChange={(event) => setWikiSlug(event.currentTarget.value)}
+                  >
+                    {wiki.map((file) => (
+                      <NativeSelectOption key={file.slug} value={file.slug}>
+                        {file.slug}
+                      </NativeSelectOption>
+                    ))}
+                  </NativeSelect>
+                )}
+                {editing ? (
+                  <CommitTextarea
+                    key={wikiSlug}
+                    value={wiki.find((file) => file.slug === wikiSlug)?.body ?? ''}
+                    onCommit={(body) => edit({ action: 'set_wiki', slug: wikiSlug, body })}
+                  />
+                ) : (
+                  <Markdown>{wiki.find((file) => file.slug === wikiSlug)?.body ?? ''}</Markdown>
+                )}
+              </TabsContent>
+              <TabsContent value='prompt'>
+                {editing ? (
+                  <CommitTextarea
+                    key={chapter.id}
+                    value={chapter.setting ?? ''}
+                    onCommit={(prompt) =>
+                      edit({ action: 'set_prompt', chapter: chapter.id, prompt })
+                    }
+                  />
+                ) : (
+                  <Markdown>{chapter.setting ?? ''}</Markdown>
+                )}
+              </TabsContent>
+            </Tabs>
+          </>
+        ) : (
+          <p className='text-xs text-muted-foreground'>{t('chapter.selectChapter')}</p>
+        )}
+        <details className='mt-2 border-t pt-2 text-xs'>
+          <summary>{t('chapter.manage')}</summary>
+          <form className='mt-2 grid gap-2' onSubmit={create}>
+            <Input
+              value={title}
+              onChange={(event) => setTitle(event.currentTarget.value)}
+              aria-label={t('chapter.name')}
+              placeholder={t('chapter.name')}
+            />
+            <Button
+              size='sm'
+              variant='outline'
+              type='submit'
+              disabled={!title.trim() || selection.length === 0}
+            >
+              {t('chapter.createFromSelection')}
+            </Button>
+            {chapter && selection.length > 0 && (
               <Button
                 size='sm'
                 variant='ghost'
-                className='h-7 text-[10px]'
-                onClick={() => {
-                  setDraft(null)
-                  setEditing(false)
-                }}
+                type='button'
+                onClick={() => edit({ action: 'assign', chapter: chapter.id, pages: selection })}
               >
-                {t('common.cancel')}
+                {t('chapter.assignSelection')}
               </Button>
-            </div>
-          </div>
-        ) : source.trim() ? (
-          <div className={cn(markdownClass, tab !== 'summary' && 'font-mono text-[10px]')}>
-            <ReactMarkdown remarkPlugins={[remarkGfm]}>{source}</ReactMarkdown>
-          </div>
-        ) : (
-          <p className='text-[10px] leading-4 text-muted-foreground'>{t(`chapter.empty_${tab}`)}</p>
-        )}
-      </ScrollArea>
+            )}
+          </form>
+        </details>
+        <details
+          className='mt-2 border-t pt-2 text-xs'
+          onToggle={(event) => setSettingsOpen(event.currentTarget.open)}
+        >
+          <summary>{t('chapter.summarizerSettings')}</summary>
+          {settingsOpen && <SummarizerSettings />}
+        </details>
+      </div>
+    </ScrollArea>
+  )
+}
 
-      <Dialog open={runOpen} onOpenChange={setRunOpen}>
-        <DialogContent className='sm:max-w-md'>
-          <DialogHeader>
-            <DialogTitle>{t('chapter.runFromHereTitle')}</DialogTitle>
-            <DialogDescription>
-              {t('chapter.runFromHereDescription', { count: remaining.length })}
-            </DialogDescription>
-          </DialogHeader>
-          <label className='flex items-start gap-2 text-xs'>
-            <Switch
-              aria-label={t('chapter.resume')}
-              checked={resume}
-              onCheckedChange={setResume}
-              disabled={busy || pending}
-            />
-            <span>
-              {t('chapter.resume')}
-              <span className='mt-1 block text-[10px] text-muted-foreground'>
-                {t('chapter.resumeDescription')}
-              </span>
-            </span>
-          </label>
-          <DialogFooter>
-            <Button variant='ghost' onClick={() => setRunOpen(false)}>
-              {t('common.cancel')}
-            </Button>
-            <Button disabled={busy || pending} onClick={() => run(true, true, true)}>
-              {t('chapter.start')}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+const summarizerKey = ['summarizer'] as const
 
-      <Dialog open={wikiOpen} onOpenChange={setWikiOpen}>
-        <DialogContent className='sm:max-w-sm'>
-          <DialogHeader>
-            <DialogTitle>{t('chapter.wikiAddTitle')}</DialogTitle>
-            <DialogDescription>{t('chapter.wikiAddDescription')}</DialogDescription>
-          </DialogHeader>
-          <Input
-            value={wikiSlug}
-            placeholder={t('chapter.wikiAddPlaceholder')}
-            className='h-8 text-[11px]'
-            onChange={(event) => setWikiSlug(event.currentTarget.value)}
-          />
-          <DialogFooter>
-            <Button variant='ghost' onClick={() => setWikiOpen(false)}>
-              {t('common.cancel')}
-            </Button>
-            <Button
-              disabled={!WIKI_SLUG.test(wikiSlug)}
-              onClick={() => {
-                void call(commands.addWikiFile, wikiSlug)
-                  .then(() => {
-                    setWikiFile(wikiSlug)
-                    setWikiOpen(false)
-                    return invalidate()
-                  })
-                  .catch(() => undefined)
-              }}
-            >
-              {t('chapter.wikiAddAction')}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-    </div>
+function SummarizerSettings() {
+  const { t } = useTranslation()
+  const result = useQuery({ queryKey: summarizerKey, queryFn: commands.getSummarizerSettings })
+  const [draft, setDraft] = useState<SummarizerConfig | null>(null)
+  const value = draft ?? result.data
+  const agent = value
+  const update = (patch: Partial<SummarizerConfig>) => setDraft({ ...agent, ...patch })
+  if (!agent) return null
+  return (
+    <form
+      className='mt-2 grid gap-2'
+      onSubmit={(event) => {
+        event.preventDefault()
+        if (value)
+          void commands
+            .saveSummarizerSettings(value)
+            .then(() => {
+              queryClient.setQueryData(summarizerKey, value)
+              setDraft(null)
+            })
+            .catch(() => undefined)
+      }}
+    >
+      <label className='grid gap-1'>
+        {t('chapter.backend')}
+        <NativeSelect
+          value={agent.backend ?? 'agy'}
+          onChange={(event) =>
+            update({ backend: event.currentTarget.value === 'pi' ? 'pi' : 'agy' })
+          }
+        >
+          <NativeSelectOption value='agy'>AGY</NativeSelectOption>
+          <NativeSelectOption value='pi'>Pi</NativeSelectOption>
+        </NativeSelect>
+      </label>
+      <label className='grid gap-1'>
+        {t('chapter.model')}
+        <Input
+          value={agent.model ?? ''}
+          onChange={(event) => update({ model: event.currentTarget.value || null })}
+        />
+      </label>
+      {agent.backend === 'pi' && (
+        <p className='text-muted-foreground'>
+          {t('chapter.piModelHint')}{' '}
+          <code className='break-all'>local-proxy/ag/gemini-3.8-flash-high</code>
+        </p>
+      )}
+      <label className='grid gap-1'>
+        {t('chapter.executable')}
+        <Input
+          value={agent.binary ?? ''}
+          onChange={(event) => update({ binary: event.currentTarget.value || null })}
+        />
+      </label>
+      <Button size='sm' disabled={!draft} type='submit'>
+        {t('chapter.saveSettings')}
+      </Button>
+    </form>
   )
 }

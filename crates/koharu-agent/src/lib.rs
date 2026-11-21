@@ -1,15 +1,16 @@
-//! Project agent sessions using Codex, Pi or AGY and a shared native tool host.
+//! Koharu's agent and its tools on an open project.
+
+// Proving a tool's future `Send` walks the renderer's wgpu types deeper than
+// the default 128.
+#![recursion_limit = "256"]
 
 mod agent;
 mod cli;
-mod codex;
-mod completion;
-mod config;
-mod control;
-mod tool;
+mod mcp;
+mod readability;
+mod tools;
 
-pub use agent::{Agent, Event, Message, Role, RunId, RunResult};
-pub use codex::{Account, Codex, LoginEvent};
-pub use config::{AgentModel, Backend, CliConfig, Config, ModelConfig, Reasoning};
-pub use control::Control;
-pub use tool::{Host, Invocation, Tool, ToolCall, ToolImage, ToolRejection};
+pub use agent::{Agent, AgentBackend, AgentConfig, Event};
+pub use cli::{CliBackend, CliConfig, run_cli};
+pub use mcp::McpServer;
+pub use tools::Tools;

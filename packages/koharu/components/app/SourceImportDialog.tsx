@@ -5,14 +5,13 @@ import { useTranslation } from 'react-i18next'
 
 import { LocalAgentTools } from '@/components/app/LocalAgentTools'
 import { PiModelHint } from '@/components/controls/PiModelHint'
-import { call } from '@/lib/backend'
 import { mangaDexLanguages } from '@/lib/mangadex'
 import {
   commands,
   type PublicationConfig,
   type PublicationReadiness,
   type SourcePreview,
-} from '@koharu/bridge/protocol'
+} from '@koharu/ipc/protocol'
 import { Button } from '@koharu/ui/components/button'
 import { Checkbox } from '@koharu/ui/components/checkbox'
 import {
@@ -98,7 +97,8 @@ export function SourceImportDialog({
     setURLTouched(false)
     setReaderTouched(false)
     setConfig(null)
-    void call(commands.getSourceImportSettings)
+    void commands
+      .getSourceImportSettings()
       .then((value) => {
         if (active) setConfig(value)
       })
@@ -117,7 +117,8 @@ export function SourceImportDialog({
     setInspection(undefined)
     setError('')
     const timer = setTimeout(() => {
-      void call(commands.inspectPublication, checkConfig, false)
+      void commands
+        .inspectPublication(checkConfig)
         .then((status) => {
           if (active) setInspection({ key, status })
         })
@@ -152,7 +153,9 @@ export function SourceImportDialog({
   else if (checking || !readiness) actionHint = t('publication.checking')
   else if (readiness.missing.length)
     actionHint = t('publication.toolsMissing', {
-      tools: readiness.missing.map((tool) => t(`publication.${tool}`)).join(', '),
+      tools: readiness.missing
+        .map((tool) => t(`publication.${tool}`, { defaultValue: tool }))
+        .join(', '),
     })
   else if (!validURL) actionHint = t('sourceImport.invalidURL')
   else if (catalog && !validReader)
@@ -172,7 +175,7 @@ export function SourceImportDialog({
     setPreview(null)
     setChapters([])
     try {
-      const data = await call(commands.previewSourceUrl, url.trim(), config, {
+      const data = await commands.previewSourceUrl(url.trim(), config, {
         language: catalog ? language : null,
         download_url: catalog ? downloadURL.trim() || null : null,
         project_name: null,
@@ -196,8 +199,8 @@ export function SourceImportDialog({
     setStarting(true)
     setError('')
     try {
-      await call(
-        commands.importSourceUrl,
+      await commands.saveSourceImportSettings(config)
+      await commands.importSourceUrl(
         url.trim(),
         {
           ...config,
@@ -391,7 +394,7 @@ export function SourceImportDialog({
                     <span>{t('publication.model')}</span>
                     <Input
                       value={config.model ?? ''}
-                      placeholder={t('settings.summarizer.modelPlaceholder')}
+                      placeholder={t('sourceImport.modelPlaceholder')}
                       onChange={(event) => update({ model: event.target.value || null })}
                     />
                   </label>

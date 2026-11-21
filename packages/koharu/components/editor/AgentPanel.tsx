@@ -1,556 +1,546 @@
 'use client'
 
+import { useMutation } from '@tanstack/react-query'
 import { Channel } from '@tauri-apps/api/core'
-import { Bot, CircleStop, LogOut, RefreshCw, Send, Sparkles } from 'lucide-react'
-import { useEffect, useRef, useState } from 'react'
+import { ArrowUp, Bot, Check, ChevronDown, ChevronRight, Square, SquarePen, X } from 'lucide-react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 
+import { Choice } from '@/components/controls/Choice'
+import { Markdown } from '@/components/controls/Markdown'
+import { ModelPicker } from '@/components/controls/ModelPicker'
 import { PiModelHint } from '@/components/controls/PiModelHint'
-import { call } from '@/lib/backend'
-import { useProject } from '@/lib/queries'
-import { useKoharuStore } from '@/lib/store'
+import { modelName, REASONING } from '@/lib/models'
+import { send, useModels, usePreferences, useSavePreferences } from '@/lib/queries'
 import {
   commands,
-  type AgentStatus,
-  type Backend,
+  type AgentBackend,
+  type AgentConfig,
+  type AgentEvent,
   type CliConfig,
-  type Config,
-  type LoginEvent,
-  type Reasoning,
-} from '@koharu/bridge/protocol'
-import { Badge } from '@koharu/ui/components/badge'
+  type Event,
+} from '@koharu/ipc/protocol'
 import { Button } from '@koharu/ui/components/button'
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from '@koharu/ui/components/collapsible'
 import { Input } from '@koharu/ui/components/input'
 import { NativeSelect, NativeSelectOption } from '@koharu/ui/components/native-select'
+import { Popover, PopoverContent, PopoverTrigger } from '@koharu/ui/components/popover'
 import { ScrollArea } from '@koharu/ui/components/scroll-area'
+import { Spinner } from '@koharu/ui/components/spinner'
 import { Textarea } from '@koharu/ui/components/textarea'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@koharu/ui/components/tooltip'
+import { cn } from '@koharu/ui/lib/utils'
 
-import { AgentProgress } from './AgentProgress'
+/** What a turn of the agent's showed, in the order it came. */
+type Part =
+  | { type: 'text'; text: string }
+  /** Its reasoning, with when it began and, once text or a tool follows, ended. */
+  | { type: 'thinking'; text: string; started: number; ended: number | null }
+  | {
+      type: 'tool'
+      tool: string
+      arguments: unknown
+      state: 'running' | 'done' | 'failed'
+      error: string | null
+    }
 
+type Turn =
+  | { id: string; role: 'user'; text: string }
+  | {
+      id: string
+      role: 'assistant'
+      parts: Part[]
+      state: 'running' | 'done' | 'failed' | 'cancelled'
+      error?: string
+    }
+
+/** The in-app agent's conversation about the open project, as Claude Desktop and Codex lay a chat
+ * out: the user's messages in bubbles, the agent's replies as plain text with its thinking and
+ * tool calls folded beside them, and a composer holding the model, its reasoning, and New chat. */
 export function AgentPanel() {
   const { t } = useTranslation()
-  const [status, setStatus] = useState<AgentStatus | null>(null)
-  const [error, setError] = useState('')
-  const [checking, setChecking] = useState(false)
-  const [saving, setSaving] = useState(false)
-  const [pending, setPending] = useState(false)
-  const [draft, setDraft] = useState<CliConfig>({
-    binary: null,
-    node: null,
-    reasoning: null,
-    model: null,
-  })
-  const [loginEvent, setLoginEvent] = useState<LoginEvent | null>(null)
-  const [loggingIn, setLoggingIn] = useState(false)
+  const [turns, setTurns] = useState<Turn[]>([])
   const [prompt, setPrompt] = useState('')
-  const project = useProject().data
-  const snapshot = useKoharuStore((state) => state.agent)
-  const activeRun = snapshot.run?.state === 'running' ? snapshot.run : null
-  const running = activeRun?.id ?? null
-  const messages =
-    snapshot.conversations.find((chat) => chat.project === project?.name)?.messages ?? []
-  const ownRun = snapshot.run?.project === project?.name ? snapshot.run : null
-  const alive = useRef(true)
-  const checks = useRef(0)
-  const requestPending = useRef(false)
-  const submitted = useRef<string | null>(null)
-  useEffect(() => {
-    if (submitted.current && snapshot.run?.id === submitted.current) {
-      setPending(false)
-      requestPending.current = false
-      submitted.current = null
-    }
-  }, [snapshot.sequence])
+  const [running, setRunning] = useState<number | null>(null)
+  const [choosing, setChoosing] = useState(false)
+  const busy = turns.some((turn) => turn.role === 'assistant' && turn.state === 'running')
+  const models = (useModels().data ?? []).filter((model) => model.tools)
+  const preferences = usePreferences().data
+  const save = useSavePreferences()
+  const list = useRef<HTMLDivElement>(null)
+  // Whether the transcript follows what arrives: until the user scrolls up from its end.
+  const following = useRef(true)
+  const reset = useMutation({
+    mutationFn: () => commands.resetAgent(),
+    onSettled: () => {
+      setTurns([])
+      following.current = true
+    },
+  })
 
   useEffect(() => {
-    alive.current = true
-    void checkConnection()
-    return () => {
-      alive.current = false
-      checks.current++
-    }
-  }, [])
+    const viewport = list.current
+    if (viewport && following.current) viewport.scrollTop = viewport.scrollHeight
+  }, [turns])
 
-  useEffect(() => {
-    const backend = status?.config.backend
-    if (status && backend && backend !== 'codex')
-      setDraft(status.config[backend] ?? { binary: null, node: null, reasoning: null, model: null })
-  }, [status?.config])
-
-  const busy = running !== null || pending || saving || checking || loggingIn
-  const backend = status?.config.backend ?? 'codex'
-  const codex = {
-    model: status?.config.codex?.model ?? null,
-    reasoning: status?.config.codex?.reasoning ?? 'medium',
-  }
-  const cli = backend === 'codex' ? null : status?.config[backend]
-  const model = backend === 'codex' ? codex.model : cli?.model
-  const selectedModel = model
-    ? status?.models.find((candidate) => candidate.id === model)
-    : backend === 'codex'
-      ? status?.models[0]
-      : undefined
-
-  if (!status)
+  if (!preferences) {
     return (
-      <div className='grid min-h-0 flex-1 content-center justify-items-center gap-3 p-4 text-xs'>
-        <p
-          role={error ? 'alert' : 'status'}
-          className={error ? 'break-words text-destructive' : 'text-muted-foreground'}
-        >
-          {error || t('agent.loading')}
-        </p>
-        {error && (
-          <Button size='sm' disabled={checking} onClick={() => void checkConnection()}>
-            {t('agent.checkConnection')}
-          </Button>
-        )}
+      <div className='grid min-h-0 flex-1 place-items-center p-6 text-[11px] text-muted-foreground'>
+        {t('agent.loading')}
       </div>
     )
+  }
+
+  const config = preferences.agent
+  const backend = config.backend ?? 'native'
+  const cli = backend === 'pi' || backend === 'agy' ? backend : null
+  const profile = cli ? config[cli] : undefined
+  const configure = (patch: Partial<CliConfig>) => {
+    if (cli) saveConfig({ ...config, [cli]: { ...profile, ...patch } })
+  }
+  const model = config.model ?? null
+  const picker =
+    'h-6 w-auto max-w-36 min-w-0 gap-1 border-0 bg-transparent px-1.5 text-[11px] text-muted-foreground shadow-none hover:bg-muted hover:text-foreground dark:bg-transparent dark:hover:bg-muted'
 
   return (
     <div className='flex min-h-0 flex-1 flex-col'>
-      <div className='grid shrink-0 gap-2 border-b px-3 py-2.5'>
-        <div className='flex items-end gap-2'>
-          <label className='grid min-w-0 flex-1 gap-1 text-[10px]' htmlFor='editor-agent-backend'>
-            {t('agent.backend')}
-            <NativeSelect
-              className='w-full min-w-0'
-              size='sm'
-              id='editor-agent-backend'
-              value={backend}
-              disabled={busy}
-              onChange={(event) =>
-                void saveConfig({ ...status.config, backend: event.target.value as Backend })
-              }
-            >
-              <NativeSelectOption value='codex'>Codex</NativeSelectOption>
-              <NativeSelectOption value='pi'>Pi</NativeSelectOption>
-              <NativeSelectOption value='agy'>AGY</NativeSelectOption>
-            </NativeSelect>
-          </label>
-          <Button
-            variant='outline'
-            size='icon-sm'
-            aria-label={t('agent.checkConnection')}
-            title={t('agent.checkConnection')}
+      <div className='grid gap-2 border-b px-3 py-2 text-xs'>
+        <label className='flex items-center gap-2'>
+          <span className='shrink-0'>{t('agent.backend')}</span>
+          <NativeSelect
+            value={backend}
             disabled={busy}
-            onClick={() => void checkConnection()}
+            onChange={(event) => {
+              saveConfig({ ...config, backend: event.currentTarget.value as AgentBackend })
+              reset.mutate()
+            }}
           >
-            <RefreshCw className={checking ? 'animate-spin' : undefined} />
-          </Button>
-        </div>
-        <p className='text-[10px] leading-4 text-muted-foreground'>{t('agent.backendHint')}</p>
-        <Button
-          variant='ghost'
-          size='sm'
-          disabled={busy}
-          onClick={() => void call(commands.clearAgentSession)}
-        >
-          {t('agent.progress.newConversation')}
-        </Button>
-        {backend === 'codex' && status.account && (
-          <div className='flex min-w-0 items-center gap-2'>
-            <div className='min-w-0 flex-1'>
-              <p className='truncate text-[11px] font-medium'>{status.account.email ?? 'Codex'}</p>
-              <p className='truncate text-[9px] text-muted-foreground'>
-                {status.account.plan ?? t('agent.account')}
-              </p>
-            </div>
-            <Button
-              variant='ghost'
-              size='icon-sm'
-              aria-label={t('agent.signOut')}
-              disabled={busy}
-              onClick={() => void logout()}
-            >
-              <LogOut />
-            </Button>
-          </div>
-        )}
-        {backend !== 'codex' && (
-          <details className='text-[10px]'>
-            <summary className='cursor-pointer py-1'>{t('agent.advancedSetup')}</summary>
-            <form
-              className='mt-2 grid gap-2'
-              onSubmit={(event) => {
-                event.preventDefault()
-                void saveConfig({ ...status.config, [backend]: draft })
-              }}
-            >
-              <label className='grid gap-1'>
-                {t('agent.cliPath')}
-                <Input
-                  value={draft.binary ?? ''}
-                  disabled={busy}
-                  placeholder={t('agent.detectAutomatically')}
-                  onChange={(event) =>
-                    setDraft({ ...draft, binary: event.target.value.trim() || null })
-                  }
-                  className='text-xs'
-                />
-              </label>
-              <label className='grid gap-1'>
-                {t('agent.nodePath')}
-                <Input
-                  value={draft.node ?? ''}
-                  disabled={busy}
-                  placeholder={t('agent.detectAutomatically')}
-                  onChange={(event) =>
-                    setDraft({ ...draft, node: event.target.value.trim() || null })
-                  }
-                  className='text-xs'
-                />
-              </label>
-              <label className='grid gap-1'>
-                {t('agent.model')}
-                <Input
-                  value={draft.model ?? ''}
-                  disabled={busy}
-                  placeholder={t('agent.automatic')}
-                  onChange={(event) =>
-                    setDraft({ ...draft, model: event.target.value.trim() || null })
-                  }
-                  className='text-xs'
-                />
-              </label>
-              <label className='grid gap-1'>
-                {t('agent.reasoning')}
-                <NativeSelect
-                  className='w-full min-w-0'
-                  size='sm'
-                  value={draft.reasoning ?? ''}
-                  disabled={busy}
-                  onChange={(event) =>
-                    setDraft({
-                      ...draft,
-                      reasoning: event.target.value ? (event.target.value as Reasoning) : null,
-                    })
-                  }
-                >
-                  <NativeSelectOption value=''>{t('agent.automatic')}</NativeSelectOption>
-                  {(
-                    [
-                      'low',
-                      'medium',
-                      'high',
-                      'xhigh',
-                      ...(backend === 'agy' ? ['max'] : []),
-                    ] as Reasoning[]
-                  ).map((level) => (
-                    <NativeSelectOption key={level} value={level}>
-                      {t(`agent.reasoningLevels.${level}`)}
-                    </NativeSelectOption>
-                  ))}
-                </NativeSelect>
-              </label>
-              <Button type='submit' variant='outline' size='sm' disabled={busy}>
-                {t('agent.saveSetup')}
-              </Button>
-            </form>
-          </details>
-        )}
-        {status.models.length > 0 && (
-          <div
-            className={backend === 'codex' ? 'grid grid-cols-[minmax(0,1fr)_7rem] gap-1.5' : 'grid'}
-          >
-            <NativeSelect
-              className='w-full min-w-0'
-              size='sm'
-              value={model ?? ''}
-              aria-label={t('agent.model')}
-              disabled={busy}
-              onChange={(event) => {
-                const value = event.target.value || null
-                if (backend === 'codex') {
-                  const selected =
-                    status.models.find((candidate) => candidate.id === value) ?? status.models[0]
-                  const reasoning =
-                    selected?.reasoning.length && !selected.reasoning.includes(codex.reasoning)
-                      ? selected.reasoning[0]
-                      : codex.reasoning
-                  void saveConfig({ ...status.config, codex: { model: value, reasoning } })
-                } else
-                  void saveConfig({
-                    ...status.config,
-                    [backend]: { ...status.config[backend], model: value },
-                  })
-              }}
-            >
-              <NativeSelectOption value=''>{t('agent.automatic')}</NativeSelectOption>
-              {model && !status.models.some((candidate) => candidate.id === model) && (
-                <NativeSelectOption value={model}>{model}</NativeSelectOption>
-              )}
-              {status.models.map((model) => (
-                <NativeSelectOption key={model.id} value={model.id}>
-                  {model.name}
-                </NativeSelectOption>
-              ))}
-            </NativeSelect>
-            {backend === 'codex' && (
-              <NativeSelect
-                className='w-full min-w-0'
-                size='sm'
-                value={codex.reasoning}
-                aria-label={t('agent.reasoning')}
+            <NativeSelectOption value='native'>{t('agent.nativeBackend')}</NativeSelectOption>
+            <NativeSelectOption value='pi'>Pi</NativeSelectOption>
+            <NativeSelectOption value='agy'>AGY</NativeSelectOption>
+            {backend === 'codex' && <NativeSelectOption value='codex'>Codex</NativeSelectOption>}
+          </NativeSelect>
+        </label>
+        {cli && (
+          <div className='grid gap-1' key={cli}>
+            <label className='grid gap-1'>
+              {t('agent.model')}
+              <Input
+                className='h-7'
+                defaultValue={profile?.model ?? ''}
+                placeholder={t('inference.providerDefault')}
                 disabled={busy}
-                onChange={(event) =>
-                  void saveConfig({
-                    ...status.config,
-                    codex: { ...codex, reasoning: event.target.value as Reasoning },
-                  })
-                }
-              >
-                {(selectedModel?.reasoning.length
-                  ? selectedModel.reasoning
-                  : [codex.reasoning]
-                ).map((reasoning) => (
-                  <NativeSelectOption key={reasoning} value={reasoning}>
-                    {t(`agent.reasoningLevels.${reasoning}`)}
-                  </NativeSelectOption>
-                ))}
-              </NativeSelect>
-            )}
-          </div>
-        )}
-        {backend === 'pi' && <PiModelHint />}
-        {checking && (
-          <p role='status' className='text-[10px] text-muted-foreground'>
-            {t('agent.checking')}
-          </p>
-        )}
-        {(error || status.error) && (
-          <p role='alert' className='text-[11px] leading-4 break-words text-destructive'>
-            {error || status.error}
-          </p>
-        )}
-        {backend !== 'codex' && !status.ready && (
-          <p className='text-[10px] leading-4 text-muted-foreground'>{t('agent.cliSignInHint')}</p>
-        )}
-      </div>
-      {backend === 'codex' && !status.account ? (
-        <div className='flex min-h-0 flex-1 flex-col items-center justify-center gap-3 p-5 text-center'>
-          <Sparkles className='size-6 text-primary' />
-          <h3 className='text-sm font-semibold'>{t('agent.signInTitle')}</h3>
-          <p className='text-[11px] leading-5 text-muted-foreground'>
-            {t('agent.signInDescription')}
-          </p>
-          {loginEvent?.type === 'device_code' && (
-            <div className='w-full rounded-xl border bg-muted/40 p-3'>
-              <p className='text-[10px]'>{t('agent.deviceCode')}</p>
-              <p className='font-mono text-lg font-semibold tracking-widest select-text'>
-                {loginEvent.user_code}
-              </p>
-              <p className='mt-1 text-[10px] text-muted-foreground'>{t('agent.deviceCodeHint')}</p>
-            </div>
-          )}
-          <Button disabled={busy} onClick={() => void login()}>
-            {loggingIn ? t('agent.signingIn') : t('agent.signIn')}
-          </Button>
-        </div>
-      ) : (
-        <>
-          {activeRun && activeRun.project !== project?.name && (
-            <div className='grid gap-2 border-b p-3 text-[11px]'>
-              <p className='min-w-0 break-words'>
-                {t('agent.progress.background', { name: activeRun.project })}
-              </p>
-              <AgentProgress run={activeRun} />
-              <Button
-                size='sm'
-                variant='outline'
-                className='w-full min-w-0'
-                title={t('activity.openProject', { name: activeRun.project })}
-                onClick={() => void call(commands.openProject, activeRun.project)}
-              >
-                <span className='min-w-0 truncate'>
-                  {t('activity.openProject', { name: activeRun.project })}
-                </span>
-              </Button>
-            </div>
-          )}
-          <ScrollArea className='min-h-0 flex-1'>
-            {messages.length ? (
-              <div className='grid gap-3 p-3'>
-                {messages.map((message) => (
-                  <div
-                    key={message.id}
-                    data-role={message.role}
-                    className='flex data-[role=user]:justify-end'
-                  >
-                    <div
-                      data-role={message.role}
-                      data-error={message.error || undefined}
-                      className='max-w-[90%] rounded-xl bg-muted px-3 py-2 text-[11px] leading-5 whitespace-pre-wrap select-text data-[error=true]:bg-destructive/10 data-[error=true]:text-destructive data-[role=user]:bg-primary data-[role=user]:text-primary-foreground'
-                    >
-                      {message.text ||
-                        (ownRun?.id === message.id && ownRun.state === 'running' ? (
-                          <AgentProgress run={ownRun} />
-                        ) : message.role === 'assistant' ? (
-                          t(message.state === 'stopped' ? 'agent.cancelled' : 'activity.finished')
-                        ) : (
-                          ''
-                        ))}
-                      {message.reasoning && (
-                        <details className='mt-2 border-t pt-2 text-muted-foreground'>
-                          <summary className='cursor-pointer'>
-                            {t('agent.progress.summary')}
-                          </summary>
-                          <p className='mt-1 whitespace-pre-wrap'>{message.reasoning}</p>
-                        </details>
-                      )}
-                    </div>
-                  </div>
-                ))}
-                {ownRun && messages.at(-1)?.text && <AgentProgress run={ownRun} />}
-              </div>
-            ) : (
-              <div className='grid min-h-64 place-items-center p-6 text-center'>
-                <div>
-                  <Bot className='mx-auto size-6 text-primary' />
-                  <h3 className='mt-3 text-xs font-semibold'>{t('agent.emptyTitle')}</h3>
-                  <p className='mt-1 max-w-56 text-[10px] leading-4 text-muted-foreground'>
-                    {t('agent.emptyDescription')}
-                  </p>
-                </div>
-              </div>
-            )}
-          </ScrollArea>
-
-          <div className='shrink-0 border-t p-2.5'>
-            <div className='rounded-xl border bg-background p-1.5 focus-within:border-ring'>
-              <Textarea
-                id='agent-message'
-                value={prompt}
-                disabled={busy || !status.ready}
-                aria-label={t('agent.message')}
-                placeholder={t('agent.placeholder')}
-                className='max-h-36 min-h-16 resize-none border-0 bg-transparent px-1.5 py-1 text-[11px] leading-5 shadow-none focus-visible:ring-0'
-                onChange={(event) => setPrompt(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key === 'Enter' && !event.shiftKey) {
-                    event.preventDefault()
-                    void send()
-                  }
+                onBlur={(event) => {
+                  const model = event.currentTarget.value.trim() || null
+                  if (model !== (profile?.model ?? null)) configure({ model })
                 }}
               />
-              <div className='flex items-center justify-between gap-2 pt-1'>
-                <Badge
-                  variant='outline'
-                  className='h-5 max-w-44 truncate px-1.5 text-[9px] font-normal'
+            </label>
+            {cli === 'pi' && <PiModelHint />}
+            <details>
+              <summary>{t('publication.tools')}</summary>
+              {(['binary', 'node', 'reasoning'] as const).map((field) => (
+                <label className='mt-1 grid gap-1' key={field}>
+                  {field === 'reasoning' ? t('agent.reasoning') : t(`publication.${field}`)}
+                  <Input
+                    className='h-7'
+                    defaultValue={profile?.[field] ?? ''}
+                    disabled={busy}
+                    onBlur={(event) => {
+                      const value = event.currentTarget.value.trim() || null
+                      if (value !== (profile?.[field] ?? null)) configure({ [field]: value })
+                    }}
+                  />
+                </label>
+              ))}
+            </details>
+          </div>
+        )}
+      </div>
+      <ScrollArea
+        className='min-h-0 flex-1'
+        viewportRef={list}
+        viewportClassName='px-3 pt-3'
+        onScrollCapture={() => {
+          const viewport = list.current
+          if (viewport) {
+            following.current =
+              viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight < 40
+          }
+        }}
+      >
+        {turns.length ? (
+          <div className='grid gap-4 pb-3'>
+            {turns.map((turn) =>
+              turn.role === 'user' ? (
+                <div
+                  key={turn.id}
+                  className='ml-auto max-w-[85%] rounded-2xl bg-muted px-3 py-2 text-xs leading-5 whitespace-pre-wrap select-text'
                 >
-                  {selectedModel?.name ?? model ?? t('agent.automatic')}
-                </Badge>
-                {running ? (
-                  <Button
-                    variant='outline'
-                    size='icon-sm'
-                    aria-label={t('activity.stop')}
-                    onClick={() => void call(commands.cancelAgent, running).catch(() => undefined)}
-                  >
-                    <CircleStop />
-                  </Button>
-                ) : (
-                  <Button
-                    size='icon-sm'
-                    aria-label={t('agent.send')}
-                    disabled={busy || !status.ready || !prompt.trim()}
-                    onClick={() => void send()}
-                  >
-                    <Send />
-                  </Button>
-                )}
-              </div>
+                  {turn.text}
+                </div>
+              ) : (
+                <AssistantTurn key={turn.id} turn={turn} />
+              ),
+            )}
+          </div>
+        ) : (
+          <div className='grid min-h-72 place-items-center px-6 text-center'>
+            <div>
+              <Bot className='mx-auto size-6 text-primary' />
+              <h3 className='mt-3 text-sm font-semibold'>{t('agent.emptyTitle')}</h3>
+              <p className='mx-auto mt-1.5 max-w-60 text-[11px] leading-4 text-muted-foreground'>
+                {t('agent.emptyDescription')}
+              </p>
             </div>
           </div>
-        </>
-      )}
+        )}
+      </ScrollArea>
+
+      <div className='shrink-0 p-2.5'>
+        <div className='rounded-2xl border border-input bg-background p-2 shadow-xs transition-colors focus-within:border-ring'>
+          <Textarea
+            id='agent-message'
+            value={prompt}
+            aria-label={t('agent.message')}
+            placeholder={t('agent.placeholder')}
+            className='max-h-40 min-h-10 resize-none border-0 bg-transparent px-1 py-0.5 text-xs leading-5 shadow-none focus-visible:ring-0 dark:bg-transparent'
+            onChange={(event) => setPrompt(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
+                event.preventDefault()
+                void submit()
+              }
+            }}
+          />
+          <div className='flex min-w-0 items-center gap-0.5 pt-1'>
+            {!cli && (
+              <Popover open={choosing} onOpenChange={setChoosing}>
+                <PopoverTrigger
+                  type='button'
+                  aria-label={t('agent.model')}
+                  className={cn(
+                    'flex items-center rounded-md outline-none focus-visible:ring-2 focus-visible:ring-ring/40 data-open:bg-muted data-open:text-foreground',
+                    picker,
+                  )}
+                >
+                  <span className='truncate'>
+                    {(model && modelName(models, model)) || t('inference.noModel')}
+                  </span>
+                  <ChevronDown className='size-3.5 shrink-0' />
+                </PopoverTrigger>
+                <PopoverContent
+                  side='top'
+                  align='start'
+                  sideOffset={6}
+                  className='w-64 gap-0 overflow-hidden p-1'
+                >
+                  <ModelPicker
+                    value={model}
+                    models={models}
+                    onSelect={(next) => {
+                      setChoosing(false)
+                      saveConfig({ ...config, model: next })
+                    }}
+                  />
+                </PopoverContent>
+              </Popover>
+            )}
+            {!cli && (
+              <Choice
+                size='sm'
+                side='top'
+                value={config.reasoning ?? 'default'}
+                choices={Object.fromEntries([
+                  ['default', t('inference.providerDefault')],
+                  ...REASONING.map((level) => [level, t(`reasoning.${level}`)]),
+                ])}
+                label={t('agent.reasoning')}
+                className={picker}
+                onChange={(reasoning) =>
+                  saveConfig({ ...config, reasoning: reasoning === 'default' ? null : reasoning })
+                }
+              />
+            )}
+            <div className='ml-auto flex shrink-0 items-center gap-1'>
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <Button
+                      type='button'
+                      variant='ghost'
+                      size='icon-sm'
+                      aria-label={t('agent.newChat')}
+                      disabled={busy || turns.length === 0 || reset.isPending}
+                      className='size-7 rounded-full text-muted-foreground hover:text-foreground'
+                      onClick={() => reset.mutate()}
+                    />
+                  }
+                >
+                  <SquarePen className='size-3.5' />
+                </TooltipTrigger>
+                <TooltipContent side='top'>{t('agent.newChat')}</TooltipContent>
+              </Tooltip>
+              {busy ? (
+                <Button
+                  type='button'
+                  size='icon-sm'
+                  aria-label={t('agent.cancel')}
+                  className='size-7 rounded-full'
+                  onClick={cancel}
+                >
+                  <Square className='size-3 fill-current' />
+                </Button>
+              ) : (
+                <Button
+                  type='button'
+                  size='icon-sm'
+                  aria-label={t('agent.send')}
+                  disabled={!prompt.trim() || (!model && !cli)}
+                  className='size-7 rounded-full'
+                  onClick={() => void submit()}
+                >
+                  <ArrowUp className='size-4' />
+                </Button>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
   )
 
-  async function checkConnection() {
-    const check = ++checks.current
-    setChecking(true)
-    setError('')
-    try {
-      const value = await call(commands.getAgentStatus)
-      if (alive.current && check === checks.current) {
-        setStatus(value)
-      }
-    } catch (cause) {
-      if (alive.current && check === checks.current)
-        setError(cause instanceof Error ? cause.message : String(cause))
-    } finally {
-      if (alive.current && check === checks.current) setChecking(false)
-    }
+  function saveConfig(agent: AgentConfig) {
+    if (preferences) save.mutate({ ...preferences, agent })
   }
 
-  async function saveConfig(config: Config) {
-    if (busy) return
-    setSaving(true)
-    setError('')
-    try {
-      const saved = await call(commands.saveAgentConfig, config)
-      if (!alive.current) return
-      setStatus((current) => (current ? { ...current, config: saved } : current))
-      await checkConnection()
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause))
-    } finally {
-      if (alive.current) setSaving(false)
-    }
+  function cancel() {
+    if (running !== null) send(commands.stopAgent, running)
+    // A cancelled run tells nothing more.
+    setRunning(null)
+    setTurns((current) =>
+      current.map((turn) =>
+        turn.role === 'assistant' && turn.state === 'running'
+          ? { ...turn, parts: settle(turn.parts), state: 'cancelled' }
+          : turn,
+      ),
+    )
   }
 
-  async function login() {
-    setLoggingIn(true)
-    setError('')
-    const channel = new Channel<LoginEvent>()
-    channel.onmessage = (event) => {
-      if (alive.current) setLoginEvent(event)
-    }
-    try {
-      setStatus(await call(commands.loginAgent, channel))
-      setLoginEvent(null)
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause))
-    } finally {
-      setLoggingIn(false)
-    }
-  }
-
-  async function logout() {
-    try {
-      setStatus(await call(commands.logoutAgent))
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause))
-    }
-  }
-
-  async function send() {
+  async function submit() {
     const message = prompt.trim()
-    if (!message || requestPending.current || !status?.ready || !project || running) return
-    requestPending.current = true
-    setPending(true)
-    setError('')
+    if (!message || busy || (!model && !cli)) return
+    const assistant = crypto.randomUUID()
+    setPrompt('')
+    following.current = true
+    setTurns((current) => [
+      ...current,
+      { id: crypto.randomUUID(), role: 'user', text: message },
+      { id: assistant, role: 'assistant', parts: [], state: 'running' },
+    ])
+    // A run can end before its id arrives.
+    let settled = false
+
+    const channel = new Channel<AgentEvent>()
+    channel.onmessage = (update) => {
+      if (update.type === 'event') {
+        updateAssistant((turn) => ({ ...turn, parts: told(turn.parts, update.event) }))
+        return
+      }
+      settled = true
+      setRunning(null)
+      updateAssistant((turn) =>
+        update.type === 'completed'
+          ? {
+              ...turn,
+              // A provider that doesn't stream tells its answer only at the end.
+              parts: turn.parts.some((part) => part.type === 'text')
+                ? settle(turn.parts)
+                : [...settle(turn.parts), { type: 'text', text: update.answer }],
+              state: 'done',
+            }
+          : { ...turn, parts: settle(turn.parts), state: 'failed', error: update.error },
+      )
+    }
     try {
-      const editor = useKoharuStore.getState()
-      const run = await call(commands.runAgent, message, project.name, {
-        page: editor.canvasPage,
-        elements: [...editor.selectedLayers],
-      })
-      submitted.current = run
-      if (useKoharuStore.getState().agent.run?.id === run) {
-        requestPending.current = false
-        if (alive.current) setPending(false)
-        submitted.current = null
-      }
-      if (alive.current) setPrompt('')
-    } catch (cause) {
-      requestPending.current = false
-      if (alive.current) {
-        setPending(false)
-        setError(cause instanceof Error ? cause.message : String(cause))
-      }
+      const run = await commands.runAgent(message, channel)
+      if (!settled) setRunning(run)
+    } catch (error) {
+      updateAssistant((turn) => ({
+        ...turn,
+        parts: settle(turn.parts),
+        state: 'failed',
+        error: error instanceof Error ? error.message : t('agent.failed'),
+      }))
+      setRunning(null)
+    }
+
+    function updateAssistant(
+      update: (turn: Extract<Turn, { role: 'assistant' }>) => Extract<Turn, { role: 'assistant' }>,
+    ) {
+      setTurns((current) =>
+        current.map((turn) =>
+          turn.id === assistant && turn.role === 'assistant' && turn.state === 'running'
+            ? update(turn)
+            : turn,
+        ),
+      )
     }
   }
+}
+
+/** `parts` with `event` told: text and reasoning run on in their part, and a tool's end settles
+ * its call. Text or a tool ends the thinking before it. */
+function told(parts: Part[], event: Event): Part[] {
+  const last = parts.at(-1)
+  switch (event.type) {
+    case 'text':
+      return last?.type === 'text'
+        ? [...parts.slice(0, -1), { ...last, text: last.text + event.delta }]
+        : [...settle(parts), { type: 'text', text: event.delta }]
+    case 'reasoning':
+      return last?.type === 'thinking' && last.ended === null
+        ? [...parts.slice(0, -1), { ...last, text: last.text + event.delta }]
+        : [...parts, { type: 'thinking', text: event.delta, started: Date.now(), ended: null }]
+    case 'tool_started':
+      return [
+        ...settle(parts),
+        {
+          type: 'tool',
+          tool: event.tool,
+          arguments: event.arguments,
+          state: 'running',
+          error: null,
+        },
+      ]
+    case 'tool_finished': {
+      const at = parts.findLastIndex(
+        (part) => part.type === 'tool' && part.tool === event.tool && part.state === 'running',
+      )
+      return at < 0
+        ? parts
+        : parts.map((part, index) =>
+            index === at && part.type === 'tool'
+              ? { ...part, state: event.error ? 'failed' : 'done', error: event.error }
+              : part,
+          )
+    }
+  }
+}
+
+/** `parts` with their thinking ended, as when the run moves on from it or ends. */
+function settle(parts: Part[]): Part[] {
+  return parts.map((part) =>
+    part.type === 'thinking' && part.ended === null ? { ...part, ended: Date.now() } : part,
+  )
+}
+
+/** The agent's turn: its parts in order, then how it ended when not with its answer. */
+function AssistantTurn({ turn }: { turn: Extract<Turn, { role: 'assistant' }> }) {
+  const { t } = useTranslation()
+  const last = turn.parts.at(-1)
+  // Something is on its way when nothing shows going on already.
+  const waiting =
+    turn.state === 'running' &&
+    (last === undefined ||
+      (last.type === 'tool' && last.state !== 'running') ||
+      (last.type === 'thinking' && last.ended !== null))
+  return (
+    <div className='grid min-w-0 gap-2'>
+      {turn.parts.map((part, index) =>
+        part.type === 'text' ? (
+          <Markdown key={index} className='text-foreground select-text'>
+            {part.text}
+          </Markdown>
+        ) : part.type === 'thinking' ? (
+          <Fold
+            key={index}
+            label={
+              part.ended === null
+                ? t('agent.thinking')
+                : t('agent.thought', {
+                    seconds: Math.max(1, Math.round((part.ended - part.started) / 1000)),
+                  })
+            }
+            active={part.ended === null}
+          >
+            <p className='text-[11px] leading-4 whitespace-pre-wrap text-muted-foreground select-text'>
+              {part.text}
+            </p>
+          </Fold>
+        ) : (
+          <Fold
+            key={index}
+            icon={
+              part.state === 'running' ? (
+                <Spinner className='size-3' />
+              ) : part.state === 'done' ? (
+                <Check className='size-3 text-emerald-600 dark:text-emerald-400' />
+              ) : (
+                <X className='size-3 text-destructive' />
+              )
+            }
+            label={t(
+              part.state === 'running'
+                ? 'agent.using'
+                : part.state === 'done'
+                  ? 'agent.used'
+                  : 'agent.toolFailed',
+              { tool: part.tool },
+            )}
+          >
+            <pre className='max-h-40 overflow-auto rounded-md bg-muted p-2 font-mono text-[10px] leading-4 whitespace-pre-wrap text-muted-foreground select-text'>
+              {JSON.stringify(part.arguments, null, 2)}
+            </pre>
+            {part.error && (
+              <p className='mt-1 text-[11px] leading-4 text-destructive select-text'>
+                {part.error}
+              </p>
+            )}
+          </Fold>
+        ),
+      )}
+      {waiting && (
+        <p className='animate-pulse text-[11px] text-muted-foreground'>{t('agent.working')}</p>
+      )}
+      {turn.state === 'failed' && (
+        <p className='text-xs leading-5 text-destructive select-text'>
+          {turn.error || t('agent.failed')}
+        </p>
+      )}
+      {turn.state === 'cancelled' && (
+        <p className='text-[11px] text-muted-foreground'>{t('agent.cancelled')}</p>
+      )}
+    </div>
+  )
+}
+
+/** A folded row of the agent's turn, as Claude folds its thinking and tool calls: its label, and
+ * what it holds once opened. */
+function Fold({
+  icon,
+  label,
+  active = false,
+  children,
+}: {
+  icon?: ReactNode
+  label: string
+  /** Still going, which its label shimmers to show. */
+  active?: boolean
+  children: ReactNode
+}) {
+  return (
+    <Collapsible>
+      <CollapsibleTrigger className='group flex max-w-full min-w-0 items-center gap-1.5 rounded-md py-0.5 text-[11px] text-muted-foreground transition-colors outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/40'>
+        {icon}
+        <span className={active ? 'animate-pulse truncate' : 'truncate'}>{label}</span>
+        <ChevronRight className='size-3 shrink-0 transition-transform group-data-[panel-open]:rotate-90' />
+      </CollapsibleTrigger>
+      <CollapsibleContent className='pt-1 pl-4'>{children}</CollapsibleContent>
+    </Collapsible>
+  )
 }

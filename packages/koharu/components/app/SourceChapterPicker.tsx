@@ -3,7 +3,7 @@
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
-import type { SourceChapterPreview } from '@koharu/bridge/protocol'
+import type { SourceChapterPreview } from '@koharu/ipc/protocol'
 import { Button } from '@koharu/ui/components/button'
 import { Checkbox } from '@koharu/ui/components/checkbox'
 import { Input } from '@koharu/ui/components/input'

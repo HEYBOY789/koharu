@@ -1,39 +1,35 @@
 'use client'
 
+import * as Sentry from '@sentry/nextjs'
 import { openUrl } from '@tauri-apps/plugin-opener'
-import { BookOpen, FilePlus2, FolderOpen, LoaderCircle, Settings } from 'lucide-react'
+import { FilePlus2, FolderOpen, LoaderCircle } from 'lucide-react'
 import Image from 'next/image'
 import { useState, type ComponentProps } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { AboutDialog } from '@/components/app/AboutDialog'
 import { PublicationDialog } from '@/components/app/PublicationDialog'
-import { SourceImportDialog } from '@/components/app/SourceImportDialog'
 import { useMacOS, WindowControls } from '@/components/app/WindowChrome'
-import { call } from '@/lib/backend'
-import { selectableLayer } from '@/lib/geometry'
 import {
-  pageKey,
-  pagesKey,
-  projectKey,
-  refresh,
-  useChapters,
+  send,
   useCommand,
   useImportPages,
   usePage,
-  usePages,
   useProject,
-  useProjectBusy,
+  useProjectMetadata,
 } from '@/lib/queries'
+import { deleteSelection } from '@/lib/scene'
+import { shortcutLabel, shortcuts } from '@/lib/shortcuts'
 import { useKoharuStore } from '@/lib/store'
-import { commands, type Operation, type Scope, type Stage } from '@koharu/bridge/protocol'
+import { commands } from '@koharu/ipc/protocol'
 import {
   Menubar,
-  MenubarContent as UiMenubarContent,
-  MenubarItem as UiMenubarItem,
+  MenubarCheckboxItem,
+  MenubarContent,
+  MenubarItem,
   MenubarMenu,
-  MenubarSeparator as UiMenubarSeparator,
-  MenubarShortcut as UiMenubarShortcut,
+  MenubarSeparator,
+  MenubarShortcut,
   MenubarSub,
   MenubarSubContent,
   MenubarSubTrigger,
@@ -45,38 +41,74 @@ export function TitleBar() {
   const { t } = useTranslation()
   const [aboutOpen, setAboutOpen] = useState(false)
   const [publicationOpen, setPublicationOpen] = useState(false)
-  const [sourceImportOpen, setSourceImportOpen] = useState(false)
-  const setWorkspaceTab = useKoharuStore((state) => state.setWorkspaceTab)
   const macOS = useMacOS()
   const project = useProject().data
-  const pagesQuery = usePages(Boolean(project))
+  const metadata = useProjectMetadata(project?.id).data
   const pageQuery = usePage(Boolean(project))
-  const chapters = useChapters(Boolean(project)).data ?? []
-  const pages = project ? (pagesQuery.data ?? []) : []
+  const pages = project?.pages ?? []
   const page = project ? (pageQuery.data ?? null) : null
-  const chapter = chapters.find((value) => value.id === page?.chapter)
-  const selectedPages = useKoharuStore((state) => state.selectedPages)
+  const pageNumber = page ? pages.findIndex((candidate) => candidate.id === page.id) + 1 : 0
+  const history = project?.history
+  const historyOpen = useKoharuStore((state) => state.historyOpen)
+  const setHistoryOpen = useKoharuStore((state) => state.setHistoryOpen)
   const selectedLayers = useKoharuStore((state) => state.selectedLayers)
   const selectLayers = useKoharuStore((state) => state.selectLayers)
   const setSettingsOpen = useKoharuStore((state) => state.setSettingsOpen)
-  const requestCanvasFit = useKoharuStore((state) => state.requestCanvasFit)
-  const busy = useProjectBusy()
   const { importPages, importing } = useImportPages()
   const { run: exportProject, busy: exporting } = useCommand(
     ['export-project'],
     commands.export,
     'menu.export',
   )
-  const { run: exportWiki, busy: exportingWiki } = useCommand(
+  const { run: exportChapters, busy: exportingChapters } = useCommand(
+    ['export-chapters'],
+    commands.exportChapters,
+    'publication.exportChapters',
+  )
+  const { run: exportWiki } = useCommand(
     ['export-wiki'],
     commands.exportWiki,
-    'menu.exportWiki',
+    'publication.exportWiki',
   )
 
-  const run = (scope: Scope, operation: Operation = { operation: 'full' }) =>
-    void call(commands.process, scope, operation).catch(() => undefined)
+  const psdLabels = {
+    background: t('psd.background'),
+    cleanup: t('psd.cleanup'),
+    outline: t('psd.outline'),
+  }
 
-  const closeProject = () => void call(commands.closeProject).catch(() => undefined)
+  /** Sentry's feedback form, in the interface's language; it leaves the page when it closes. */
+  const sendFeedback = async () => {
+    const feedback = Sentry.getFeedback()
+    if (!feedback) return
+    const form = await feedback.createForm({
+      formTitle: t('feedback.title'),
+      nameLabel: t('feedback.name'),
+      namePlaceholder: t('feedback.namePlaceholder'),
+      emailLabel: t('feedback.email'),
+      emailPlaceholder: t('feedback.emailPlaceholder'),
+      messageLabel: t('feedback.message'),
+      messagePlaceholder: t('feedback.messagePlaceholder'),
+      isRequiredLabel: t('feedback.required'),
+      submitButtonLabel: t('feedback.submit'),
+      cancelButtonLabel: t('feedback.cancel'),
+      confirmButtonLabel: t('feedback.confirm'),
+      addScreenshotButtonLabel: t('feedback.addScreenshot'),
+      removeScreenshotButtonLabel: t('feedback.removeScreenshot'),
+      highlightToolText: t('feedback.highlight'),
+      hideToolText: t('feedback.hide'),
+      removeHighlightText: t('feedback.removeHighlight'),
+      successMessageText: t('feedback.sent'),
+      errorEmptyMessageText: t('feedback.emptyMessage'),
+      errorNoClientText: t('feedback.noClient'),
+      errorTimeoutText: t('feedback.timeout'),
+      errorForbiddenText: t('feedback.forbidden'),
+      errorGenericText: t('feedback.failed'),
+      onFormClose: () => form.removeFromDom(),
+    })
+    form.appendToDom()
+    form.open()
+  }
 
   return (
     <>
@@ -88,8 +120,10 @@ export function TitleBar() {
           <div className='w-[84px] shrink-0' />
         ) : (
           <div className='relative z-10 flex h-full w-10 shrink-0 items-center justify-center rounded-br-lg'>
+            {/* Its weight is in its top, its feet pale, so centred it reads 2 px above the
+                menus' words; lowered by that to sit on their line. */}
             <Image
-              className='pointer-events-none'
+              className='pointer-events-none translate-y-0.5'
               src='/icon.png'
               alt='Koharu'
               width={17}
@@ -103,29 +137,17 @@ export function TitleBar() {
           <MenubarMenu>
             <MenubarTrigger>{t('menu.file')}</MenubarTrigger>
             <MenubarContent>
-              <MenubarItem onClick={() => setWorkspaceTab('mangadex')}>
-                <BookOpen />
-                {t('mangadex.title')}
-              </MenubarItem>
-              <MenubarItem disabled={importing} onClick={() => setSourceImportOpen(true)}>
-                <BookOpen />
-                {t('sourceImport.title')}
-              </MenubarItem>
               <MenubarSub>
-                <MenubarSubTrigger
-                  disabled={!project || importing}
-                  aria-busy={importing}
-                  className='min-h-8 gap-1.5 px-2 py-1 text-xs'
-                >
+                <MenubarSubTrigger disabled={!project || importing} aria-busy={importing}>
                   {importing && <LoaderCircle className='animate-spin' aria-hidden='true' />}
                   {importing ? t('navigator.importing') : t('menu.import')}
                 </MenubarSubTrigger>
-                <MenubarSubContent className='min-w-40 p-1'>
-                  <MenubarItem disabled={importing} onClick={() => importPages('files', null)}>
+                <MenubarSubContent>
+                  <MenubarItem disabled={importing} onClick={() => importPages('files')}>
                     <FilePlus2 />
                     {t('navigator.importFiles')}
                   </MenubarItem>
-                  <MenubarItem disabled={importing} onClick={() => importPages('folder', null)}>
+                  <MenubarItem disabled={importing} onClick={() => importPages('folder')}>
                     <FolderOpen />
                     {t('navigator.importFolder')}
                   </MenubarItem>
@@ -135,49 +157,46 @@ export function TitleBar() {
                 <MenubarSubTrigger
                   disabled={!project || pages.length === 0 || exporting}
                   aria-busy={exporting}
-                  className='min-h-8 gap-1.5 px-2 py-1 text-xs'
                 >
                   {exporting && <LoaderCircle className='animate-spin' aria-hidden='true' />}
                   {t('menu.export')}
                 </MenubarSubTrigger>
-                <MenubarSubContent className='min-w-40 p-1'>
+                <MenubarSubContent>
                   {(['png', 'psd', 'cbz'] as const).map((format) => (
                     <MenubarItem
                       key={format}
                       disabled={exporting}
-                      onClick={() => exportProject(format)}
+                      onClick={() => exportProject(format, psdLabels)}
                     >
                       {format.toUpperCase()}…
                     </MenubarItem>
                   ))}
+                  {(metadata?.chapters?.entries.length ?? 0) > 0 && (
+                    <>
+                      <MenubarSeparator />
+                      {(['png', 'psd', 'cbz'] as const).map((format) => (
+                        <MenubarItem
+                          key={`chapter-${format}`}
+                          disabled={exportingChapters}
+                          onClick={() => exportChapters(format, psdLabels)}
+                        >
+                          {t('publication.chapterFormat', { format: format.toUpperCase() })}
+                        </MenubarItem>
+                      ))}
+                      <MenubarItem onClick={exportWiki}>{t('publication.exportWiki')}</MenubarItem>
+                      <MenubarItem onClick={() => setPublicationOpen(true)}>
+                        {t('publication.prepareBundle')}
+                      </MenubarItem>
+                    </>
+                  )}
                 </MenubarSubContent>
               </MenubarSub>
-              <MenubarItem
-                disabled={!project || exportingWiki}
-                aria-busy={exportingWiki}
-                onClick={() => exportWiki()}
-              >
-                {exportingWiki ? (
-                  <LoaderCircle className='animate-spin' aria-hidden='true' />
-                ) : (
-                  <BookOpen />
-                )}
-                {t('menu.exportWiki')}
-              </MenubarItem>
               <MenubarSeparator />
-              <MenubarItem disabled={!project || busy} onClick={() => setPublicationOpen(true)}>
-                <BookOpen />
-                {t('publication.prepare')}
-              </MenubarItem>
-              <MenubarSeparator />
-              <MenubarItem disabled={!project} onClick={closeProject}>
+              <MenubarItem disabled={!project} onClick={() => send(commands.close)}>
                 {t('menu.closeProject')}
               </MenubarItem>
               <MenubarSeparator />
-              <MenubarItem onClick={() => setSettingsOpen(true)}>
-                <Settings />
-                {t('menu.settings')}
-              </MenubarItem>
+              <MenubarItem onClick={() => setSettingsOpen(true)}>{t('menu.settings')}</MenubarItem>
             </MenubarContent>
           </MenubarMenu>
 
@@ -185,99 +204,58 @@ export function TitleBar() {
             <MenubarTrigger>{t('menu.edit')}</MenubarTrigger>
             <MenubarContent>
               <MenubarItem
-                disabled={!project?.can_undo}
-                onClick={() =>
-                  void call(commands.undo)
-                    .then(() => refresh(projectKey, pagesKey, pageKey))
-                    .catch(() => undefined)
-                }
+                disabled={!history || history.current === 0}
+                onClick={() => send(commands.undo)}
               >
                 {t('menu.undo')}
-                <MenubarShortcut>Ctrl+Z</MenubarShortcut>
+                <MenubarShortcut>{shortcutLabel(shortcuts.undo)}</MenubarShortcut>
               </MenubarItem>
               <MenubarItem
-                disabled={!project?.can_redo}
-                onClick={() =>
-                  void call(commands.redo)
-                    .then(() => refresh(projectKey, pagesKey, pageKey))
-                    .catch(() => undefined)
-                }
+                disabled={!history || history.current >= history.steps.length}
+                onClick={() => send(commands.redo)}
               >
                 {t('menu.redo')}
-                <MenubarShortcut>Ctrl+Shift+Z</MenubarShortcut>
+                <MenubarShortcut>{shortcutLabel(shortcuts.redo)}</MenubarShortcut>
               </MenubarItem>
               <MenubarSeparator />
               <MenubarItem
                 disabled={!page}
-                onClick={() =>
-                  selectLayers(page?.layers.filter(selectableLayer).map((layer) => layer.id) ?? [])
-                }
+                onClick={() => selectLayers(page?.layers.map((layer) => layer.id) ?? [])}
               >
                 {t('menu.selectAllLayers')}
-                <MenubarShortcut>Ctrl+A</MenubarShortcut>
+                <MenubarShortcut>{shortcutLabel(shortcuts.selectAll)}</MenubarShortcut>
               </MenubarItem>
               <MenubarItem
                 disabled={selectedLayers.length === 0}
                 variant='destructive'
-                onClick={() =>
-                  void call(commands.deleteLayers, selectedLayers)
-                    .then(() => refresh(projectKey, pagesKey, pageKey))
-                    .catch(() => undefined)
-                }
+                onClick={() => send(deleteSelection, selectedLayers, page?.layers ?? [])}
               >
                 {t('menu.delete')}
-                <MenubarShortcut>Del</MenubarShortcut>
-              </MenubarItem>
-            </MenubarContent>
-          </MenubarMenu>
-
-          <MenubarMenu>
-            <MenubarTrigger>{t('menu.process')}</MenubarTrigger>
-            <MenubarContent>
-              <MenubarItem
-                disabled={busy || !project || pages.length === 0}
-                onClick={() => run({ scope: 'project' })}
-              >
-                {t('menu.processProject')}
-              </MenubarItem>
-              <MenubarItem
-                disabled={busy || selectedPages.length === 0}
-                onClick={() => run({ scope: 'pages', value: selectedPages })}
-              >
-                {t('menu.processPages')}
-              </MenubarItem>
-              <MenubarItem
-                disabled={busy || selectedLayers.length === 0}
-                onClick={() =>
-                  run(
-                    { scope: 'entities', value: selectedLayers },
-                    { operation: 'stages', stages: ['ocr', 'translation'] },
-                  )
-                }
-              >
-                {t('menu.processLayers')}
+                <MenubarShortcut>{shortcutLabel(shortcuts.delete)}</MenubarShortcut>
               </MenubarItem>
               <MenubarSeparator />
-              {(['detection', 'ocr', 'translation', 'inpainting'] as Stage[]).map((stage) => (
-                <MenubarItem
-                  key={stage}
-                  disabled={busy || !project || pages.length === 0}
-                  onClick={() => run({ scope: 'project' }, { operation: 'through', stage })}
-                >
-                  {t('menu.runPhase', {
-                    phase: t(`phase.${stage}`),
-                  })}
-                </MenubarItem>
-              ))}
+              {/* Frees the GPU, as Photoshop's Edit → Purge frees memory. */}
+              <MenubarItem onClick={() => send(commands.unload)}>
+                {t('menu.unloadModels')}
+              </MenubarItem>
             </MenubarContent>
           </MenubarMenu>
 
           <MenubarMenu>
             <MenubarTrigger>{t('menu.view')}</MenubarTrigger>
             <MenubarContent>
-              <MenubarItem disabled={!page} onClick={requestCanvasFit}>
+              <MenubarItem disabled={!page} onClick={() => send(commands.fit)}>
                 {t('menu.fit')}
+                <MenubarShortcut>{shortcutLabel(shortcuts.fit)}</MenubarShortcut>
               </MenubarItem>
+              <MenubarCheckboxItem
+                disabled={!page}
+                checked={historyOpen}
+                onCheckedChange={setHistoryOpen}
+                closeOnClick
+              >
+                {t('menu.history')}
+              </MenubarCheckboxItem>
             </MenubarContent>
           </MenubarMenu>
 
@@ -285,16 +263,27 @@ export function TitleBar() {
             <MenubarTrigger>{t('menu.help')}</MenubarTrigger>
             <MenubarContent>
               <MenubarItem
-                onClick={() => void openUrl('https://discord.gg/mHvHkxGnUY').catch(() => undefined)}
-              >
-                {t('menu.discord')}
-              </MenubarItem>
-              <MenubarItem
                 onClick={() =>
                   void openUrl('https://github.com/koharu-rs/koharu').catch(() => undefined)
                 }
               >
                 {t('menu.github')}
+              </MenubarItem>
+              <MenubarItem
+                onClick={() => void openUrl('https://discord.gg/mHvHkxGnUY').catch(() => undefined)}
+              >
+                {t('menu.discord')}
+              </MenubarItem>
+              <MenubarSeparator />
+              <MenubarItem
+                onClick={() =>
+                  void openUrl('https://github.com/sponsors/mayocream').catch(() => undefined)
+                }
+              >
+                {t('menu.donate')}
+              </MenubarItem>
+              <MenubarItem onClick={() => void sendFeedback().catch(() => undefined)}>
+                {t('menu.feedback')}
               </MenubarItem>
               <MenubarSeparator />
               <MenubarItem onClick={() => setAboutOpen(true)}>{t('menu.about')}</MenubarItem>
@@ -307,16 +296,10 @@ export function TitleBar() {
           {project ? (
             <span className='truncate'>
               <span className='font-medium text-foreground'>{project.name}</span>
-              {chapter && (
-                <>
-                  <span className='mx-2'>/</span>
-                  <span>{chapter.title}</span>
-                </>
-              )}
               {page && (
                 <>
                   <span className='mx-2'>/</span>
-                  <span>{page.label}</span>
+                  <span>{t('navigator.pageNumber', { number: pageNumber })}</span>
                 </>
               )}
             </span>
@@ -328,8 +311,9 @@ export function TitleBar() {
         {!macOS && <WindowControls />}
       </header>
       <AboutDialog open={aboutOpen} onOpenChange={setAboutOpen} />
-      <PublicationDialog open={publicationOpen} onOpenChange={setPublicationOpen} />
-      <SourceImportDialog open={sourceImportOpen} onOpenChange={setSourceImportOpen} />
+      {publicationOpen && (
+        <PublicationDialog labels={psdLabels} close={() => setPublicationOpen(false)} />
+      )}
     </>
   )
 }
@@ -344,28 +328,4 @@ function MenubarTrigger({ className, ...props }: ComponentProps<typeof UiMenubar
       {...props}
     />
   )
-}
-
-function MenubarContent({ className, ...props }: ComponentProps<typeof UiMenubarContent>) {
-  return <UiMenubarContent className={cn('min-w-44 p-1', className)} {...props} />
-}
-
-function MenubarItem({ className, ...props }: ComponentProps<typeof UiMenubarItem>) {
-  return (
-    <UiMenubarItem
-      className={cn(
-        "min-h-8 gap-1.5 px-2 py-1 text-xs [&_svg:not([class*='size-'])]:size-3.5",
-        className,
-      )}
-      {...props}
-    />
-  )
-}
-
-function MenubarShortcut({ className, ...props }: ComponentProps<typeof UiMenubarShortcut>) {
-  return <UiMenubarShortcut className={cn('text-[11px]', className)} {...props} />
-}
-
-function MenubarSeparator({ className, ...props }: ComponentProps<typeof UiMenubarSeparator>) {
-  return <UiMenubarSeparator className={cn('my-0.5', className)} {...props} />
 }

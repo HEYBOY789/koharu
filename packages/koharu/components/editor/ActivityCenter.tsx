@@ -1,473 +1,288 @@
 'use client'
 
 import { useMutationState } from '@tanstack/react-query'
-import {
-  Check,
-  ChevronUp,
-  CircleAlert,
-  Download,
-  FolderOpen,
-  LoaderCircle,
-  Square,
-  X,
-} from 'lucide-react'
-import { useEffect, useState } from 'react'
+import { CircleAlert, Download, LoaderCircle, Square, X } from 'lucide-react'
+import type { ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 
-import { call } from '@/lib/backend'
-import { usePages, useProject } from '@/lib/queries'
-import { useKoharuStore } from '@/lib/store'
-import { commands, type Download as DownloadState, type Job } from '@koharu/bridge/protocol'
+import { send, useChapterJobs, usePages, useSourceJobs } from '@/lib/queries'
+import { useKoharuStore, type Job } from '@/lib/store'
+import { commands, type Transfer } from '@koharu/ipc/protocol'
 import { Button } from '@koharu/ui/components/button'
-
-import { AgentProgress, agentProgressLabel } from './AgentProgress'
-import { StopJobButton } from './StopJobButton'
+import { Progress, ProgressLabel, ProgressValue } from '@koharu/ui/components/progress'
 
 export function ActivityCenter() {
   const { t } = useTranslation()
-  const [expanded, setExpanded] = useState(false)
-  const project = useProject().data
   const jobs = useKoharuStore((state) => state.jobs)
-  const stoppingJobs = useKoharuStore((state) => state.stoppingJobs)
-  const agent = useKoharuStore((state) => state.agent.run)
+  const chapters = (useChapterJobs().data ?? []).filter(
+    (job) => job.phase !== 'finished' && job.phase !== 'stopped',
+  )
+  const sources = (useSourceJobs().data ?? []).filter(
+    (job) => job.phase !== 'finished' && job.phase !== 'stopped',
+  )
   const downloads = useKoharuStore((state) => state.downloads)
   const activities = useMutationState({
     filters: { status: 'pending' },
-    select: (mutation) => ({
-      id: mutation.mutationId,
-      label: mutation.options.meta?.activity,
-    }),
-  }).filter(
-    (activity): activity is { id: number; label: string } => typeof activity.label === 'string',
+    select: (mutation) => ({ id: mutation.mutationId, label: mutation.meta?.activity }),
+  }).flatMap(({ id, label }) => (label ? [{ id, label }] : []))
+  const visibleJobs = Object.values(jobs).filter(
+    (job) =>
+      (job.state === 'running' || job.state === 'failed') &&
+      !chapters.some((chapter) => chapter.run === job.id),
   )
-  const visibleJobs = Object.values(jobs).reverse()
   const runningDownloads = Object.values(downloads).filter(
-    (download) => download.state === 'running',
+    (download) => download.state === 'Running',
   )
-  const failedDownloads = Object.values(downloads).filter((download) => download.state === 'failed')
+  const failedDownloads = Object.values(downloads).filter((download) => failure(download) !== null)
   const visibleDownloads = [...runningDownloads, ...failedDownloads]
-  const empty =
+  if (
     activities.length === 0 &&
     visibleJobs.length === 0 &&
     visibleDownloads.length === 0 &&
-    agent === null
-  useEffect(() => {
-    if (empty) setExpanded(false)
-  }, [empty])
-  if (empty) return null
-
-  const primary =
-    visibleJobs.find((job) => job.state === 'running') ??
-    visibleJobs.find((job) => job.state === 'queued') ??
-    visibleJobs.find((job) => job.state === 'failed') ??
-    visibleJobs[0]
-  const agentPrimary = agent && (agent.state === 'running' || !primary)
-  const percent = primary ? progress(primary.completed, primary.total) : null
-  const errors =
-    visibleJobs.filter((job) => job.state === 'failed').length +
-    failedDownloads.length +
-    Number(agent?.state === 'failed' || Boolean(agent?.failures.length))
-  const label = agentPrimary
-    ? `${agent.project} · ${t('agent.title')} · ${agentProgressLabel(t, agent)}`
-    : primary
-      ? [
-          primary.project,
-          primary.state === 'running'
-            ? stoppingJobs[primary.id]
-              ? t('activity.stopping')
-              : (primary.chapter_title ??
-                (primary.stage ? t(`phase.${primary.stage}`) : t('activity.processing')))
-            : t(
-                primary.state === 'failed'
-                  ? 'activity.processingFailed'
-                  : `activity.${primary.state}`,
-              ),
-          primary.state === 'running' && !stoppingJobs[primary.id] && percent !== null
-            ? `${percent}%`
-            : null,
-        ]
-          .filter(Boolean)
-          .join(' · ')
-      : activities[0]
-        ? t(activities[0].label)
-        : t('activity.downloadingFiles', { count: visibleDownloads.length })
+    chapters.length === 0 &&
+    sources.length === 0
+  )
+    return null
 
   return (
-    <section
+    <aside
       aria-label={t('activity.title')}
-      className='shrink-0 border-t border-border/60 bg-[var(--surface-toolbar)]'
+      className='absolute right-3 bottom-9 z-30 flex w-72 max-w-[calc(100%-1.5rem)] flex-col rounded-2xl border border-border/50 bg-popover shadow-md'
     >
-      <div className='flex h-8 min-w-0 items-center gap-1 px-2'>
-        <Button
-          variant='ghost'
-          size='sm'
-          className='h-7 min-w-0 flex-1 justify-start text-[11px]'
-          aria-label={t('activity.details')}
-          aria-expanded={expanded}
-          aria-controls='activity-details'
-          onClick={() => setExpanded((value) => !value)}
-          title={label}
+      <div className='border-b px-3 py-2'>
+        <span className='text-[10px] font-semibold tracking-[0.1em] uppercase'>
+          {t('activity.title')}
+        </span>
+      </div>
+      {activities.map((activity) => (
+        <div
+          key={activity.id}
+          role='status'
+          className='grid grid-cols-[1rem_minmax(0,1fr)] items-center gap-x-2.5 border-b p-3 last:border-b-0'
         >
-          <ChevronUp className={`size-3 shrink-0 ${expanded ? 'rotate-180' : ''}`} />
-          <span className='shrink-0 text-muted-foreground'>{t('activity.title')}</span>
-          <span className='truncate'>{label}</span>
-          {!agentPrimary && primary?.chapter_progress && (
-            <span className='ml-auto shrink-0 text-muted-foreground tabular-nums'>
-              {t('activity.chapterProgress', primary.chapter_progress)}
-            </span>
-          )}
-          {errors > 0 ? (
-            <span
-              className='ml-auto flex shrink-0 items-center gap-1 text-destructive'
-              aria-label={t('activity.attention', { count: errors })}
-            >
-              <CircleAlert className='size-3' />
-              {errors}
-            </span>
-          ) : null}
-        </Button>
-        {agentPrimary ? (
-          <>
-            {agent.project !== project?.name && <OpenProject name={agent.project} agent />}
-            {agent.state === 'running' && (
+          <LoaderCircle
+            className='size-3.5 animate-spin justify-self-center text-primary motion-reduce:animate-none'
+            aria-hidden='true'
+          />
+          <span className='truncate text-[11px] font-medium'>{t(activity.label)}</span>
+        </div>
+      ))}
+      {runningDownloads.length > 1 ? (
+        <DownloadGroup downloads={runningDownloads} />
+      ) : (
+        runningDownloads.map((download) => <DownloadItem key={download.id} download={download} />)
+      )}
+      {failedDownloads.map((download) => (
+        <DownloadItem key={download.id} download={download} />
+      ))}
+      {visibleJobs.map((job) => (
+        <JobItem key={job.id} job={job} />
+      ))}
+      {sources.map((job) => (
+        <ProgressRow
+          key={job.id}
+          icon={
+            job.error ? (
+              <CircleAlert className='size-3.5 text-destructive' />
+            ) : (
+              <Download className='size-3.5 text-primary' />
+            )
+          }
+          label={job.name}
+          detail={
+            job.error ??
+            job.progress?.detail ??
+            (job.phase === 'queued'
+              ? t('sourceImport.phase.queued')
+              : t('sourceImport.phase.downloading'))
+          }
+          completed={job.progress?.completed ?? null}
+          total={job.progress?.total ?? 0}
+          action={
+            job.error ? undefined : (
               <Button
                 size='icon-xs'
                 variant='ghost'
-                aria-label={t('activity.stop')}
-                onClick={() => void call(commands.cancelAgent, agent.id).catch(() => undefined)}
+                aria-label={t('sourceImport.stop')}
+                onClick={() => send(commands.stopSourceJob, job.id)}
               >
                 <Square className='size-2.5 fill-current' />
               </Button>
-            )}
-          </>
-        ) : (
-          <>
-            {primary?.project &&
-            primary.project !== project?.name &&
-            primary.state !== 'queued' &&
-            !(primary.state === 'running' && primary.phase === 'import') ? (
-              <OpenProject name={primary.project} />
-            ) : null}
-            {primary?.state === 'running' || primary?.state === 'queued' ? (
-              <StopJobButton id={primary.id} />
-            ) : null}{' '}
-          </>
-        )}
-      </div>
-      {expanded ? (
-        <div
-          id='activity-details'
-          role='region'
-          aria-label={t('activity.details')}
-          className='max-h-[min(40vh,20rem)] overflow-y-auto border-t border-border/60 bg-popover'
-        >
-          {activities.map((activity) => (
-            <div
-              key={activity.id}
-              role='status'
-              className='grid grid-cols-[1rem_minmax(0,1fr)] items-center gap-x-2.5 border-b p-3 last:border-b-0'
-            >
-              <LoaderCircle
-                className='size-3.5 animate-spin justify-self-center text-primary motion-reduce:animate-none'
-                aria-hidden='true'
-              />
-              <span className='truncate text-[12px] font-medium'>{t(activity.label)}</span>
-            </div>
-          ))}
-          {runningDownloads.length > 1 ? (
-            <DownloadGroup downloads={runningDownloads} />
-          ) : (
-            runningDownloads.map((download) => (
-              <DownloadItem key={download.id} download={download} />
-            ))
-          )}
-          {failedDownloads.map((download) => (
-            <DownloadItem key={download.id} download={download} />
-          ))}
-          {agent && (
-            <div className='border-b p-3 text-[11px] last:border-b-0'>
-              <div className='flex min-w-0 items-center gap-2'>
-                <span className='min-w-0 flex-1 truncate font-medium'>
-                  {agent.project} · {t('agent.title')}
-                </span>
-                {agent.project !== project?.name && <OpenProject name={agent.project} agent />}
-                {agent.state === 'running' ? (
-                  <Button
-                    size='icon-xs'
-                    variant='ghost'
-                    aria-label={t('activity.stop')}
-                    onClick={() => void call(commands.cancelAgent, agent.id).catch(() => undefined)}
-                  >
-                    <Square className='size-2.5 fill-current' />
-                  </Button>
-                ) : (
-                  <Button
-                    size='icon-xs'
-                    variant='ghost'
-                    aria-label={t('activity.dismiss')}
-                    onClick={() => void call(commands.dismissAgentActivity)}
-                  >
-                    <X className='size-3' />
-                  </Button>
-                )}
-              </div>
-              <AgentProgress run={agent} />
-              {agent.state !== 'running' && agent.error && (
-                <p className='break-words text-destructive'>{agent.error}</p>
-              )}
-            </div>
-          )}
-          {visibleJobs.map((job) => (
-            <JobItem key={job.id} job={job} />
-          ))}
-        </div>
-      ) : null}
-    </section>
+            )
+          }
+        />
+      ))}
+      {chapters.map((job) => (
+        <ProgressRow
+          key={job.project}
+          icon={
+            job.error ? (
+              <CircleAlert className='size-3.5 text-destructive' />
+            ) : (
+              <LoaderCircle className='size-3.5 animate-spin text-primary' />
+            )
+          }
+          label={job.name}
+          detail={
+            job.error ??
+            `${t(job.phase === 'summarizing' ? 'chapter.phase.summarizing' : 'chapter.phase.translating', { chapter: job.chapter })} · ${t('chapter.progress', job)}`
+          }
+          completed={job.completed}
+          total={job.total}
+          action={
+            job.error ? undefined : (
+              <Button
+                size='icon-xs'
+                variant='ghost'
+                aria-label={t('chapter.stop')}
+                onClick={() => send(commands.stopChapterJob, job.project)}
+              >
+                <Square className='size-2.5 fill-current' />
+              </Button>
+            )
+          }
+        />
+      ))}
+    </aside>
   )
 }
 
-function OpenProject({ name, agent = false }: { name: string; agent?: boolean }) {
+function DownloadGroup({ downloads }: { downloads: Transfer[] }) {
   const { t } = useTranslation()
-  const setWorkspaceTab = useKoharuStore((state) => state.setWorkspaceTab)
+  const total = downloads.reduce((sum, download) => sum + download.total, 0)
+  const completed = downloads.reduce((sum, download) => sum + download.completed, 0)
   return (
-    <Button
-      size='icon-xs'
-      variant='ghost'
-      aria-label={t('activity.openProject', { name })}
-      title={t('activity.openProject', { name })}
-      onClick={() =>
-        void call(commands.openProject, name)
-          .then(() => {
-            setWorkspaceTab('projects')
-            if (agent) useKoharuStore.getState().setInspectorPanel('agent')
-          })
-          .catch(() => undefined)
-      }
-    >
-      <FolderOpen className='size-3' />
-    </Button>
-  )
-}
-
-function DownloadGroup({ downloads }: { downloads: DownloadState[] }) {
-  const { t } = useTranslation()
-  const hasKnownTotal = downloads.every((download) => download.total > 0)
-  const percent = hasKnownTotal
-    ? progress(
-        downloads.reduce((sum, download) => sum + download.completed, 0),
-        downloads.reduce((sum, download) => sum + download.total, 0),
-      )
-    : null
-
-  return (
-    <div className='border-b p-3 last:border-b-0'>
-      <div className='grid grid-cols-[1rem_minmax(0,1fr)_2.25rem_1.5rem] items-start gap-x-2.5'>
-        <Download className='mt-0.5 size-3.5 justify-self-center text-primary' />
-        <span className='truncate text-[11px]'>
-          {t('activity.downloadingFiles', { count: downloads.length })}
-        </span>
-        <span className='text-right text-[10px] tabular-nums'>
-          {percent !== null ? `${percent}%` : null}
-        </span>
-        <span aria-hidden='true' />
-        <div className='col-start-2 col-end-4'>
-          <Progress value={percent} />
-        </div>
-      </div>
-    </div>
+    <ProgressRow
+      icon={<Download className='mt-0.5 size-3.5 justify-self-center text-primary' />}
+      label={t('activity.downloadingFiles', { count: downloads.length })}
+      completed={downloads.every((download) => download.total > 0) ? completed : null}
+      total={total}
+    />
   )
 }
 
 function JobItem({ job }: { job: Job }) {
   const { t } = useTranslation()
-  const stopping = useKoharuStore((state) => Boolean(state.stoppingJobs[job.id]))
   const dismiss = useKoharuStore((state) => state.dismissJob)
-  // The pipeline reports which page it is on; the rail has already loaded the
-  // labels, so this resolves from cache rather than fetching.
-  const active = useProject().data
-  const sameProject = job.project !== null && job.project === active?.name
-  const pagesQuery = usePages(job.page !== null && sameProject)
-  const pages = sameProject ? pagesQuery.data : undefined
-  // Numbered by position in the rail, so the row says where in the run this
-  // is as well as which file: a scan filename alone rarely tells you.
+  // Numbered by position in the rail, so the row says where in the run this is.
+  const pages = usePages(job.page !== null).data
   const pageIndex = job.page ? (pages?.findIndex((page) => page.id === job.page) ?? -1) : -1
-  const page = pageIndex >= 0 ? pages?.[pageIndex] : undefined
-  const pageLabel = page
-    ? t('activity.pageLabel', { number: pageIndex + 1, label: page.label })
-    : undefined
+  const pageLabel =
+    pageIndex >= 0 ? t('navigator.pageNumber', { number: pageIndex + 1 }) : undefined
   if (job.state === 'failed') {
     return (
-      <div className='border-b last:border-b-0'>
-        <JobProjectHeader job={job} />
-        <Failure
-          message={job.error || t('activity.processingFailed')}
-          onDismiss={() => dismiss(job.id)}
-        />
-      </div>
+      <Failure
+        message={job.error || t('activity.processingFailed')}
+        detail={pageLabel}
+        onDismiss={() => dismiss(String(job.id))}
+      />
     )
   }
-  if (job.state === 'queued') {
-    return (
-      <div className='flex items-center gap-2 border-b p-3 text-xs'>
-        <span className='min-w-0 flex-1 break-words'>
-          {job.project || job.chapter_title} · {t('activity.queued')}
-        </span>
-        <StopJobButton id={job.id} />
-      </div>
-    )
-  }
-  if (job.state !== 'running') {
-    return (
-      <div className='border-b last:border-b-0'>
-        <JobProjectHeader job={job} />
-        <div className='flex items-center gap-2 p-3 text-[11px]'>
-          <Check className='size-3 text-muted-foreground' />
-          <span className='flex-1'>{t(`activity.${job.state}`)}</span>
-          <Button
-            size='icon-xs'
-            variant='ghost'
-            aria-label={t('activity.dismiss')}
-            onClick={() => dismiss(job.id)}
-          >
-            <X />
-          </Button>
-        </div>
-      </div>
-    )
-  }
-  const percent = progress(job.completed, job.total)
   return (
-    <div className='border-b last:border-b-0'>
-      <JobProjectHeader job={job} />
-      <div className='p-3'>
-        <div className='grid grid-cols-[1rem_minmax(0,1fr)_2.25rem_1.5rem] items-start gap-x-2.5'>
-          <span className='mt-1.5 size-1.5 justify-self-center rounded-full bg-primary' />
-          <div className='min-w-0'>
-            <span className='block truncate text-[12px] font-medium'>
-              {stopping
-                ? t('activity.stopping')
-                : job.chapter_title && job.phase
-                  ? t(
-                      job.phase === 'inspect'
-                        ? 'sourceImport.previewing'
-                        : job.phase === 'import'
-                          ? 'sourceImport.downloading'
-                          : job.phase === 'summarize'
-                            ? 'activity.summarizingChapter'
-                            : 'activity.translatingChapter',
-                      { chapter: job.chapter_title },
-                    )
-                  : job.stage
-                    ? t(`phase.${job.stage}`, { defaultValue: job.stage })
-                    : t('activity.processing')}
-            </span>
-          </div>
-          <span className='pt-0.5 text-right text-[10px] tabular-nums'>
-            {percent !== null ? `${percent}%` : null}
-          </span>
-          <StopJobButton id={job.id} className='-mt-1' />
-          {pageLabel ? (
-            <p className='col-start-2 col-end-4 mt-0.5 truncate text-[10px] text-muted-foreground'>
-              {pageLabel}
-            </p>
-          ) : null}
-          {job.detail ? (
-            <p className='col-start-2 col-end-4 line-clamp-2 text-[9px] leading-3.5 break-words text-muted-foreground'>
-              {job.detail}
-            </p>
-          ) : null}
-          {stopping ? (
-            <p
-              role='status'
-              className='col-start-2 col-end-4 mt-1 text-[10px] leading-4 break-words text-muted-foreground'
-            >
-              {t('activity.stoppingHint')}
-            </p>
-          ) : job.retry ? (
-            <p
-              role='status'
-              className='col-start-2 col-end-4 mt-1 text-[10px] leading-4 break-words text-muted-foreground'
-            >
-              {t('activity.retrying', {
-                attempt: job.retry.attempt,
-                max: job.retry.max_attempts,
-                seconds: job.retry.delay_seconds,
-              })}
-            </p>
-          ) : null}
-          {job.model ? (
-            <p className='col-start-2 col-end-4 truncate text-[10px] text-muted-foreground'>
-              {job.model}
-            </p>
-          ) : null}
-          <div className='col-start-2 col-end-4'>
-            <Progress value={percent} />
-          </div>
-        </div>
-      </div>
-    </div>
+    <ProgressRow
+      icon={<span className='mt-1.5 size-1.5 justify-self-center rounded-full bg-primary' />}
+      label={
+        job.stage ? t(`phase.${job.stage}`, { defaultValue: job.stage }) : t('activity.processing')
+      }
+      detail={pageLabel}
+      completed={job.completed}
+      total={job.total}
+      action={
+        <Button
+          size='icon-xs'
+          variant='ghost'
+          className='-mt-1'
+          aria-label={t('activity.stop')}
+          onClick={() => send(commands.stopPipeline)}
+        >
+          <Square className='size-2.5 fill-current' />
+        </Button>
+      }
+    />
   )
 }
 
-function JobProjectHeader({ job }: { job: Job }) {
-  const { t } = useTranslation()
-  const active = useProject().data
-  return job.project ? (
-    <div className='flex min-w-0 items-center gap-2 px-3 pt-2 text-[11px] font-semibold'>
-      <span className='truncate' title={job.project}>
-        {job.project}
-      </span>
-      {job.chapter_progress && (
-        <span className='shrink-0 text-[10px] font-normal text-muted-foreground tabular-nums'>
-          {t('activity.chapterProgress', job.chapter_progress)}
-        </span>
-      )}
-      {job.project !== active?.name &&
-      job.state !== 'queued' &&
-      !(job.state === 'running' && job.phase === 'import') ? (
-        <OpenProject name={job.project} />
-      ) : null}
-    </div>
-  ) : null
-}
-
-function DownloadItem({ download }: { download: DownloadState }) {
+function DownloadItem({ download }: { download: Transfer }) {
   const { t } = useTranslation()
   const dismiss = useKoharuStore((state) => state.dismissDownload)
-  if (download.state === 'failed') {
+  const error = failure(download)
+  if (error !== null) {
     return (
       <Failure
-        message={download.error || t('activity.downloadFailed')}
+        message={error || t('activity.downloadFailed')}
         onDismiss={() => dismiss(download.id)}
       />
     )
   }
-  const percent = progress(download.completed, download.total)
   return (
-    <div className='border-b p-3 last:border-b-0'>
-      <div className='grid grid-cols-[1rem_minmax(0,1fr)_2.25rem_1.5rem] items-start gap-x-2.5'>
-        <Download className='mt-0.5 size-3.5 justify-self-center text-primary' />
-        <span className='truncate text-[11px]'>{download.name || t('activity.modelDownload')}</span>
-        <span className='text-right text-[10px] tabular-nums'>
-          {percent !== null ? `${percent}%` : null}
-        </span>
-        <span aria-hidden='true' />
-        <div className='col-start-2 col-end-4'>
-          <Progress value={percent} />
-        </div>
-      </div>
+    <ProgressRow
+      icon={<Download className='mt-0.5 size-3.5 justify-self-center text-primary' />}
+      label={download.name || t('activity.modelDownload')}
+      completed={download.completed}
+      total={download.total}
+    />
+  )
+}
+
+/** A row of work under way: its name and how far along it is, in the interface's language, over
+ * its bar, which runs on its own while the total is unknown. */
+function ProgressRow({
+  icon,
+  label,
+  detail,
+  completed,
+  total,
+  action,
+}: {
+  icon: ReactNode
+  label: string
+  /** Where the work is, under its name. */
+  detail?: string
+  completed: number | null
+  total: number
+  action?: ReactNode
+}) {
+  const { i18n } = useTranslation()
+  return (
+    <div className='grid grid-cols-[1rem_minmax(0,1fr)_1.5rem] items-start gap-x-2.5 border-b p-3 last:border-b-0'>
+      {icon}
+      <Progress
+        value={completed !== null && total > 0 ? Math.min(completed, total) : null}
+        max={total || 100}
+        locale={i18n.language}
+        className='min-w-0 gap-x-2 gap-y-1.5'
+      >
+        <ProgressLabel className='min-w-0 flex-1 truncate text-[11px] font-medium'>
+          {label}
+        </ProgressLabel>
+        <ProgressValue className='text-[10px] text-foreground' />
+        {detail && <p className='w-full truncate text-[10px] text-muted-foreground'>{detail}</p>}
+      </Progress>
+      {action ?? <span aria-hidden='true' />}
     </div>
   )
 }
 
-function Failure({ message, onDismiss }: { message: string; onDismiss: () => void }) {
+/** A failure's row: why, and under it where, as a running row names its page. */
+function Failure({
+  message,
+  detail,
+  onDismiss,
+}: {
+  message: string
+  detail?: string
+  onDismiss: () => void
+}) {
   const { t } = useTranslation()
   return (
     <div className='grid grid-cols-[1rem_minmax(0,1fr)_2.25rem_1.5rem] items-start gap-x-2.5 border-b p-3 text-[11px] last:border-b-0'>
       <CircleAlert className='mt-0.5 size-3.5 justify-self-center text-destructive' />
-      <span className='col-start-2 col-end-4 max-h-40 min-w-0 overflow-y-auto [overflow-wrap:anywhere] whitespace-pre-wrap text-destructive'>
-        {message}
-      </span>
+      <div className='col-start-2 col-end-4 min-w-0'>
+        <p className='text-destructive'>{message}</p>
+        {detail ? (
+          <p className='mt-0.5 truncate text-[10px] text-muted-foreground'>{detail}</p>
+        ) : null}
+      </div>
       <Button
         size='icon-xs'
         variant='ghost'
@@ -481,23 +296,7 @@ function Failure({ message, onDismiss }: { message: string; onDismiss: () => voi
   )
 }
 
-function Progress({ value }: { value: number | null }) {
-  return (
-    <div
-      role='progressbar'
-      aria-valuemin={0}
-      aria-valuemax={100}
-      aria-valuenow={value ?? undefined}
-      className='mt-2 h-1 overflow-hidden rounded-full bg-muted'
-    >
-      <div
-        className={`h-full rounded-full bg-primary ${value === null ? 'w-1/2' : ''}`}
-        style={value === null ? undefined : { width: `${value}%` }}
-      />
-    </div>
-  )
-}
-
-function progress(completed: number, total: number): number | null {
-  return total > 0 ? Math.min(100, Math.round((completed / total) * 100)) : null
+/** Why a download failed, or `null` while it hasn't. */
+function failure(download: Transfer): string | null {
+  return typeof download.state === 'object' ? download.state.Failed : null
 }

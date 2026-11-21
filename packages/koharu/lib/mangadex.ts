@@ -1,4 +1,4 @@
-import type { MangaDexSearch } from '@koharu/bridge/protocol'
+import type { MangaDexSearch } from '@koharu/ipc/protocol'
 
 export const mangaDexDefaults = (): MangaDexSearch => ({
   title: '',
