@@ -40,7 +40,8 @@
     "working": "Работа…",
     "piModelHint": "Для локальных и пользовательских моделей Pi укажите provider/model-id. Имя провайдера должно точно совпадать с указанным в models.json Pi (например local-proxy). Пример:",
     "backend": "Среда агента",
-    "nativeBackend": "Koharu"
+    "nativeBackend": "Koharu",
+    "lastPage": "Последняя целевая страница: {{page}}"
   },
   "canvas": {
     "empty": "Выберите страницу, чтобы начать.",

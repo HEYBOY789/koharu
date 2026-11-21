@@ -3,7 +3,7 @@
 import { useMutation } from '@tanstack/react-query'
 import { Channel } from '@tauri-apps/api/core'
 import { ArrowUp, Bot, Check, ChevronDown, ChevronRight, Square, SquarePen, X } from 'lucide-react'
-import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { Choice } from '@/components/controls/Choice'
@@ -11,7 +11,14 @@ import { Markdown } from '@/components/controls/Markdown'
 import { ModelPicker } from '@/components/controls/ModelPicker'
 import { PiModelHint } from '@/components/controls/PiModelHint'
 import { modelName, REASONING } from '@/lib/models'
-import { send, useModels, usePreferences, useSavePreferences } from '@/lib/queries'
+import {
+  send,
+  useModels,
+  usePreferences,
+  useProject,
+  useProjectMetadata,
+  useSavePreferences,
+} from '@/lib/queries'
 import {
   commands,
   type AgentBackend,
@@ -67,6 +74,19 @@ export function AgentPanel() {
   const [prompt, setPrompt] = useState('')
   const [running, setRunning] = useState<number | null>(null)
   const [choosing, setChoosing] = useState(false)
+  const project = useProject().data
+  const metadata = useProjectMetadata(project?.id).data
+  const chapterPages = useMemo(() => {
+    const labels = new Map<string, string>()
+    for (const chapter of metadata?.chapters?.entries ?? []) {
+      chapter.pages.forEach((page, index) => {
+        const name = metadata?.page_labels?.[page]
+        const position = `${chapter.title} · ${index + 1}/${chapter.pages.length}`
+        labels.set(page, name ? `${position} · ${name}` : position)
+      })
+    }
+    return labels
+  }, [metadata])
   const busy = turns.some((turn) => turn.role === 'assistant' && turn.state === 'running')
   const models = (useModels().data ?? []).filter((model) => model.tools)
   const preferences = usePreferences().data
@@ -184,7 +204,7 @@ export function AgentPanel() {
                   {turn.text}
                 </div>
               ) : (
-                <AssistantTurn key={turn.id} turn={turn} />
+                <AssistantTurn key={turn.id} turn={turn} pageName={pageName} />
               ),
             )}
           </div>
@@ -318,6 +338,13 @@ export function AgentPanel() {
     if (preferences) save.mutate({ ...preferences, agent })
   }
 
+  function pageName(id: string): string | undefined {
+    const chapter = chapterPages.get(id)
+    if (chapter) return chapter
+    const position = project?.pages.findIndex((page) => page.id === id) ?? -1
+    return position < 0 ? undefined : t('navigator.pageNumber', { number: position + 1 })
+  }
+
   function cancel() {
     if (running !== null) send(commands.stopAgent, running)
     // A cancelled run tells nothing more.
@@ -440,9 +467,18 @@ function settle(parts: Part[]): Part[] {
 }
 
 /** The agent's turn: its parts in order, then how it ended when not with its answer. */
-function AssistantTurn({ turn }: { turn: Extract<Turn, { role: 'assistant' }> }) {
+function AssistantTurn({
+  turn,
+  pageName,
+}: {
+  turn: Extract<Turn, { role: 'assistant' }>
+  pageName: (id: string) => string | undefined
+}) {
   const { t } = useTranslation()
   const last = turn.parts.at(-1)
+  const target = turn.parts.findLast((part) => part.type === 'tool' && toolPage(part.arguments))
+  const page = target?.type === 'tool' ? toolPage(target.arguments) : undefined
+  const targetLabel = page ? pageName(page) : undefined
   // Something is on its way when nothing shows going on already.
   const waiting =
     turn.state === 'running' &&
@@ -504,6 +540,11 @@ function AssistantTurn({ turn }: { turn: Extract<Turn, { role: 'assistant' }> })
           </Fold>
         ),
       )}
+      {targetLabel && (
+        <p className='text-[11px] leading-4 text-muted-foreground' title={targetLabel}>
+          {t('agent.lastPage', { page: targetLabel })}
+        </p>
+      )}
       {waiting && (
         <p className='animate-pulse text-[11px] text-muted-foreground'>{t('agent.working')}</p>
       )}
@@ -517,6 +558,13 @@ function AssistantTurn({ turn }: { turn: Extract<Turn, { role: 'assistant' }> })
       )}
     </div>
   )
+}
+
+function toolPage(value: unknown): string | undefined {
+  if (!value || typeof value !== 'object') return undefined
+  if ('page' in value && typeof value.page === 'string') return value.page
+  if ('first_page' in value && typeof value.first_page === 'string') return value.first_page
+  return undefined
 }
 
 /** A folded row of the agent's turn, as Claude folds its thinking and tool calls: its label, and

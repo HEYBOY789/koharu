@@ -40,7 +40,8 @@
     "working": "جارٍ العمل...",
     "piModelHint": "For Pi local/custom models, enter provider/model-id. Use the exact provider name configured in Pi's models.json (for example local-proxy). Example:",
     "backend": "Agent backend",
-    "nativeBackend": "Koharu"
+    "nativeBackend": "Koharu",
+    "lastPage": "Last targeted page: {{page}}"
   },
   "canvas": {
     "empty": "اختر صفحة للبدء.",

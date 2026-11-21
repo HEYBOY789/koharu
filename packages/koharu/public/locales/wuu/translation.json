@@ -40,7 +40,8 @@
     "working": "来勒处理任务…",
     "piModelHint": "Pi 本地或自定义模型要按 provider/model-id 格式填写。前头个 provider 要搭 Pi 个 models.json 里配置个名称完全一样（比如 local-proxy）。例子：",
     "backend": "智能体运行方式",
-    "nativeBackend": "Koharu"
+    "nativeBackend": "Koharu",
+    "lastPage": "上趟目标页面：{{page}}"
   },
   "canvas": {
     "empty": "先选一页，就好开始。",

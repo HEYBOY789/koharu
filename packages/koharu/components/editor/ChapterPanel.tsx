@@ -1,7 +1,7 @@
 'use client'
 
 import { useQuery } from '@tanstack/react-query'
-import { useState, type FormEvent } from 'react'
+import { useMemo, useState, type FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { CommitTextarea } from '@/components/controls/CommitTextarea'
@@ -34,17 +34,20 @@ export function ChapterPanel() {
   const [wikiSlug, setWikiSlug] = useState('glossary')
   const [editing, setEditing] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const completed = useMemo(() => {
+    const translated = new Set(
+      project?.pages
+        .filter((page) => page.texts > 0 && page.translated === page.texts)
+        .map((page) => page.id),
+    )
+    return (metadata?.chapters?.entries ?? []).filter(
+      (chapter) =>
+        chapter.translated ||
+        (chapter.pages.length > 0 && chapter.pages.every((id) => translated.has(id))),
+    ).length
+  }, [metadata, project?.pages])
   if (!project) return null
   const wiki = metadata?.wiki?.files ?? []
-  const completed = chapters.filter(
-    (entry) =>
-      entry.translated ||
-      (entry.pages.length > 0 &&
-        entry.pages.every((id) => {
-          const page = project.pages.find((page) => page.id === id)
-          return page && page.texts > 0 && page.translated === page.texts
-        })),
-  ).length
   const edit = (action: ChapterEdit) => send(commands.editChapter, action, project.id)
   const create = (event: FormEvent) => {
     event.preventDefault()

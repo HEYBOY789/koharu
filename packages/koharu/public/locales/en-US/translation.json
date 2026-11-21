@@ -25,6 +25,7 @@
     "emptyTitle": "What should Koharu do?",
     "failed": "The agent request failed.",
     "loading": "Loading agent…",
+    "lastPage": "Last targeted page: {{page}}",
     "message": "Message Koharu Agent",
     "model": "Model",
     "newChat": "New chat",

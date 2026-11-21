@@ -40,7 +40,8 @@
     "working": "作業中…",
     "piModelHint": "Pi のローカル・カスタムモデルは provider/model-id の形式で入力してください。Pi の models.json に設定したプロバイダー名と完全に一致させます（例：local-proxy）。入力例：",
     "backend": "エージェントの実行環境",
-    "nativeBackend": "Koharu"
+    "nativeBackend": "Koharu",
+    "lastPage": "直前の対象ページ: {{page}}"
   },
   "canvas": {
     "empty": "ページを選択して開始します。",

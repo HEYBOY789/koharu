@@ -40,7 +40,8 @@
     "working": "Travail en cours…",
     "piModelHint": "Pour les modèles locaux ou personnalisés de Pi, saisissez fournisseur/id-du-modèle. Utilisez le nom exact du fournisseur configuré dans models.json de Pi (par exemple local-proxy). Exemple :",
     "backend": "Moteur de l’agent",
-    "nativeBackend": "Koharu"
+    "nativeBackend": "Koharu",
+    "lastPage": "Dernière page ciblée : {{page}}"
   },
   "canvas": {
     "empty": "Sélectionnez une page pour commencer.",
