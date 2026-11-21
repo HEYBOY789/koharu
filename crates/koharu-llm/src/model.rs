@@ -42,6 +42,8 @@ fn output_mode(vendor: &str) -> OutputMode {
 /// What else a request with a schema needs.
 fn params(vendor: &str) -> Option<Value> {
     match vendor {
+        // Some proxies stream when the flag is omitted. These requests expect a JSON reply.
+        openai_compatible::PROVIDER_NAME => Some(json!({"stream": false})),
         // rig drops a DeepSeek schema, so DeepSeek is asked for JSON mode.
         deepseek::PROVIDER_NAME => Some(json!({"response_format": {"type": "json_object"}})),
         // Only hosts that keep to the schema serve the request.

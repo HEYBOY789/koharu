@@ -197,8 +197,15 @@ fn schema(keys: &[String]) -> Result<schemars::Schema> {
 /// The translation for each of `keys` in `answer`, which must hold exactly
 /// those keys, each a text that isn't blank.
 fn answers(answer: &str, keys: &[String]) -> Result<Vec<String>> {
+    let answer = answer.trim();
+    let document = answer
+        .strip_prefix("```json")
+        .or_else(|| answer.strip_prefix("```JSON"))
+        .or_else(|| answer.strip_prefix("```"))
+        .and_then(|body| body.strip_suffix("```"))
+        .unwrap_or(answer);
     let Value::Object(mut answer) =
-        serde_json::from_str(answer).context("the answer isn't JSON")?
+        serde_json::from_str(document).context("the answer isn't JSON")?
     else {
         bail!("the answer isn't a JSON object");
     };
@@ -260,6 +267,18 @@ mod tests {
         assert_eq!(
             answers(r#"{"1": " One ", "2": "Two"}"#, &keys).expect("an answer"),
             ["One", "Two"]
+        );
+        assert_eq!(
+            answers("```json\n{\"1\": \"One\", \"2\": \"Two\"}\n```", &keys)
+                .expect("a fenced answer"),
+            ["One", "Two"]
+        );
+        assert!(
+            answers(
+                "```json\n{\"1\": \"One\", \"2\": \"Two\"}\n```\nExtra",
+                &keys
+            )
+            .is_err()
         );
         assert!(answers(r#"{"1": "One"}"#, &keys).is_err());
         assert!(answers(r#"{"1": "One", "2": " "}"#, &keys).is_err());
