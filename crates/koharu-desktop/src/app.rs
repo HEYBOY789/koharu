@@ -4,7 +4,7 @@
 //! and tells each.
 
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     sync::{Arc, OnceLock},
 };
 
@@ -14,7 +14,7 @@ use koharu_agent::{Agent, McpServer, Tools};
 use koharu_canvas::{Canvas, Effect, Snapshot};
 use koharu_pipeline::{Area, Pipeline, PipelineConfig, Request, RunId, Stage, Target};
 use koharu_renderer::Renderer;
-use koharu_scene::{Change, Edit, PageId, Session};
+use koharu_scene::{Change, Edit, PageId, ProjectId, Session};
 use parking_lot::Mutex;
 use serde::Serialize;
 use tauri::{AppHandle, Manager as _};
@@ -23,6 +23,8 @@ use tokio::sync::broadcast::{Receiver, error::RecvError};
 use tokio_util::task::AbortOnDropHandle;
 
 use crate::{
+    chapters::ChapterJobs,
+    commands::source_import::SourceJobs,
     events::{self, Event},
     library::Library,
     screen::{self, Screen},
@@ -34,6 +36,9 @@ pub struct App {
     pub pipeline: Pipeline,
     pub screen: Screen,
     pub project: Mutex<Option<Project>>,
+    pub chapter_jobs: ChapterJobs,
+    pub source_import: SourceJobs,
+    pub agent_runs: Mutex<BTreeMap<ProjectId, (u64, AbortOnDropHandle<()>)>>,
     /// Set once the window's app starts, before anything is told.
     handle: OnceLock<AppHandle<CefRuntime>>,
     /// Set once it listens; serves the open project.
@@ -48,8 +53,8 @@ pub struct Project {
     pub page: Option<PageId>,
     /// The conversation with the agent, on the model it was made with.
     pub conversation: Option<(String, Arc<tokio::sync::Mutex<Agent>>)>,
-    /// The agent's run going on, numbered, which closing aborts.
-    pub run: Option<(u64, AbortOnDropHandle<()>)>,
+    /// The external agent's session directory is retained across prompts.
+    pub external_conversation: Option<Arc<tempfile::TempDir>>,
     /// Shows and tells the session's changes.
     _relay: AbortOnDropHandle<()>,
 }
@@ -62,6 +67,9 @@ impl App {
             screen: Screen::default(),
             pipeline,
             project: Mutex::new(None),
+            chapter_jobs: ChapterJobs::default(),
+            source_import: SourceJobs::default(),
+            agent_runs: Mutex::default(),
             handle: OnceLock::new(),
             mcp: OnceLock::new(),
         }
@@ -127,11 +135,16 @@ impl App {
     }
 
     /// Opens `session` in place of the open project, at its first page.
-    pub fn open(self: &Arc<Self>, name: String, session: Session) -> Result<()> {
+    pub fn open(self: &Arc<Self>, name: String, session: Arc<Mutex<Session>>) -> Result<()> {
         self.close();
-        let page = session.project().pages().next().map(|page| page.id);
-        let relay = self.relay(session.subscribe());
-        let session = Arc::new(Mutex::new(session));
+        let (page, changes) = {
+            let session = session.lock();
+            (
+                session.project().pages().next().map(|page| page.id),
+                session.subscribe(),
+            )
+        };
+        let relay = self.relay(Arc::downgrade(&session), changes);
         self.screen.set_canvas(Some(Canvas::new(
             Arc::clone(&session),
             self.renderer.clone(),
@@ -143,7 +156,7 @@ impl App {
                 session,
                 page,
                 conversation: None,
-                run: None,
+                external_conversation: None,
                 _relay: relay,
             });
             if let Some(server) = self.mcp.get() {
@@ -155,8 +168,8 @@ impl App {
         self.refresh()
     }
 
-    /// Closes the open project, if one is, and stops what runs on it, so
-    /// nothing writes to a closed session.
+    /// Detaches the canvas. The pipeline owns its sessions until their
+    /// runs finish, so closing the view leaves background work running.
     pub fn close(&self) {
         let project = {
             let mut project = self.project.lock();
@@ -165,10 +178,8 @@ impl App {
             }
             project.take()
         };
-        self.pipeline.stop();
         self.screen.set_canvas(None);
-        if let Some(project) = project {
-            self.pipeline.close(project.session.lock().id());
+        if project.is_some() {
             self.emit(events::PROJECT, None);
             self.emit(events::PAGE, None);
         }
@@ -222,7 +233,11 @@ impl App {
     /// once. The shown page settles before the interface hears of a change,
     /// as it reads the shown page again for one: a page the change removed
     /// would otherwise be the one it asks for.
-    fn relay(self: &Arc<Self>, mut changes: Receiver<Change>) -> AbortOnDropHandle<()> {
+    fn relay(
+        self: &Arc<Self>,
+        session: std::sync::Weak<Mutex<Session>>,
+        mut changes: Receiver<Change>,
+    ) -> AbortOnDropHandle<()> {
         let app = Arc::clone(self);
         AbortOnDropHandle::new(tokio::spawn(async move {
             loop {
@@ -239,7 +254,16 @@ impl App {
                     told.push(change);
                 }
                 let showing = Arc::clone(&app);
+                let session = session.clone();
                 let shown = tokio::task::spawn_blocking(move || {
+                    if !showing
+                        .project
+                        .lock()
+                        .as_ref()
+                        .is_some_and(|open| session.ptr_eq(&Arc::downgrade(&open.session)))
+                    {
+                        return Ok(());
+                    }
                     let shown = showing.settle();
                     // The interface missed changes: it reads the project again.
                     if lagged {

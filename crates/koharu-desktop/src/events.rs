@@ -12,6 +12,9 @@ use specta::{Type, Types, datatype::DataType};
 use tauri::{AppHandle, Emitter as _};
 use tauri_runtime_cef::CefRuntime;
 
+use crate::chapters::ChapterJob;
+use crate::commands::source_import::SourceJob;
+
 /// An event's name, typed by what it carries, so a send and the bindings
 /// agree.
 pub struct Event<T> {
@@ -65,6 +68,8 @@ pub const COLOR: Event<Rgba> = Event::new("color");
 pub const BRUSH_DIAMETER: Event<f64> = Event::new("brush_diameter");
 pub const NOTICE: Event<Notice> = Event::new("notice");
 pub const PIPELINE: Event<PipelineEvent> = Event::new("pipeline");
+pub const CHAPTER_JOB: Event<ChapterJob> = Event::new("chapter_job");
+pub const SOURCE_JOB: Event<SourceJob> = Event::new("source_job");
 /// A model or font file's download, as it goes.
 pub const DOWNLOAD: Event<Transfer> = Event::new("download");
 
@@ -83,6 +88,8 @@ pub fn bindings(types: &mut Types) -> Vec<(&'static str, DataType)> {
         BRUSH_DIAMETER.binding(types),
         NOTICE.binding(types),
         PIPELINE.binding(types),
+        CHAPTER_JOB.binding(types),
+        SOURCE_JOB.binding(types),
         DOWNLOAD.binding(types),
     ]
 }

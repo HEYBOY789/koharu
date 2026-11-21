@@ -2,6 +2,7 @@
 //! CEF over the native canvas, and the commands the interface calls.
 
 mod app;
+mod chapters;
 mod commands;
 mod events;
 mod library;
@@ -134,6 +135,8 @@ pub fn run(context: tauri::Context<CefRuntime>) -> Result<()> {
         .plugin(koharu_sentry::plugin())
         .on_web_content_process_terminate(koharu_sentry::web_content_process_terminated)
         .manage(app)
+        .manage(commands::mangadex::MangaDex::persistent()?)
+        .manage(commands::following::Following::persistent()?)
         .invoke_handler(commands::handler())
         .setup(move |tauri| {
             let app = tauri.state::<Arc<App>>();

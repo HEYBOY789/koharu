@@ -12,11 +12,16 @@ export function setHeaders(provide: () => Record<string, string>): void {
   headers = provide
 }
 
+export type AgentBackend = 'native' | 'codex' | 'pi' | 'agy'
+
 /**
  *  `[agent]`: the agent's model, how much it reasons, and how long a run
  *  goes.
  */
 export type AgentConfig = {
+  backend?: AgentBackend
+  pi?: CliConfig
+  agy?: CliConfig
   /**  A `vendor/model` reference, as koharu-llm connects one. */
   model?: string | null
   /**
@@ -163,6 +168,52 @@ export type Change = {
   history: History
 }
 
+export type Chapter = {
+  id: ChapterId
+  title: string
+  pages: PageId[]
+  summary: string | null
+  setting: string | null
+  summarize: boolean
+  translated?: boolean
+}
+
+export type ChapterEdit =
+  | { action: 'create'; title: string; pages: PageId[] }
+  | { action: 'assign'; chapter: ChapterId; pages: PageId[] }
+  | { action: 'rename'; chapter: ChapterId; title: string }
+  | { action: 'remove'; chapter: ChapterId }
+  | { action: 'set_summarize'; chapter: ChapterId; summarize: boolean }
+  | { action: 'set_summary'; chapter: ChapterId; summary: string }
+  | { action: 'set_prompt'; chapter: ChapterId; prompt: string }
+  | { action: 'set_wiki'; slug: string; body: string }
+  | { action: 'remove_wiki'; slug: string }
+
+export type ChapterId = string
+
+export type ChapterJob = {
+  project: ProjectId
+  name: string
+  chapter: string
+  completed: number
+  total: number
+  phase: ChapterPhase
+  run: RunId | null
+  error: string | null
+}
+
+export type ChapterMode = 'summarize' | 'translate' | 'summarize_translate'
+
+export type ChapterPhase = 'summarizing' | 'translating' | 'finished' | 'stopped' | 'failed'
+
+/**
+ *  Project-level chapter roster. Entry order is chapter order; page order
+ *  inside an entry is the project page order filtered by membership.
+ */
+export type Chapters = {
+  entries: Chapter[]
+}
+
 /**  One of the values a character's style holds. */
 export type CharKey = 'family' | 'weight' | 'italic' | 'size' | 'fill' | 'stroke' | 'stroke_width'
 
@@ -178,6 +229,17 @@ export type CharStyle = {
   fill?: Rgba | null
   stroke?: Rgba | null
   stroke_width?: number | null
+}
+
+export type CliBackend = 'agy' | 'pi'
+
+export type CliConfig = {
+  backend?: CliBackend
+  binary?: string | null
+  node?: string | null
+  model?: string | null
+  effort?: string | null
+  reasoning?: string | null
 }
 
 /**  The app's theme colours the canvas draws with. */
@@ -293,6 +355,30 @@ export type Fit =
    */
   | 'best'
 
+export type FollowInput = {
+  source: FollowSource
+  title: string
+  language: string
+  cover_url: string | null
+}
+
+export type FollowSource =
+  | { kind: 'manga_dex'; id: string; chapter_numbers_reset: boolean }
+  | { kind: 'website'; url: string }
+
+export type FollowedManga = {
+  key: string
+  source: FollowSource
+  title: string
+  language: string
+  cover_url: string | null
+  latest: string | null
+  chapters: number
+  new_chapters: number
+  checked_at: number | null
+  error: string | null
+}
+
 /**  One of a family's faces, by the weight and slant a text asks for. */
 export type FontFace = {
   post_script_name: string
@@ -371,6 +457,20 @@ export type ImportSource =
   | 'files'
   /**  Every page file directly in a folder. */
   | 'folder'
+
+export type ImportedSource = {
+  url: string
+  description: string
+  fields: string[]
+  chapters: ImportedSourceChapter[]
+}
+
+export type ImportedSourceChapter = {
+  chapter: ChapterId
+  url: string
+  title: string
+  number: number
+}
 
 /**  The inpainters, by id in the section and by name. */
 export type Inpainter = 'lama' | 'flux3-klein' | 'qwen-image'
@@ -456,6 +556,122 @@ export type Layer<
 /**  A layer; stored, so it survives undo. */
 export type LayerId = string
 
+export type MangaDexCacheMode = 'online' | 'refresh' | 'offline'
+
+export type MangaDexChapterRequest = {
+  id: string
+  original_language: string
+  reference: string
+  target: string
+  chapter_numbers_reset: boolean
+  cache: MangaDexCacheMode
+}
+
+export type MangaDexChapterSummary = {
+  language: string
+  latest: string | null
+  count: number
+  unnumbered: number
+}
+
+export type MangaDexComparison = {
+  reference_language: string
+  target_language: string
+  chapters: MangaDexChapterSummary[]
+  total_available: number | null
+  latest_available: string | null
+  missing: number
+  status: MangaDexFilter | null
+  checked_at: number
+  network_requests: number
+}
+
+export type MangaDexEntry = {
+  id: string
+  title: string
+  url: string
+  author: string
+  artist: string
+  original_language: string
+  year: number | null
+  created_at: string | null
+  latest_uploaded_chapter: string | null
+  publication_status: string
+  content_rating: string
+  description: string
+  tags: string[]
+  cover_url: string | null
+  chapter_numbers_reset: boolean
+  comparison: MangaDexComparison | null
+}
+
+export type MangaDexFilter = 'any' | 'either' | 'no_target' | 'behind'
+
+export type MangaDexMetadata = {
+  id: string
+  rating: number | null
+  follows: number | null
+  latest_upload_at: string | null
+}
+
+export type MangaDexMetadataPage = {
+  manga: MangaDexMetadata[]
+  checked_at: number
+  network_requests: number
+}
+
+export type MangaDexMetadataRequest = {
+  id: string
+  latest_uploaded_chapter: string | null
+}
+
+export type MangaDexOption = {
+  id: string
+  name: string
+  group: string
+}
+
+export type MangaDexOptions = {
+  options: MangaDexOption[]
+  checked_at: number
+}
+
+export type MangaDexOptionsKind = 'tags' | 'people'
+
+export type MangaDexPage = {
+  manga: MangaDexEntry[]
+  scanned: number
+  skipped: number
+  total: number
+  next_offset: number | null
+  capped: boolean
+  checked_at: number
+  network_requests: number
+}
+
+export type MangaDexSearch = {
+  title: string
+  sort: string
+  reference: string
+  target: string
+  filter: MangaDexFilter
+  original_languages: string[]
+  translated_languages: string[]
+  content_ratings: string[]
+  demographics: string[]
+  statuses: string[]
+  authors: string[]
+  artists: string[]
+  included_tags: string[]
+  excluded_tags: string[]
+  include_all: boolean
+  exclude_all: boolean
+  year: number | null
+  has_chapters: boolean
+  offset: number
+  cache: MangaDexCacheMode
+}
+
 /**
  *  Grey pixels that limit its parent's visibility, as Photoshop's and Clip
  *  Studio Paint's layer masks do; never drawn. Masks apply in order.
@@ -520,6 +736,11 @@ export type Op =
   | { op: 'move_page'; page: Ref; index: number }
   /**  Remove a page with its layers. */
   | { op: 'remove_page'; page: Ref }
+  /**
+   *  Changes chapter membership, wiki, page names and publishing data in the
+   *  same transaction as the page edits that accompany them.
+   */
+  | { op: 'set_project_metadata'; metadata: ProjectMetadata }
   /**
    *  Add a layer under `parent`, or at the top level of `page`, at `index`
    *  among the parent's children, masks included, first drawn first.
@@ -669,10 +890,20 @@ export type ProjectAnswer = {
   /**  The format version the file holds. */
   version: string
   pages: PageSummary[]
+  metadata: ProjectMetadata
 }
 
 /**  A project, stored once when it is created. */
 export type ProjectId = string
+
+export type ProjectMetadata = {
+  chapters?: Chapters
+  wiki?: Wiki
+  page_labels?: { [key in PageId]: string }
+  publication?: PublicationMetadata | null
+  source?: ImportedSource | null
+  cover?: Hash | null
+}
 
 /**
  *  `[providers]`: where a vendor's server is when it isn't where rig, or
@@ -680,6 +911,46 @@ export type ProjectId = string
  *  `base_url`. Keyed by rig's vendor name.
  */
 export type Providers = { [key in string]: Endpoint }
+
+export type PublicationConfig = {
+  node?: string
+  script?: string
+  catalog_url?: string
+  backend?: string
+  binary?: string | null
+  model?: string | null
+  offline?: boolean
+}
+
+export type PublicationFile = 'script' | 'node' | 'binary'
+
+export type PublicationGenre = {
+  name: string
+  slug: string
+}
+
+export type PublicationMetadata = {
+  title: string
+  slug: string
+  alternativeTitles: string
+  author: string
+  releaseYear: number | null
+  country: string
+  status: string
+  genres: PublicationGenre[]
+}
+
+export type PublicationReadiness = {
+  node: string | null
+  script: string | null
+  binary: string | null
+  missing: string[]
+}
+
+export type PublicationSettings = {
+  metadata: PublicationMetadata
+  config: PublicationConfig
+}
 
 export type Query =
   /**  List the pages in order, with their sizes and backgrounds. */
@@ -788,6 +1059,36 @@ export type Size = {
   height: number
 }
 
+export type SourceChapterPreview = {
+  url: string
+  title: string
+  number: number
+}
+
+export type SourceImportOptions = {
+  language: string | null
+  download_url: string | null
+  project_name: string | null
+  summarize: boolean
+  translate: boolean
+  chapters: string[] | null
+}
+
+export type SourceJob = {
+  id: string
+  name: string
+  phase: SourcePhase
+  error: string | null
+}
+
+export type SourcePhase = 'queued' | 'downloading' | 'finished' | 'stopped' | 'failed'
+
+export type SourcePreview = {
+  title: string
+  source_url: string
+  chapters: SourceChapterPreview[]
+}
+
 /**  A string with its character marks. */
 export type Span = {
   insert: string
@@ -812,6 +1113,15 @@ export type Story = {
 export type Stroke = {
   color: Rgba
   width: number
+}
+
+export type SummarizerConfig = {
+  backend?: CliBackend
+  binary?: string | null
+  model?: string | null
+  effort?: string | null
+  skill?: string | null
+  summarize_default?: boolean
 }
 
 /**
@@ -953,11 +1263,26 @@ export type Vendor = {
   connected: boolean
 }
 
+/**
+ *  Wiki pages are kept whole so a summarizer can rewrite one file at a time
+ *  without inventing a second document format.
+ */
+export type Wiki = {
+  files: WikiFile[]
+}
+
+export type WikiFile = {
+  slug: string
+  body: string
+}
+
 export const commands = {
   listProjects: () => invoke<string[]>('list_projects', {}, { headers: headers() }),
   /** Creates a project and opens it. */
   create: (name: string) => invoke<null>('create', { name }, { headers: headers() }),
   open: (name: string) => invoke<null>('open', { name }, { headers: headers() }),
+  /** Converts a selected project directory and opens the new file. */
+  migrateProject: () => invoke<null>('migrate_project', {}, { headers: headers() }),
   /** Deletes a project, closing it first if it's the open one. */
   deleteProject: (name: string) => invoke<null>('delete_project', { name }, { headers: headers() }),
   close: () => invoke<null>('close', {}, { headers: headers() }),
@@ -976,6 +1301,17 @@ export const commands = {
   /** The page as it renders, `HEIGHT` pixels tall, as WebP. */
   getPageThumbnail: (page: PageId) =>
     invoke<ArrayBuffer>('get_page_thumbnail', { page }, { headers: headers() }),
+  editChapter: (action: ChapterEdit, project: ProjectId) =>
+    invoke<null>('edit_chapter', { action, project }, { headers: headers() }),
+  runChapters: (project: ProjectId, chapter: ChapterId, fromHere: boolean, mode: ChapterMode) =>
+    invoke<null>('run_chapters', { project, chapter, fromHere, mode }, { headers: headers() }),
+  getChapterJobs: () => invoke<ChapterJob[]>('get_chapter_jobs', {}, { headers: headers() }),
+  stopChapterJob: (project: ProjectId) =>
+    invoke<null>('stop_chapter_job', { project }, { headers: headers() }),
+  getSummarizerSettings: () =>
+    invoke<SummarizerConfig>('get_summarizer_settings', {}, { headers: headers() }),
+  saveSummarizerSettings: (settings: SummarizerConfig) =>
+    invoke<null>('save_summarizer_settings', { settings }, { headers: headers() }),
   /** Runs `stages` on `target`; each run's events go out as `pipeline`. */
   runPipeline: (target: Target, stages: Stage[]) =>
     invoke<RunId>('run_pipeline', { target, stages }, { headers: headers() }),
@@ -1016,9 +1352,53 @@ export const commands = {
     invoke<ArrayBuffer>('get_font_preview', { family }, { headers: headers() }),
   /** Picks files or a folder and adds their pages after the project's last: the files in name order, numbers by value, an archive's or a PDF's own pages in theirs. */
   import: (source: ImportSource) => invoke<null>('import', { source }, { headers: headers() }),
+  searchMangadex: (input: MangaDexSearch) =>
+    invoke<MangaDexPage>('search_mangadex', { input }, { headers: headers() }),
+  getMangadexOptions: (kind: MangaDexOptionsKind, name: string, cache: MangaDexCacheMode) =>
+    invoke<MangaDexOptions>('get_mangadex_options', { kind, name, cache }, { headers: headers() }),
+  getMangadexChapters: (input: MangaDexChapterRequest) =>
+    invoke<MangaDexComparison>('get_mangadex_chapters', { input }, { headers: headers() }),
+  getMangadexMetadata: (input: MangaDexMetadataRequest[], cache: MangaDexCacheMode) =>
+    invoke<MangaDexMetadataPage>('get_mangadex_metadata', { input, cache }, { headers: headers() }),
+  getMangadexCover: (url: string) =>
+    invoke<ArrayBuffer>('get_mangadex_cover', { url }, { headers: headers() }),
+  getFollowing: () => invoke<FollowedManga[]>('get_following', {}, { headers: headers() }),
+  followManga: (input: FollowInput) =>
+    invoke<FollowedManga[]>('follow_manga', { input }, { headers: headers() }),
+  checkFollow: (key: string, refresh: boolean) =>
+    invoke<FollowedManga[]>('check_follow', { key, refresh }, { headers: headers() }),
+  markFollowSeen: (key: string) =>
+    invoke<FollowedManga[]>('mark_follow_seen', { key }, { headers: headers() }),
+  unfollowManga: (key: string) =>
+    invoke<FollowedManga[]>('unfollow_manga', { key }, { headers: headers() }),
+  getSourceImportSettings: () =>
+    invoke<PublicationConfig>('get_source_import_settings', {}, { headers: headers() }),
+  saveSourceImportSettings: (config: PublicationConfig) =>
+    invoke<null>('save_source_import_settings', { config }, { headers: headers() }),
+  inspectPublication: (config: PublicationConfig) =>
+    invoke<PublicationReadiness>('inspect_publication', { config }, { headers: headers() }),
+  pickPublicationFile: (kind: PublicationFile) =>
+    invoke<string | null>('pick_publication_file', { kind }, { headers: headers() }),
+  previewSourceUrl: (url: string, config: PublicationConfig, options: SourceImportOptions) =>
+    invoke<SourcePreview | null>(
+      'preview_source_url',
+      { url, config, options },
+      { headers: headers() },
+    ),
+  importSourceUrl: (url: string, config: PublicationConfig, options: SourceImportOptions) =>
+    invoke<string>('import_source_url', { url, config, options }, { headers: headers() }),
+  getSourceJobs: () => invoke<SourceJob[]>('get_source_jobs', {}, { headers: headers() }),
+  stopSourceJob: (job: string) => invoke<null>('stop_source_job', { job }, { headers: headers() }),
   /** Picks where the open project's pages go, and writes them there. `labels` names a PSD's layers the scene names nothing, in the interface's language. */
   export: (format: ExportFormat, labels: Labels) =>
     invoke<null>('export', { format, labels }, { headers: headers() }),
+  exportChapters: (format: ExportFormat, labels: Labels) =>
+    invoke<null>('export_chapters', { format, labels }, { headers: headers() }),
+  exportWiki: () => invoke<null>('export_wiki', {}, { headers: headers() }),
+  getPublicationSettings: () =>
+    invoke<PublicationSettings>('get_publication_settings', {}, { headers: headers() }),
+  preparePublication: (settings: PublicationSettings, labels: Labels) =>
+    invoke<string | null>('prepare_publication', { settings, labels }, { headers: headers() }),
   /** The canvas element's rectangle, in CSS pixels from the window's corner. */
   setViewport: (x: number, y: number, width: number, height: number) =>
     invoke<null>('set_viewport', { x, y, width, height }, { headers: headers() }),
@@ -1068,6 +1448,10 @@ export const events = {
     listen<Notice>('notice', (event) => handler(event.payload)),
   pipeline: (handler: (payload: PipelineEvent) => void): Promise<UnlistenFn> =>
     listen<PipelineEvent>('pipeline', (event) => handler(event.payload)),
+  chapterJob: (handler: (payload: ChapterJob) => void): Promise<UnlistenFn> =>
+    listen<ChapterJob>('chapter_job', (event) => handler(event.payload)),
+  sourceJob: (handler: (payload: SourceJob) => void): Promise<UnlistenFn> =>
+    listen<SourceJob>('source_job', (event) => handler(event.payload)),
   download: (handler: (payload: Transfer) => void): Promise<UnlistenFn> =>
     listen<Transfer>('download', (event) => handler(event.payload)),
 }

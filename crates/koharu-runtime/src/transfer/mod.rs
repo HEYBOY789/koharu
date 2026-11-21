@@ -68,7 +68,7 @@ pub(crate) async fn fetch(url: &str, destination: &Path) -> Result<()> {
 /// The client every transfer goes through, the Hub's included. A transfer
 /// takes as long as the file does, so a response is never cut off for
 /// arriving slowly.
-pub(crate) async fn client() -> Result<&'static Client> {
+pub async fn client() -> Result<&'static Client> {
     static CLIENT: OnceCell<Client> = OnceCell::const_new();
     CLIENT
         .get_or_try_init(|| async {

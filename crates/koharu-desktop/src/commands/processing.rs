@@ -48,6 +48,7 @@ pub async fn fill(
 #[tauri::command]
 #[specta::specta]
 pub fn stop_pipeline(app: State<'_, Arc<App>>) {
+    app.chapter_jobs.stop_all();
     app.pipeline.stop();
 }
 

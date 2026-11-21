@@ -34,7 +34,7 @@ function desktop(open: () => string | null) {
   vi.spyOn(commands, 'getShownPage').mockResolvedValue(null)
   vi.spyOn(commands, 'query').mockImplementation(async (query) =>
     query.query === 'get_project'
-      ? { id: 'project', version: '1', pages: [] }
+      ? { id: 'project', version: '1', pages: [], metadata: {} }
       : { steps: [], current: 0 },
   )
 }

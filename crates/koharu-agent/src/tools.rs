@@ -36,9 +36,11 @@ const SIGHT: u32 = 1280;
 /// stages and the renderer that draws its pages.
 #[derive(Clone)]
 pub struct Tools {
-    session: Arc<Mutex<Session>>,
+    pub(crate) session: Arc<Mutex<Session>>,
     pipeline: Pipeline,
-    renderer: Renderer,
+    pub(crate) renderer: Renderer,
+    scope: Arc<Mutex<Option<BTreeSet<PageId>>>>,
+    inspected: Arc<Mutex<BTreeSet<PageId>>>,
 }
 
 impl Tools {
@@ -49,6 +51,8 @@ impl Tools {
             session,
             pipeline,
             renderer,
+            scope: Arc::default(),
+            inspected: Arc::default(),
         }
     }
 
@@ -63,6 +67,11 @@ impl Tools {
         tools.add_tool(Wait);
         tools.add_tool(Stop);
         tools.add_tool(ViewPage);
+        tools.add_tool(ViewOriginal);
+        tools.add_tool(SetEditScope);
+        tools.add_tool(crate::readability::AuditReadability);
+        tools.add_tool(crate::readability::RepairReadability);
+        tools.add_tool(crate::readability::VerifyReadability);
         tools
     }
 
@@ -75,6 +84,80 @@ impl Tools {
     pub fn context(&self) -> anyhow::Result<Value> {
         let answer = self.session.lock().query(Query::GetProject)?;
         Ok(serde_json::to_value(answer)?)
+    }
+
+    pub(crate) fn reset_scope(&self) {
+        *self.scope.lock() = None;
+        self.inspected.lock().clear();
+    }
+
+    pub(crate) fn check_page(&self, page: PageId) -> Result<(), ToolExecutionError> {
+        if self
+            .scope
+            .lock()
+            .as_ref()
+            .is_some_and(|scope| !scope.contains(&page))
+        {
+            return Err(failed("the page is outside the edit scope"));
+        }
+        if !self.inspected.lock().contains(&page) {
+            return Err(failed(
+                "call view_page on this page before repairing its lettering",
+            ));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct ScopeArgs {
+    /// First page ID from get_project.
+    first_page: PageId,
+    /// Last page ID from get_project, inclusive.
+    last_page: PageId,
+}
+
+struct SetEditScope;
+
+impl Tool for SetEditScope {
+    const NAME: &'static str = "set_edit_scope";
+    type Args = ScopeArgs;
+    type Output = Value;
+    type Error = ToolExecutionError;
+
+    fn description(&self) -> String {
+        "Select the inclusive page range the user asked to edit, by IDs from get_project. Give the same page as both endpoints for one page.".into()
+    }
+
+    fn parameters(&self) -> Value {
+        schema::<ScopeArgs>()
+    }
+
+    async fn call(&self, context: &mut ToolContext, args: ScopeArgs) -> Result<Value, Self::Error> {
+        let tools = project(context)?;
+        let pages = tools
+            .session
+            .lock()
+            .project()
+            .pages()
+            .map(|page| page.id)
+            .collect::<Vec<_>>();
+        let first = pages
+            .iter()
+            .position(|&page| page == args.first_page)
+            .ok_or_else(|| failed("first_page is not a page in this project"))?;
+        let last = pages
+            .iter()
+            .position(|&page| page == args.last_page)
+            .ok_or_else(|| failed("last_page is not a page in this project"))?;
+        let range = pages
+            .get(first..=last)
+            .ok_or_else(|| failed("first_page comes after last_page"))?;
+        *tools.scope.lock() = Some(range.iter().copied().collect());
+        Ok(
+            serde_json::json!({ "first_page": args.first_page, "last_page": args.last_page, "pages": range.len() }),
+        )
     }
 }
 
@@ -230,9 +313,44 @@ impl Tool for Edit {
         };
         // On a blocking thread, an edit already applying finishes even when
         // the call is dropped, and it applies whole or not at all.
-        tokio::task::spawn_blocking(move || tools.session.lock().apply(edit).map_err(failed))
-            .await
-            .map_err(failed)?
+        tokio::task::spawn_blocking(move || {
+            let mut session = tools.session.lock();
+            if let Some(scope) = tools.scope.lock().as_ref() {
+                let project = session.project();
+                for op in &edit.ops {
+                    let page = match op {
+                        Op::AddLayer { page, .. } | Op::SetBackground { page, .. } => {
+                            PageId(page.uuid().ok_or_else(|| {
+                                failed("give an existing page ID inside the scope")
+                            })?)
+                        }
+                        Op::UpdateLayer { layer, .. }
+                        | Op::RemoveLayer { layer }
+                        | Op::TransformLayer { layer, .. }
+                        | Op::MoveLayer { layer, .. }
+                        | Op::DuplicateLayer { layer, .. }
+                        | Op::SetText { layer, .. }
+                        | Op::SetAttribute { layer, .. } => {
+                            let id = LayerId(layer.uuid().ok_or_else(|| {
+                                failed("give an existing layer ID inside the scope")
+                            })?);
+                            project.parent(id).map_err(failed)?.0.id
+                        }
+                        _ => {
+                            return Err(failed(
+                                "this operation changes data outside the selected pages",
+                            ));
+                        }
+                    };
+                    if !scope.contains(&page) {
+                        return Err(failed(format!("page {page} is outside the edit scope")));
+                    }
+                }
+            }
+            session.apply(edit).map_err(failed)
+        })
+        .await
+        .map_err(failed)?
     }
 }
 
@@ -257,6 +375,23 @@ impl Tool for Run {
 
     async fn call(&self, context: &mut ToolContext, args: RunArgs) -> Result<String, Self::Error> {
         let tools = project(context)?;
+        let scoped = tools.scope.lock().clone();
+        if let Some(scope) = scoped {
+            let project = tools.session.lock().project();
+            let allowed = match &args.target {
+                Target::Project => project.pages().all(|page| scope.contains(&page.id)),
+                Target::Pages(pages) => pages.iter().all(|page| scope.contains(page)),
+                Target::Blocks(blocks) => blocks.iter().all(|&block| {
+                    project
+                        .parent(block)
+                        .is_ok_and(|(page, _)| scope.contains(&page.id))
+                }),
+                Target::Area { page, .. } => scope.contains(page),
+            };
+            if !allowed {
+                return Err(failed("pipeline target is outside the edit scope"));
+            }
+        }
         let request = Request {
             target: args.target,
             stages: args.stages,
@@ -287,7 +422,9 @@ impl Tool for Stop {
     }
 
     async fn call(&self, context: &mut ToolContext, _: NoArgs) -> Result<String, Self::Error> {
-        project(context)?.pipeline.stop();
+        let tools = project(context)?;
+        let project = tools.session.lock().id();
+        tools.pipeline.stop_project(project);
         Ok("Every run is stopped.".to_owned())
     }
 }
@@ -353,12 +490,60 @@ impl Tool for ViewPage {
         args: PageArgs,
     ) -> Result<ToolResultContent, Self::Error> {
         let tools = project(context)?;
+        let inspected = Arc::clone(&tools.inspected);
         let jpeg = tokio::task::spawn_blocking(move || {
             let frame = tools
                 .renderer
                 .render(&tools.session.lock(), args.page)
                 .map_err(failed)?;
             seen(&frame)
+        })
+        .await
+        .map_err(failed)??;
+        inspected.lock().insert(args.page);
+        Ok(ToolResultContent::image_base64(
+            jpeg,
+            Some(ImageMediaType::JPEG),
+            None,
+        ))
+    }
+}
+
+struct ViewOriginal;
+
+impl Tool for ViewOriginal {
+    const NAME: &'static str = "view_original";
+    type Args = PageArgs;
+    type Output = ToolResultContent;
+    type Error = ToolExecutionError;
+
+    fn description(&self) -> String {
+        "Look at only the original scan for this page to compare the original lettering and background.".into()
+    }
+
+    fn parameters(&self) -> Value {
+        schema::<PageArgs>()
+    }
+
+    fn annotations(&self) -> ToolAnnotations {
+        ToolAnnotations::default().with_read_only(true)
+    }
+
+    async fn call(
+        &self,
+        context: &mut ToolContext,
+        args: PageArgs,
+    ) -> Result<ToolResultContent, Self::Error> {
+        let tools = project(context)?;
+        let jpeg = tokio::task::spawn_blocking(move || {
+            let frame = tools
+                .renderer
+                .render(&tools.session.lock(), args.page)
+                .map_err(failed)?;
+            let original = frame
+                .background()
+                .ok_or_else(|| failed("the page has no scan"))?;
+            seen(&original.cropped())
         })
         .await
         .map_err(failed)??;
@@ -371,7 +556,7 @@ impl Tool for ViewPage {
 }
 
 /// The open project the call runs on.
-fn project(context: &ToolContext) -> Result<Arc<Tools>, ToolExecutionError> {
+pub(crate) fn project(context: &ToolContext) -> Result<Arc<Tools>, ToolExecutionError> {
     context
         .scope::<Tools>()
         .ok_or_else(|| ToolExecutionError::other("no project is open"))
@@ -387,7 +572,7 @@ async fn query(context: &ToolContext, query: Query) -> Result<Answer, ToolExecut
 
 /// `error` as the model sees it, word for word: rig shows a model only the
 /// kind of an error it wasn't handed as a tool error.
-fn failed(error: impl ToString) -> ToolExecutionError {
+pub(crate) fn failed(error: impl ToString) -> ToolExecutionError {
     ToolExecutionError::other(error.to_string())
 }
 
@@ -406,7 +591,7 @@ pub(crate) fn refusal(schema: &Value, arguments: &Value) -> Option<String> {
 
 /// `T`'s schema with every subschema inlined: some providers refuse a tool
 /// schema that refers to definitions.
-fn schema<T: JsonSchema>() -> Value {
+pub(crate) fn schema<T: JsonSchema>() -> Value {
     let schema = SchemaSettings::draft2020_12()
         .with(|settings| settings.inline_subschemas = true)
         .into_generator()

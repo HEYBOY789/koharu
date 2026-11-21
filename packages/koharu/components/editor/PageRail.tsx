@@ -11,15 +11,29 @@ import {
 } from '@dnd-kit/core'
 import { useQuery } from '@tanstack/react-query'
 import { observeElementRect, useVirtualizer } from '@tanstack/react-virtual'
-import { FilePlus2, FolderOpen, LoaderCircle, MoreHorizontal, Settings } from 'lucide-react'
-import { useEffect, useRef, useState } from 'react'
+import {
+  ChevronDown,
+  ChevronRight,
+  FilePlus2,
+  FolderOpen,
+  LoaderCircle,
+  MoreHorizontal,
+  Settings,
+} from 'lucide-react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { call, dispatch } from '@/lib/backend'
 import { useImportPages, usePage, useProject } from '@/lib/queries'
 import { deletePages, movePage } from '@/lib/scene'
 import { pipelineStages, useKoharuStore } from '@/lib/store'
-import { commands, type ImportSource, type PageSummary, type Stage } from '@koharu/ipc/protocol'
+import {
+  commands,
+  type Chapter,
+  type ImportSource,
+  type PageSummary,
+  type Stage,
+} from '@koharu/ipc/protocol'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -50,11 +64,18 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@koharu/ui/components/t
 import { cn } from '@koharu/ui/lib/utils'
 
 const emptyPages: PageSummary[] = []
+const emptyChapters: Chapter[] = []
+type PageRow =
+  | { kind: 'page'; index: number; page: PageSummary }
+  | { kind: 'chapter'; chapter: Chapter }
 
 export function PageRail() {
   const { t } = useTranslation()
   const project = useProject().data
   const pages = project?.pages ?? emptyPages
+  const chapters = project?.metadata?.chapters?.entries ?? emptyChapters
+  const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set())
+  const showPanel = useKoharuStore((state) => state.showPanel)
   const active = usePage().data?.id ?? null
   const selected = useKoharuStore((state) => state.selectedPages)
   const selectPages = useKoharuStore((state) => state.selectPages)
@@ -69,11 +90,30 @@ export function PageRail() {
   const [pageToDelete, setPageToDelete] = useState<{ page: string; number: number } | null>(null)
   const [confirmingDelete, setConfirmingDelete] = useState(false)
   const pageList = useRef<HTMLDivElement>(null)
+  const rows = useMemo(() => {
+    const result: PageRow[] = []
+    const membership = new Map(
+      chapters.flatMap((chapter) => chapter.pages.map((page) => [page, chapter] as const)),
+    )
+    const seen = new Set<string>()
+    pages.forEach((page, index) => {
+      const chapter = membership.get(page.id)
+      if (chapter && !seen.has(chapter.id)) {
+        result.push({ kind: 'chapter', chapter })
+        seen.add(chapter.id)
+      }
+      if (!chapter || !collapsed.has(chapter.id)) result.push({ kind: 'page', index, page })
+    })
+    return result
+  }, [chapters, collapsed, pages])
   const pageVirtualizer = useVirtualizer({
-    count: pages.length,
+    count: rows.length,
     getScrollElement: () => pageList.current,
-    getItemKey: (index) => pages[index]?.id ?? index,
-    estimateSize: () => 72,
+    getItemKey: (index) => {
+      const row = rows[index]
+      return row?.kind === 'chapter' ? row.chapter.id : (row?.page.id ?? index)
+    },
+    estimateSize: (index) => (rows[index]?.kind === 'chapter' ? 30 : 72),
     gap: 2,
     overscan: 6,
     initialRect: { width: 240, height: 600 },
@@ -148,6 +188,26 @@ export function PageRail() {
             </span>
           )}
         </header>
+        {chapters.length > 0 && (
+          <div className='flex shrink-0 gap-1 border-y px-1'>
+            <Button
+              variant='ghost'
+              size='sm'
+              className='h-6 flex-1 px-1 text-[9px]'
+              onClick={() => setCollapsed(new Set(chapters.map((chapter) => chapter.id)))}
+            >
+              {t('chapter.collapseAll')}
+            </Button>
+            <Button
+              variant='ghost'
+              size='sm'
+              className='h-6 flex-1 px-1 text-[9px]'
+              onClick={() => setCollapsed(new Set())}
+            >
+              {t('chapter.expandAll')}
+            </Button>
+          </div>
+        )}
 
         {pages.length === 0 ? (
           <div className='flex min-h-0 flex-1 flex-col items-center justify-center px-4 text-center'>
@@ -188,9 +248,61 @@ export function PageRail() {
                 style={{ height: pageVirtualizer.getTotalSize() }}
               >
                 {pageVirtualizer.getVirtualItems().map((virtualRow) => {
-                  const page = pages[virtualRow.index]
-                  if (!page) return null
-                  const index = virtualRow.index
+                  const row = rows[virtualRow.index]
+                  if (!row) return null
+                  if (row.kind === 'chapter') {
+                    const { chapter } = row
+                    const isCollapsed = collapsed.has(chapter.id)
+                    const Chevron = isCollapsed ? ChevronRight : ChevronDown
+                    return (
+                      <div
+                        key={virtualRow.key}
+                        data-index={virtualRow.index}
+                        className='absolute top-0 left-0 flex h-[30px] w-full items-center rounded-md bg-muted/45'
+                        style={{ transform: `translateY(${virtualRow.start}px)` }}
+                      >
+                        <Button
+                          variant='ghost'
+                          size='icon-sm'
+                          className='size-6 shrink-0'
+                          aria-label={t(
+                            isCollapsed ? 'chapter.expandChapter' : 'chapter.collapseChapter',
+                            { chapter: chapter.title },
+                          )}
+                          aria-expanded={!isCollapsed}
+                          onClick={() =>
+                            setCollapsed((previous) => {
+                              const next = new Set(previous)
+                              if (next.has(chapter.id)) next.delete(chapter.id)
+                              else next.add(chapter.id)
+                              return next
+                            })
+                          }
+                        >
+                          <Chevron className='size-3' />
+                        </Button>
+                        <Button
+                          variant='ghost'
+                          size='sm'
+                          className='h-6 min-w-0 flex-1 justify-start px-1 text-[10px]'
+                          title={chapter.title}
+                          onClick={() => {
+                            const index = pages.findIndex((page) => chapter.pages.includes(page.id))
+                            if (index >= 0 && (!active || !chapter.pages.includes(active))) {
+                              select(index, false, false)
+                            }
+                            showPanel('chapter')
+                          }}
+                        >
+                          <span className='truncate'>{chapter.title}</span>
+                        </Button>
+                        <span className='px-1 text-[9px] text-muted-foreground tabular-nums'>
+                          {chapter.pages.length}
+                        </span>
+                      </div>
+                    )
+                  }
+                  const { page, index } = row
                   return (
                     <div
                       key={virtualRow.key}
@@ -201,6 +313,7 @@ export function PageRail() {
                       <PageItem
                         page={page}
                         index={index}
+                        label={project?.metadata?.page_labels?.[page.id]}
                         revision={project?.revisions[page.id]}
                         active={active === page.id}
                         selected={selected.includes(page.id)}
@@ -331,6 +444,7 @@ function PageImportMenu({
 function PageItem({
   page,
   index,
+  label,
   revision,
   active,
   selected,
@@ -342,6 +456,7 @@ function PageItem({
 }: {
   page: PageSummary
   index: number
+  label?: string
   /** The project's revision when a change last named this page, so its thumbnail follows its
    * edits. */
   revision: string | undefined
@@ -354,7 +469,7 @@ function PageItem({
   onDelete: () => void
 }) {
   const { t } = useTranslation()
-  const name = t('navigator.pageNumber', { number: index + 1 })
+  const name = label || t('navigator.pageNumber', { number: index + 1 })
   const handle = useDraggable({ id: page.id })
   const { setNodeRef } = useDroppable({ id: page.id })
   // A press on the page's own buttons and menus doesn't drag it.

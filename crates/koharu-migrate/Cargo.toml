@@ -1,0 +1,17 @@
+[package]
+name = "koharu-migrate"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+image = { workspace = true }
+koharu-scene = { workspace = true }
+kurbo = { workspace = true }
+# Only the reader for the last fork release's project format.
+legacy-scene = { package = "koharu-scene", git = "https://github.com/HEYBOY789/koharu", rev = "641fd739c2066dbbc16d765a5bfb6dc83b7a783a", default-features = false }
+serde_json = { workspace = true }
+tempfile = { workspace = true }
+tokio = { workspace = true }

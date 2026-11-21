@@ -99,7 +99,26 @@ impl Pipeline {
     /// nothing more is written; a model call on the GPU finishes, but a
     /// local translation stops at its next token.
     pub fn stop(&self) {
-        self.send(Command::Stop);
+        self.send(Command::Stop {
+            run: None,
+            project: None,
+        });
+    }
+
+    /// Stops this run without cancelling work on a different project.
+    pub fn stop_run(&self, run: RunId) {
+        self.send(Command::Stop {
+            run: Some(run),
+            project: None,
+        });
+    }
+
+    /// Stops the jobs on one project, including its queued jobs.
+    pub fn stop_project(&self, project: ProjectId) {
+        self.send(Command::Stop {
+            run: None,
+            project: Some(project),
+        });
     }
 
     /// Unloads every model once the GPU's current work ends, as ComfyUI's

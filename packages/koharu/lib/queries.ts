@@ -18,6 +18,8 @@ import {
   type PageId,
   type PageSummary,
   type ProjectAnswer,
+  type ProjectId,
+  type ProjectMetadata,
 } from '@koharu/ipc/protocol'
 
 import { call } from './backend'
@@ -28,14 +30,19 @@ export const pageKey = ['page'] as const
 export const pagesKey = ['pages'] as const
 export const projectsKey = ['projects'] as const
 export const fontsKey = ['fonts'] as const
+export const chapterJobsKey = ['chapter-jobs'] as const
+export const followingKey = ['following'] as const
+export const sourceJobsKey = ['source-jobs'] as const
 
 /** The open project as the editor lists it: its name, the page the canvas shows, its pages, and
  * its history, read through the scene's own queries. */
 export interface ProjectView {
+  id: ProjectId
   name: string
   page: PageId | null
   pages: PageSummary[]
   history: History
+  metadata: ProjectMetadata
   /** Each page's revision when a change last came while it was shown, which its thumbnail
    * follows; a page keeps its own after another is shown, or after it's removed. */
   revisions: Record<PageId, string>
@@ -51,11 +58,14 @@ const projectQuery = queryOptions({
       call(commands.query, { query: 'get_project' }),
       call(commands.query, { query: 'get_history' }),
     ])
+    const answer = project as ProjectAnswer
     const known = queryClient.getQueryData<ProjectView | null>(projectKey)
     return {
+      id: answer.id,
       name,
       page,
-      pages: (project as ProjectAnswer).pages,
+      pages: answer.pages,
+      metadata: answer.metadata,
       history: history as History,
       revisions: known?.name === name ? known.revisions : {},
     }
@@ -90,6 +100,18 @@ export const queryClient = new QueryClient({
 /** The open project, read again after every change the desktop tells. */
 export function useProject(enabled = true) {
   return useQuery({ ...projectQuery, enabled })
+}
+
+export function useChapterJobs() {
+  return useQuery({ queryKey: chapterJobsKey, queryFn: commands.getChapterJobs })
+}
+
+export function useFollowing(enabled = true) {
+  return useQuery({ queryKey: followingKey, queryFn: commands.getFollowing, enabled })
+}
+
+export function useSourceJobs() {
+  return useQuery({ queryKey: sourceJobsKey, queryFn: commands.getSourceJobs })
 }
 
 /** The open project's pages, in order. */

@@ -1,6 +1,4 @@
-//! The agent panel: the in-app agent's run on the open project, one at a
-//! time, in the project's conversation, both of which close with it. Its
-//! settings are the preferences' `[agent]`.
+//! A run keeps the session it started with while the canvas switches.
 
 use std::sync::{
     Arc,
@@ -8,7 +6,7 @@ use std::sync::{
 };
 
 use anyhow::Context as _;
-use koharu_agent::{Agent, AgentConfig};
+use koharu_agent::{Agent, AgentConfig, run_cli};
 use koharu_llm::{Context, Size, SummaryPrompts};
 use serde::Serialize;
 use specta::Type;
@@ -44,20 +42,72 @@ pub async fn run_agent(
     on_event: Channel<AgentEvent>,
 ) -> Result<u64> {
     let config: AgentConfig = koharu_config::get()?;
-    let model = config
-        .model
-        .clone()
-        .context("no agent model is set in the preferences")?;
-    let span = tracing::info_span!("agent run", sentry.op = "agent.run", model,);
+    let cli = config.cli();
+    let model = config.model.clone();
+    if cli.is_none() && model.is_none() {
+        return Err(anyhow::anyhow!("no agent model is set in the preferences").into());
+    }
+    let span = tracing::info_span!("agent run", sentry.op = "agent.run", ?model);
     let id = RUNS.fetch_add(1, Ordering::Relaxed) + 1;
     let mut project = app.project.lock();
     let project = project.as_mut().context("no project is open")?;
+    let project_id = project.session.lock().id();
+    let mut runs = app.agent_runs.lock();
+    if runs.contains_key(&project_id) {
+        return Err(anyhow::anyhow!("an agent is already running on this project").into());
+    }
+    let tools = app.tools(project);
+    let session = Arc::clone(&project.session);
+    let page = project.page;
+    let external = if cli.is_some() {
+        if project.external_conversation.is_none() {
+            project.external_conversation =
+                Some(Arc::new(tempfile::tempdir().map_err(anyhow::Error::from)?));
+        }
+        project.external_conversation.clone()
+    } else {
+        None
+    };
+    let conversation = project
+        .conversation
+        .as_ref()
+        .and_then(|(made, conversation)| {
+            (Some(made) == model.as_ref()).then(|| Arc::clone(conversation))
+        });
     let running = Arc::clone(&app);
     let task = tokio::spawn(
         async move {
             let events = on_event.clone();
             let result = async {
-                let conversation = conversation(&running, &model).await?;
+                if let Some(cli) = cli {
+                    let workspace = external.context("the external agent has no workspace")?;
+                    let prompt = page.map_or_else(
+                        || prompt.clone(),
+                        |id| format!("The editor is showing page ID {id}.\n\n{prompt}"),
+                    );
+                    return run_cli(tools, &cli, workspace.path(), &prompt, move |event| {
+                        let _ = events.send(AgentEvent::Event { event });
+                    })
+                    .await;
+                }
+                let model = model.context("no agent model is set in the preferences")?;
+                let conversation = match conversation {
+                    Some(conversation) => conversation,
+                    None => {
+                        let connected = koharu_llm::connect(&model, Size::AGENT).await?;
+                        let conversation = Arc::new(tokio::sync::Mutex::new(Agent::new(
+                            tools,
+                            connected,
+                            Context::new(SummaryPrompts::DEFAULT),
+                        )));
+                        if let Some(project) = running.project.lock().as_mut()
+                            && Arc::ptr_eq(&project.session, &session)
+                        {
+                            project.conversation = Some((model, Arc::clone(&conversation)));
+                        }
+                        conversation
+                    }
+                };
                 let mut agent = conversation.lock().await;
                 agent.set_config(config);
                 anyhow::Ok(
@@ -75,28 +125,21 @@ pub async fn run_agent(
                     error: format!("{error:#}"),
                 },
             });
-            if let Some(project) = running.project.lock().as_mut()
-                && project.run.as_ref().is_some_and(|(going, _)| *going == id)
-            {
-                // The task is past its last await, so its own abort is moot.
-                project.run = None;
+            let mut runs = running.agent_runs.lock();
+            if runs.get(&project_id).is_some_and(|(going, _)| *going == id) {
+                runs.remove(&project_id);
             }
         }
         .instrument(span),
     );
-    // The run it replaces is aborted as its handle drops.
-    project.run = Some((id, AbortOnDropHandle::new(task)));
+    runs.insert(project_id, (id, AbortOnDropHandle::new(task)));
     Ok(id)
 }
 
 #[tauri::command]
 #[specta::specta]
 pub fn stop_agent(app: State<'_, Arc<App>>, run: u64) {
-    if let Some(project) = app.project.lock().as_mut()
-        && project.run.as_ref().is_some_and(|(going, _)| *going == run)
-    {
-        project.run = None;
-    }
+    app.agent_runs.lock().retain(|_, (going, _)| *going != run);
 }
 
 /// Starts the open project's conversation over, as a chat app's new chat
@@ -105,36 +148,8 @@ pub fn stop_agent(app: State<'_, Arc<App>>, run: u64) {
 #[specta::specta]
 pub fn reset_agent(app: State<'_, Arc<App>>) {
     if let Some(project) = app.project.lock().as_mut() {
-        project.run = None;
+        app.agent_runs.lock().remove(&project.session.lock().id());
         project.conversation = None;
+        project.external_conversation = None;
     }
-}
-
-/// The open project's conversation with the agent on `model`, made on its
-/// first run.
-async fn conversation(app: &App, model: &str) -> anyhow::Result<Arc<tokio::sync::Mutex<Agent>>> {
-    let (session, tools) = {
-        let project = app.project.lock();
-        let project = project.as_ref().context("no project is open")?;
-        if let Some((made, conversation)) = &project.conversation
-            && made == model
-        {
-            return Ok(Arc::clone(conversation));
-        }
-        (Arc::clone(&project.session), app.tools(project))
-    };
-    let connected = koharu_llm::connect(model, Size::AGENT).await?;
-    let conversation = Arc::new(tokio::sync::Mutex::new(Agent::new(
-        tools,
-        connected,
-        Context::new(SummaryPrompts::DEFAULT),
-    )));
-    // Kept only while its project is still the open one: one made during a
-    // close goes with the run that made it.
-    if let Some(project) = app.project.lock().as_mut()
-        && Arc::ptr_eq(&project.session, &session)
-    {
-        project.conversation = Some((model.to_owned(), Arc::clone(&conversation)));
-    }
-    Ok(conversation)
 }

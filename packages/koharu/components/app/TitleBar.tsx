@@ -8,6 +8,7 @@ import { useState, type ComponentProps } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { AboutDialog } from '@/components/app/AboutDialog'
+import { PublicationDialog } from '@/components/app/PublicationDialog'
 import { useMacOS, WindowControls } from '@/components/app/WindowChrome'
 import { call, dispatch } from '@/lib/backend'
 import { useCommand, useImportPages, usePage, useProject } from '@/lib/queries'
@@ -32,6 +33,7 @@ import { cn } from '@koharu/ui/lib/utils'
 export function TitleBar() {
   const { t } = useTranslation()
   const [aboutOpen, setAboutOpen] = useState(false)
+  const [publicationOpen, setPublicationOpen] = useState(false)
   const macOS = useMacOS()
   const project = useProject().data
   const pageQuery = usePage(Boolean(project))
@@ -49,6 +51,16 @@ export function TitleBar() {
     ['export-project'],
     commands.export,
     'menu.export',
+  )
+  const { run: exportChapters, busy: exportingChapters } = useCommand(
+    ['export-chapters'],
+    commands.exportChapters,
+    'publication.exportChapters',
+  )
+  const { run: exportWiki } = useCommand(
+    ['export-wiki'],
+    commands.exportWiki,
+    'publication.exportWiki',
   )
 
   const psdLabels = {
@@ -156,6 +168,24 @@ export function TitleBar() {
                       {format.toUpperCase()}…
                     </MenubarItem>
                   ))}
+                  {(project?.metadata.chapters?.entries.length ?? 0) > 0 && (
+                    <>
+                      <MenubarSeparator />
+                      {(['png', 'psd', 'cbz'] as const).map((format) => (
+                        <MenubarItem
+                          key={`chapter-${format}`}
+                          disabled={exportingChapters}
+                          onClick={() => exportChapters(format, psdLabels)}
+                        >
+                          {t('publication.chapterFormat', { format: format.toUpperCase() })}
+                        </MenubarItem>
+                      ))}
+                      <MenubarItem onClick={exportWiki}>{t('publication.exportWiki')}</MenubarItem>
+                      <MenubarItem onClick={() => setPublicationOpen(true)}>
+                        {t('publication.prepareBundle')}
+                      </MenubarItem>
+                    </>
+                  )}
                 </MenubarSubContent>
               </MenubarSub>
               <MenubarSeparator />
@@ -273,6 +303,9 @@ export function TitleBar() {
         {!macOS && <WindowControls />}
       </header>
       <AboutDialog open={aboutOpen} onOpenChange={setAboutOpen} />
+      {publicationOpen && (
+        <PublicationDialog labels={psdLabels} close={() => setPublicationOpen(false)} />
+      )}
     </>
   )
 }

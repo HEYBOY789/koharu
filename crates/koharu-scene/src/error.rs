@@ -29,6 +29,10 @@ pub enum Error {
 }
 
 impl Error {
+    pub(crate) fn rejected(reason: impl Into<String>) -> Self {
+        Self::Rejected(reason.into())
+    }
+
     pub(crate) fn invalid(op: usize, reason: impl Into<String>) -> Self {
         Self::Invalid {
             op,

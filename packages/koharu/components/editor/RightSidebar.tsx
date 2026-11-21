@@ -1,9 +1,10 @@
 'use client'
 
-import { BookOpenText, Bot, Layers3 } from 'lucide-react'
+import { BookOpen, BookOpenText, Bot, Layers3 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 
 import { AgentPanel } from '@/components/editor/AgentPanel'
+import { ChapterPanel } from '@/components/editor/ChapterPanel'
 import { LayersPanel } from '@/components/editor/LayersPanel'
 import { StoryPanel } from '@/components/editor/StoryPanel'
 import { useProject } from '@/lib/queries'
@@ -41,6 +42,9 @@ export function RightSidebar() {
           <TabsTrigger value='agent' className={tab}>
             <Bot /> {t('agent.title')}
           </TabsTrigger>
+          <TabsTrigger value='chapter' className={tab}>
+            <BookOpen /> {t('chapter.title')}
+          </TabsTrigger>
         </TabsList>
         <TabsContent value='layers' className='flex min-h-0 flex-col'>
           <LayersPanel />
@@ -50,6 +54,9 @@ export function RightSidebar() {
         </TabsContent>
         <TabsContent value='agent' keepMounted className='flex min-h-0 flex-col'>
           <AgentPanel key={project} />
+        </TabsContent>
+        <TabsContent value='chapter' className='flex min-h-0 flex-col'>
+          <ChapterPanel key={project} />
         </TabsContent>
       </Tabs>
     </aside>

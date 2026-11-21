@@ -40,6 +40,7 @@ pub struct ProjectAnswer {
     /// The format version the file holds.
     pub version: String,
     pub pages: Vec<PageSummary>,
+    pub metadata: crate::ProjectMetadata,
 }
 
 /// A page without its layers, which `get_page` answers.
@@ -65,6 +66,7 @@ impl Session {
                         background: page.background,
                     })
                     .collect(),
+                metadata: project.metadata().clone(),
             }),
             Query::GetPage { page } => Answer::Page(project.page(page)?.clone()),
             Query::GetLayer { layer } => Answer::Layer(Box::new(project.layer(layer)?.clone())),

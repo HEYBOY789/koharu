@@ -35,6 +35,7 @@ use crate::{Tools, tools::refusal};
 /// The MCP server, serving `/mcp` until dropped.
 pub struct McpServer {
     address: SocketAddr,
+    path: String,
     project: Arc<RwLock<Option<Tools>>>,
     cancel: CancellationToken,
 }
@@ -43,6 +44,14 @@ impl McpServer {
     /// Serves on 127.0.0.1 at `port`, or a free port for 0, with no project
     /// open.
     pub async fn start(port: u16) -> anyhow::Result<Self> {
+        Self::listen(port, "/mcp".to_owned()).await
+    }
+
+    pub(crate) async fn private() -> anyhow::Result<Self> {
+        Self::listen(0, format!("/mcp/{}", koharu_scene::Uuid::new_v4().simple())).await
+    }
+
+    async fn listen(port: u16, path: String) -> anyhow::Result<Self> {
         let listener = tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, port)).await?;
         let address = listener.local_addr()?;
         let handler = Handler::new();
@@ -59,7 +68,7 @@ impl McpServer {
             Arc::new(LocalSessionManager::default()),
             config,
         );
-        let router = axum::Router::new().nest_service("/mcp", service);
+        let router = axum::Router::new().nest_service(&path, service);
         let stop = cancel.clone();
         tokio::spawn(async move {
             let served = axum::serve(listener, router)
@@ -71,6 +80,7 @@ impl McpServer {
         });
         Ok(Self {
             address,
+            path,
             project,
             cancel,
         })
@@ -78,6 +88,10 @@ impl McpServer {
 
     pub fn address(&self) -> SocketAddr {
         self.address
+    }
+
+    pub(crate) fn url(&self) -> String {
+        format!("http://{}{}", self.address, self.path)
     }
 
     /// The project calls go to from now on, or none.

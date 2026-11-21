@@ -18,7 +18,7 @@ use tokio::sync::OnceCell;
 
 pub use device::{Backend, Device, Memory};
 pub use huggingface::Repository;
-pub use transfer::{State, Transfer, transfers};
+pub use transfer::{State, Transfer, client as http_client, transfers};
 
 /// Koharu's root: the folder setup put it in, in Windows release builds, where
 /// this user can write it, which a per-machine install's, under Program Files,

@@ -71,6 +71,12 @@ export function Providers({ children }: { children: ReactNode }) {
         ),
         listen(events.pipeline, receivePipeline),
         listen(events.download, receiveDownload),
+        listen(events.chapterJob, () => {
+          void refresh(['chapter-jobs']).catch(() => undefined)
+        }),
+        listen(events.sourceJob, () => {
+          void refresh(['source-jobs'], ['projects']).catch(() => undefined)
+        }),
       ])
         .then(() => commands.getPipelineEvents())
         .then((runs) => {

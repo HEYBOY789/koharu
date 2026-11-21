@@ -107,6 +107,7 @@ impl Run<'_, '_> {
         }
         self.project.pages.remove(&id);
         self.project.order.retain(|page| *page != id);
+        std::sync::Arc::make_mut(&mut self.project.metadata).remove_page(id);
         Ok(())
     }
 }

@@ -57,7 +57,7 @@ export interface Camera {
 }
 
 /** The right pane's tabs. */
-export type Panel = 'layers' | 'story' | 'agent'
+export type Panel = 'layers' | 'story' | 'agent' | 'chapter'
 export type PipelineScope = 'selected-pages' | 'project'
 export const pipelineStages: readonly Stage[] = ['detect', 'recognize', 'inpaint', 'translate']
 

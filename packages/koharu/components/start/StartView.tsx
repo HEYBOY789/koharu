@@ -1,11 +1,13 @@
 'use client'
 
+import { useQuery } from '@tanstack/react-query'
 import { Folder, FolderPlus, Plus, Settings, Trash2 } from 'lucide-react'
-import { useCallback, useEffect, useState, type FormEvent } from 'react'
+import { useState, type FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 
+import { SourceImportDialog } from '@/components/app/SourceImportDialog'
 import { call } from '@/lib/backend'
-import { pageKey, projectKey, refresh } from '@/lib/queries'
+import { pageKey, projectKey, projectsKey, refresh } from '@/lib/queries'
 import { useKoharuStore } from '@/lib/store'
 import { commands } from '@koharu/ipc/protocol'
 import {
@@ -27,23 +29,13 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@koharu/ui/components/t
 export function StartView() {
   const { t } = useTranslation()
   const setSettingsOpen = useKoharuStore((state) => state.setSettingsOpen)
-  const [projects, setProjects] = useState<string[]>([])
+  const library = useQuery({ queryKey: projectsKey, queryFn: () => call(commands.listProjects) })
+  const projects = library.data ?? []
   const [name, setName] = useState('')
-  const [busy, setBusy] = useState<string | null>('list')
+  const [action, setBusy] = useState<string | null>(null)
+  const busy = action ?? (library.isPending ? 'list' : null)
+  const [importOpen, setImportOpen] = useState(false)
   const [projectToDelete, setProjectToDelete] = useState<string | null>(null)
-
-  const reload = useCallback(async () => {
-    setBusy('list')
-    try {
-      setProjects(await call(commands.listProjects))
-    } finally {
-      setBusy(null)
-    }
-  }, [])
-
-  useEffect(() => {
-    void reload().catch(() => undefined)
-  }, [reload])
 
   const createProject = async (event: FormEvent) => {
     event.preventDefault()
@@ -70,13 +62,24 @@ export function StartView() {
     }
   }
 
+  const migrateProject = async () => {
+    if (busy) return
+    setBusy('migrate')
+    try {
+      await call(commands.migrateProject)
+      await refresh(projectKey, pageKey)
+    } finally {
+      setBusy(null)
+    }
+  }
+
   const deleteProject = async () => {
     const projectName = projectToDelete
     if (busy || !projectName) return
     setBusy(projectName)
     try {
       await call(commands.deleteProject, projectName)
-      await reload()
+      await refresh(projectsKey)
       setProjectToDelete(null)
     } finally {
       setBusy(null)
@@ -160,6 +163,27 @@ export function StartView() {
                     {t('start.create')}
                   </Button>
                 </form>
+
+                <Button
+                  type='button'
+                  variant='outline'
+                  size='sm'
+                  className='mt-2 h-9 text-[11px] whitespace-normal'
+                  disabled={busy !== null}
+                  aria-busy={busy === 'migrate'}
+                  onClick={() => void migrateProject().catch(() => undefined)}
+                >
+                  <Folder className='size-3.5' />
+                  {t(busy === 'migrate' ? 'start.migratingProject' : 'start.migrateProject')}
+                </Button>
+                <Button
+                  type='button'
+                  variant='outline'
+                  className='mt-2 h-9 text-[11px]'
+                  onClick={() => setImportOpen(true)}
+                >
+                  {t('sourceImport.title')}
+                </Button>
 
                 <p className='mt-auto pt-8 text-[10px] leading-4 text-muted-foreground'>
                   {t('start.storageHint')}
@@ -255,6 +279,7 @@ export function StartView() {
           </section>
         </ScrollArea>
       </main>
+      {importOpen && <SourceImportDialog open onOpenChange={setImportOpen} />}
 
       <AlertDialogContent>
         <AlertDialogHeader>

@@ -5,9 +5,12 @@
 #![recursion_limit = "256"]
 
 mod agent;
+mod cli;
 mod mcp;
+mod readability;
 mod tools;
 
-pub use agent::{Agent, AgentConfig, Event};
+pub use agent::{Agent, AgentBackend, AgentConfig, Event};
+pub use cli::{CliBackend, CliConfig, run_cli};
 pub use mcp::McpServer;
 pub use tools::Tools;

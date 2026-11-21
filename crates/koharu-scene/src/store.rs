@@ -28,7 +28,7 @@ use crate::{
 /// on it, so opening refuses any other database before reading its rows.
 const APPLICATION_ID: i32 = 0x4B48_5255;
 /// The format version this build writes.
-const VERSION: Version = Version::new(1, 0, 0);
+const VERSION: Version = Version::new(1, 1, 0);
 /// Most compressed tiles fit on a page of this size, which keeps them out of
 /// overflow chains, each of whose pages is a read of its own.
 const PAGE_SIZE: u32 = 16384;
@@ -238,7 +238,11 @@ fn named(project: &Project) -> HashSet<Hash> {
         .pages
         .values()
         .filter_map(|page| page.background.map(|background| background.file));
-    tiles.chain(files).chain(backgrounds).collect()
+    tiles
+        .chain(files)
+        .chain(backgrounds)
+        .chain(project.metadata.cover)
+        .collect()
 }
 
 /// Fails if a blob the project names is missing, then removes the ones it
@@ -329,6 +333,19 @@ fn load(conn: &Connection) -> Result<Project> {
             .or_default()
             .insert((row.x, row.y), row.hash);
     }
+    // This table is absent in .khr files made before chapter support. It is
+    // created only when the first edit supplies metadata, in that same write.
+    if conn
+        .prepare("SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = 'story_metadata'")?
+        .exists([])?
+    {
+        let data: String =
+            conn.query_row("SELECT data FROM story_metadata WHERE id = 1", [], |row| {
+                row.get(0)
+            })?;
+        project.metadata =
+            std::sync::Arc::new(serde_json::from_str(&data).map_err(Error::corrupt)?);
+    }
     Ok(project)
 }
 
@@ -372,6 +389,11 @@ impl Tx<'_> {
         if before.order != after.order {
             conn.prepare_cached("UPDATE project SET pages = ?1")?
                 .execute([json(&after.order)])?;
+        }
+        if before.metadata != after.metadata {
+            conn.execute_batch("CREATE TABLE IF NOT EXISTS story_metadata(id INTEGER PRIMARY KEY CHECK(id = 1), data TEXT NOT NULL) STRICT;")?;
+            conn.prepare_cached("INSERT OR REPLACE INTO story_metadata VALUES (1, ?1)")?
+                .execute([json(after.metadata.as_ref())])?;
         }
         for item in before.pages.diff(&after.pages) {
             match item {

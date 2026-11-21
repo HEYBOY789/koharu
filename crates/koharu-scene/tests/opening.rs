@@ -4,7 +4,7 @@ mod common;
 use std::{io::Cursor, path::Path};
 
 use common::*;
-use koharu_scene::{Error, Hash, History, Op, Rect, Session};
+use koharu_scene::{Chapter, Error, Hash, History, Op, Rect, Session};
 use serde_json::json;
 
 /// Reopens the project at `path` after `change` alters its file by hand.
@@ -78,7 +78,7 @@ fn only_compatible_versions_open() {
     let (_dir, path) = path();
     drop(Session::create(&path).expect("a project"));
     let bytes = fs_err::read(&path).expect("its bytes");
-    for version in ["1.1.0", "2.0.0", "0.9.0", "1.0.0-alpha", "x"] {
+    for version in ["1.2.0", "2.0.0", "0.9.0", "1.0.0-alpha", "x"] {
         let copy = path.with_extension(format!("v{version}"));
         fs_err::copy(&path, &copy).expect("a copy");
         let conn = rusqlite::Connection::open(&copy).expect("the file opens");
@@ -94,7 +94,56 @@ fn only_compatible_versions_open() {
         assert_eq!(fs_err::read(&copy).expect("its bytes"), before, "{version}");
     }
     assert_eq!(fs_err::read(&path).expect("its bytes"), bytes);
-    Session::open(&path).expect("1.0.0 opens");
+    Session::open(&path).expect("the current version opens");
+    reopen_after(&path, "UPDATE project SET version = '1.0.0'").expect("upstream 1.0.0 opens");
+}
+
+#[test]
+fn chapter_metadata_and_cover_survive_page_edits_and_reopening() {
+    let (dir, mut session, page) = session();
+    let path = dir.path().join("test.khr");
+    let bytes = png(2, 3);
+    let cover = Hash::of(&bytes);
+    let mut metadata = session.project().metadata().clone();
+    let mut chapter = Chapter::new("Chapter 1");
+    chapter.pages.push(page);
+    chapter.summary = Some("The chapter summary".to_owned());
+    chapter.setting = Some("Translation terms".to_owned());
+    metadata.chapters.entries.push(chapter);
+    metadata
+        .wiki
+        .upsert("glossary", "A term".to_owned())
+        .unwrap();
+    metadata.page_labels.insert(page, "006".to_owned());
+    metadata.cover = Some(cover);
+    session
+        .apply(koharu_scene::Edit {
+            label: "metadata".to_owned(),
+            ops: vec![
+                Op::AddFile {
+                    bytes: bytes.clone(),
+                },
+                Op::SetProjectMetadata {
+                    metadata: Box::new(metadata.clone()),
+                },
+            ],
+        })
+        .unwrap();
+    session
+        .apply(koharu_scene::Edit {
+            label: "remove page".to_owned(),
+            ops: vec![Op::RemovePage { page: page.into() }],
+        })
+        .unwrap();
+    assert!(session.project().metadata().chapters.entries.is_empty());
+    assert!(!session.project().metadata().page_labels.contains_key(&page));
+    session.undo().unwrap();
+    assert_eq!(session.project().metadata(), &metadata);
+    drop(session);
+
+    let reopened = Session::open(&path).unwrap();
+    assert_eq!(reopened.project().metadata(), &metadata);
+    assert_eq!(reopened.file(&cover).unwrap(), bytes);
 }
 
 #[test]

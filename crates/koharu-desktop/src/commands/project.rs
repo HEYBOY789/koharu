@@ -2,7 +2,9 @@
 
 use std::sync::Arc;
 
-use tauri::State;
+use anyhow::Context as _;
+use tauri::{State, Window};
+use tauri_runtime_cef::CefRuntime;
 
 use super::Result;
 use crate::app::App;
@@ -30,6 +32,34 @@ pub async fn create(app: State<'_, Arc<App>>, name: String) -> Result<()> {
 pub async fn open(app: State<'_, Arc<App>>, name: String) -> Result<()> {
     let app = Arc::clone(&app);
     Ok(tokio::task::spawn_blocking(move || {
+        let session = app.library.open(&name)?;
+        app.open(name, session)
+    })
+    .await??)
+}
+
+/// Converts a selected project directory and opens the new file.
+#[tauri::command]
+#[specta::specta]
+pub async fn migrate_project(app: State<'_, Arc<App>>, window: Window<CefRuntime>) -> Result<()> {
+    let mut dialog = rfd::AsyncFileDialog::new().set_parent(&window);
+    if let Some(documents) = dirs::document_dir() {
+        dialog = dialog.set_directory(documents.join("Koharu"));
+    }
+    let Some(folder) = dialog.pick_folder().await else {
+        return Ok(());
+    };
+    let source = folder.path().to_owned();
+    let name = source
+        .file_stem()
+        .and_then(|name| name.to_str())
+        .context("the project folder needs a name")?
+        .to_owned();
+    let destination = app.library.path(&name)?;
+    let app = Arc::clone(&app);
+    let runtime = tokio::runtime::Handle::current();
+    Ok(tokio::task::spawn_blocking(move || {
+        runtime.block_on(koharu_migrate::convert(&source, &destination))?;
         let session = app.library.open(&name)?;
         app.open(name, session)
     })

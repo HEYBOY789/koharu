@@ -10,8 +10,9 @@ use anyhow::Context as _;
 use fs_err::File;
 use image::ImageFormat;
 use koharu_psd::Labels;
-use koharu_renderer::Frame;
-use koharu_scene::PageId;
+use koharu_renderer::{Frame, Renderer};
+use koharu_scene::{PageId, Session};
+use parking_lot::Mutex;
 use serde::Deserialize;
 use specta::Type;
 use tauri::{State, Window};
@@ -38,12 +39,11 @@ pub async fn export(
     format: ExportFormat,
     labels: Labels,
 ) -> Result<()> {
-    let name = app
-        .project
-        .lock()
-        .as_ref()
-        .map(|project| project.name.clone())
-        .context("no project is open")?;
+    let (name, session) = {
+        let open = app.project.lock();
+        let project = open.as_ref().context("no project is open")?;
+        (project.name.clone(), Arc::clone(&project.session))
+    };
     let dialog = rfd::AsyncFileDialog::new().set_parent(&window);
     let destination = match format {
         ExportFormat::Png | ExportFormat::Psd => dialog.pick_folder().await,
@@ -58,23 +58,106 @@ pub async fn export(
     let Some(destination) = destination.map(|picked| picked.path().to_owned()) else {
         return Ok(());
     };
-    let app = Arc::clone(&app);
-    Ok(tokio::task::spawn_blocking(move || write(&app, format, &labels, &destination)).await??)
+    let renderer = app.renderer.clone();
+    Ok(tokio::task::spawn_blocking(move || {
+        let pages = session
+            .lock()
+            .project()
+            .pages()
+            .map(|page| page.id)
+            .collect::<Vec<_>>();
+        write(&session, &renderer, &pages, format, &labels, &destination)
+    })
+    .await??)
 }
 
-fn write(
-    app: &App,
+#[tauri::command]
+#[specta::specta]
+pub async fn export_chapters(
+    app: State<'_, Arc<App>>,
+    window: Window<CefRuntime>,
+    format: ExportFormat,
+    labels: Labels,
+) -> Result<()> {
+    let session = app.session()?;
+    let Some(output) = rfd::AsyncFileDialog::new()
+        .set_parent(&window)
+        .pick_folder()
+        .await
+    else {
+        return Ok(());
+    };
+    let output = output.path().to_owned();
+    let renderer = app.renderer.clone();
+    Ok(tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+        let project = session.lock().project();
+        let mut used = std::collections::BTreeSet::new();
+        for chapter in &project.metadata().chapters.entries {
+            if chapter.pages.is_empty() {
+                continue;
+            }
+            let base = sanitize_filename::sanitize(&chapter.title);
+            let base = if base.is_empty() {
+                chapter.id.to_string()
+            } else {
+                base
+            };
+            let mut name = base.clone();
+            let mut suffix = 2;
+            while !used.insert(name.to_lowercase()) {
+                name = format!("{base} ({suffix})");
+                suffix += 1;
+            }
+            let destination = match format {
+                ExportFormat::Cbz => output.join(format!("{name}.cbz")),
+                ExportFormat::Png | ExportFormat::Psd => {
+                    let path = output.join(name);
+                    fs_err::create_dir_all(&path)?;
+                    path
+                }
+            };
+            let pages = project
+                .pages()
+                .filter(|page| chapter.pages.contains(&page.id))
+                .map(|page| page.id)
+                .collect::<Vec<_>>();
+            write(&session, &renderer, &pages, format, &labels, &destination)?;
+        }
+        Ok(())
+    })
+    .await??)
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn export_wiki(app: State<'_, Arc<App>>, window: Window<CefRuntime>) -> Result<()> {
+    let session = app.session()?;
+    let Some(output) = rfd::AsyncFileDialog::new()
+        .set_parent(&window)
+        .pick_folder()
+        .await
+    else {
+        return Ok(());
+    };
+    let output = output.path().to_owned();
+    Ok(tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+        let project = session.lock().project();
+        for file in &project.metadata().wiki.files {
+            fs_err::write(output.join(format!("{}.md", file.slug)), &file.body)?;
+        }
+        Ok(())
+    })
+    .await??)
+}
+
+pub(super) fn write(
+    session: &Mutex<Session>,
+    renderer: &Renderer,
+    pages: &[PageId],
     format: ExportFormat,
     labels: &Labels,
     destination: &Path,
 ) -> anyhow::Result<()> {
-    let session = app.session()?;
-    let pages: Vec<PageId> = session
-        .lock()
-        .project()
-        .pages()
-        .map(|page| page.id)
-        .collect();
     let digits = pages.len().to_string().len().max(3);
     let mut archive = match format {
         ExportFormat::Cbz => Some(::zip::ZipWriter::new(File::create(destination)?)),
@@ -82,10 +165,9 @@ fn write(
     };
     for (index, &page) in pages.iter().enumerate() {
         let number = format!("{:0digits$}", index + 1);
-        let frame = app.renderer.render(&session.lock(), page)?;
         match (format, &mut archive) {
             (ExportFormat::Psd, _) => {
-                let psd = koharu_psd::export(&session.lock(), &app.renderer, page, labels)?;
+                let psd = koharu_psd::export(&session.lock(), renderer, page, labels)?;
                 fs_err::write(destination.join(format!("{number}.psd")), psd)?;
             }
             (_, Some(archive)) => {
@@ -93,10 +175,13 @@ fn write(
                 let options = ::zip::write::SimpleFileOptions::default()
                     .compression_method(::zip::CompressionMethod::Stored);
                 archive.start_file(format!("{number}.png"), options)?;
-                archive.write_all(&png(&frame)?)?;
+                archive.write_all(&png(&renderer.render(&session.lock(), page)?)?)?;
             }
             (_, None) => {
-                fs_err::write(destination.join(format!("{number}.png")), png(&frame)?)?;
+                fs_err::write(
+                    destination.join(format!("{number}.png")),
+                    png(&renderer.render(&session.lock(), page)?)?,
+                )?;
             }
         }
     }

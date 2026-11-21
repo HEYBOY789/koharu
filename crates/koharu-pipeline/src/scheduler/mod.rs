@@ -43,7 +43,10 @@ const KEEP: Duration = Duration::from_secs(5 * 60);
 
 pub(crate) enum Command {
     Run(Run),
-    Stop,
+    Stop {
+        run: Option<RunId>,
+        project: Option<ProjectId>,
+    },
     Unload,
     /// The settings changed: unload what nothing uses now.
     Settle,
@@ -158,16 +161,28 @@ impl Scheduler {
                 outcome: Outcome::Done,
             }),
             Command::Run(run) => self.runs.push(run),
-            Command::Stop => {
+            Command::Stop {
+                run: target,
+                project,
+            } => {
                 // Each task's call waiting for the GPU is dropped unrun.
-                for run in std::mem::take(&mut self.runs) {
+                let stopped: Vec<_> = self
+                    .runs
+                    .extract_if(.., |run| {
+                        target.is_none_or(|id| id == run.id)
+                            && project.is_none_or(|id| id == run.project)
+                    })
+                    .collect();
+                for run in stopped {
                     run.cancel.cancel();
                     self.emit(Event::Ended {
                         run: run.id,
                         outcome: Outcome::Stopped,
                     });
                 }
-                self.rest();
+                if self.runs.is_empty() {
+                    self.rest();
+                }
             }
             Command::Unload => self
                 .gpu

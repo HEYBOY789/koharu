@@ -3,7 +3,7 @@
 //! and a layer its children, as values, so the tree can't disagree with
 //! itself; an index of which page holds each layer is derived from them.
 
-use std::slice;
+use std::{slice, sync::Arc};
 
 use imbl::{OrdMap, Vector};
 use schemars::JsonSchema;
@@ -22,6 +22,7 @@ pub(crate) type TileMap = OrdMap<(i32, i32), Hash>;
 #[derive(Clone, Debug, PartialEq)]
 pub struct Project {
     pub(crate) id: ProjectId,
+    pub(crate) metadata: Arc<crate::ProjectMetadata>,
     pub(crate) order: Vector<PageId>,
     pub(crate) pages: OrdMap<PageId, Page>,
     /// Which page holds each layer, a block's parts included: derived from
@@ -165,9 +166,15 @@ impl Page {
 }
 
 impl Project {
+    #[must_use]
+    pub fn metadata(&self) -> &crate::ProjectMetadata {
+        &self.metadata
+    }
+
     pub(crate) fn new(id: ProjectId) -> Self {
         Self {
             id,
+            metadata: Arc::default(),
             order: Vector::new(),
             pages: OrdMap::new(),
             index: OrdMap::new(),
@@ -286,7 +293,7 @@ impl Project {
     }
 
     /// The first of `layer` and the layers above it that is locked.
-    pub(crate) fn locked_at(&self, layer: LayerId) -> Option<LayerId> {
+    pub fn locked_at(&self, layer: LayerId) -> Option<LayerId> {
         let (page, path) = self.place(layer)?;
         let page = &self.pages[&page];
         (1..=path.len())

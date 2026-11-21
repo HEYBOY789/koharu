@@ -7,16 +7,26 @@ import { useTranslation } from 'react-i18next'
 
 import { Markdown } from '@/components/controls/Markdown'
 import { ModelPicker } from '@/components/controls/ModelPicker'
+import { PiModelHint } from '@/components/controls/PiModelHint'
 import { call, savePreferences } from '@/lib/backend'
 import { useKoharuStore } from '@/lib/store'
 import { modelName, REASONING } from '@/lib/translation'
-import { commands, type AgentConfig, type AgentEvent, type Event } from '@koharu/ipc/protocol'
+import {
+  commands,
+  type AgentBackend,
+  type AgentConfig,
+  type AgentEvent,
+  type CliConfig,
+  type Event,
+} from '@koharu/ipc/protocol'
 import { Button } from '@koharu/ui/components/button'
 import {
   Collapsible,
   CollapsibleContent,
   CollapsibleTrigger,
 } from '@koharu/ui/components/collapsible'
+import { Input } from '@koharu/ui/components/input'
+import { NativeSelect, NativeSelectOption } from '@koharu/ui/components/native-select'
 import { Popover, PopoverContent, PopoverTrigger } from '@koharu/ui/components/popover'
 import { ScrollArea } from '@koharu/ui/components/scroll-area'
 import {
@@ -84,6 +94,12 @@ export function AgentPanel() {
   }
 
   const config = preferences.agent
+  const backend = config.backend ?? 'native'
+  const cli = backend === 'pi' || backend === 'agy' ? backend : null
+  const profile = cli ? config[cli] : undefined
+  const configureCli = (patch: Partial<CliConfig>) => {
+    if (cli) void saveConfig({ ...config, [cli]: { ...profile, ...patch } })
+  }
   const model = config.model ?? null
   const picker =
     'h-6 w-auto max-w-36 min-w-0 gap-1 border-0 bg-transparent px-1.5 text-[11px] text-muted-foreground shadow-none hover:bg-muted hover:text-foreground dark:bg-transparent dark:hover:bg-muted'
@@ -92,6 +108,58 @@ export function AgentPanel() {
 
   return (
     <div className='flex min-h-0 flex-1 flex-col'>
+      <div className='grid gap-2 border-b px-3 py-2 text-xs'>
+        <label className='flex items-center gap-2'>
+          <span className='shrink-0'>{t('agent.backend')}</span>
+          <NativeSelect
+            value={backend}
+            disabled={busy}
+            onChange={(event) =>
+              void saveConfig({ ...config, backend: event.currentTarget.value as AgentBackend })
+            }
+          >
+            <NativeSelectOption value='native'>{t('agent.nativeBackend')}</NativeSelectOption>
+            <NativeSelectOption value='pi'>Pi</NativeSelectOption>
+            <NativeSelectOption value='agy'>AGY</NativeSelectOption>
+            {backend === 'codex' && <NativeSelectOption value='codex'>Codex</NativeSelectOption>}
+          </NativeSelect>
+        </label>
+        {cli && (
+          <div className='grid gap-1' key={cli}>
+            <label className='grid gap-1'>
+              {t('agent.model')}
+              <Input
+                className='h-7'
+                defaultValue={profile?.model ?? ''}
+                placeholder={t('inference.providerDefault')}
+                disabled={busy}
+                onBlur={(event) => {
+                  const model = event.currentTarget.value.trim() || null
+                  if (model !== (profile?.model ?? null)) configureCli({ model })
+                }}
+              />
+            </label>
+            {cli === 'pi' && <PiModelHint />}
+            <details>
+              <summary>{t('publication.tools')}</summary>
+              {(['binary', 'node'] as const).map((field) => (
+                <label className='mt-1 grid gap-1' key={field}>
+                  {t(`publication.${field}`)}
+                  <Input
+                    className='h-7'
+                    defaultValue={profile?.[field] ?? ''}
+                    disabled={busy}
+                    onBlur={(event) => {
+                      const value = event.currentTarget.value.trim() || null
+                      if (value !== (profile?.[field] ?? null)) configureCli({ [field]: value })
+                    }}
+                  />
+                </label>
+              ))}
+            </details>
+          </div>
+        )}
+      </div>
       <ScrollArea
         className='min-h-0 flex-1'
         viewportRef={list}
@@ -149,70 +217,74 @@ export function AgentPanel() {
             }}
           />
           <div className='flex min-w-0 items-center gap-0.5 pt-1'>
-            <Popover open={choosing} onOpenChange={setChoosing}>
-              <PopoverTrigger
-                type='button'
-                aria-label={t('agent.model')}
-                className={cn(
-                  'flex items-center rounded-md outline-none focus-visible:ring-2 focus-visible:ring-ring/40 data-open:bg-muted data-open:text-foreground',
-                  picker,
-                )}
+            {!cli && (
+              <Popover open={choosing} onOpenChange={setChoosing}>
+                <PopoverTrigger
+                  type='button'
+                  aria-label={t('agent.model')}
+                  className={cn(
+                    'flex items-center rounded-md outline-none focus-visible:ring-2 focus-visible:ring-ring/40 data-open:bg-muted data-open:text-foreground',
+                    picker,
+                  )}
+                >
+                  <span className='truncate'>
+                    {(model && modelName(models, model)) || t('inference.noModel')}
+                  </span>
+                  <ChevronDown className='size-3.5 shrink-0' />
+                </PopoverTrigger>
+                <PopoverContent
+                  side='top'
+                  align='start'
+                  sideOffset={6}
+                  className='w-64 min-w-0 gap-0 overflow-hidden rounded-xl border border-border/50 p-1 shadow-sm ring-0'
+                >
+                  <ModelPicker
+                    value={model}
+                    models={models}
+                    onSelect={(next) => {
+                      setChoosing(false)
+                      void saveConfig({ ...config, model: next })
+                    }}
+                  />
+                </PopoverContent>
+              </Popover>
+            )}
+            {!cli && (
+              <Select
+                value={config.reasoning ?? 'default'}
+                items={Object.fromEntries([
+                  ['default', t('inference.providerDefault')],
+                  ...REASONING.map((level) => [level, t(`reasoning.${level}`)]),
+                ])}
+                onValueChange={(reasoning) =>
+                  reasoning &&
+                  void saveConfig({
+                    ...config,
+                    reasoning: reasoning === 'default' ? null : reasoning,
+                  })
+                }
               >
-                <span className='truncate'>
-                  {(model && modelName(models, model)) || t('inference.noModel')}
-                </span>
-                <ChevronDown className='size-3.5 shrink-0' />
-              </PopoverTrigger>
-              <PopoverContent
-                side='top'
-                align='start'
-                sideOffset={6}
-                className='w-64 min-w-0 gap-0 overflow-hidden rounded-xl border border-border/50 p-1 shadow-sm ring-0'
-              >
-                <ModelPicker
-                  value={model}
-                  models={models}
-                  onSelect={(next) => {
-                    setChoosing(false)
-                    void saveConfig({ ...config, model: next })
-                  }}
-                />
-              </PopoverContent>
-            </Popover>
-            <Select
-              value={config.reasoning ?? 'default'}
-              items={Object.fromEntries([
-                ['default', t('inference.providerDefault')],
-                ...REASONING.map((level) => [level, t(`reasoning.${level}`)]),
-              ])}
-              onValueChange={(reasoning) =>
-                reasoning &&
-                void saveConfig({
-                  ...config,
-                  reasoning: reasoning === 'default' ? null : reasoning,
-                })
-              }
-            >
-              <SelectTrigger size='sm' className={picker} aria-label={t('agent.reasoning')}>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent
-                side='top'
-                align='start'
-                sideOffset={6}
-                alignItemWithTrigger={false}
-                className='w-auto min-w-36 rounded-xl border border-border/50 p-1 shadow-sm ring-0'
-              >
-                <SelectItem value='default' className={choice}>
-                  {t('inference.providerDefault')}
-                </SelectItem>
-                {REASONING.map((level) => (
-                  <SelectItem key={level} value={level} className={choice}>
-                    {t(`reasoning.${level}`)}
+                <SelectTrigger size='sm' className={picker} aria-label={t('agent.reasoning')}>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent
+                  side='top'
+                  align='start'
+                  sideOffset={6}
+                  alignItemWithTrigger={false}
+                  className='w-auto min-w-36 rounded-xl border border-border/50 p-1 shadow-sm ring-0'
+                >
+                  <SelectItem value='default' className={choice}>
+                    {t('inference.providerDefault')}
                   </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+                  {REASONING.map((level) => (
+                    <SelectItem key={level} value={level} className={choice}>
+                      {t(`reasoning.${level}`)}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            )}
             <div className='ml-auto flex shrink-0 items-center gap-1'>
               <Tooltip>
                 <TooltipTrigger
@@ -247,7 +319,7 @@ export function AgentPanel() {
                   type='button'
                   size='icon-sm'
                   aria-label={t('agent.send')}
-                  disabled={!prompt.trim() || !model}
+                  disabled={!prompt.trim() || (!model && !cli)}
                   className='size-7 rounded-full'
                   onClick={() => void send()}
                 >
@@ -286,7 +358,7 @@ export function AgentPanel() {
 
   async function send() {
     const message = prompt.trim()
-    if (!message || busy || !model) return
+    if (!message || busy || (!model && !cli)) return
     const assistant = crypto.randomUUID()
     setPrompt('')
     following.current = true

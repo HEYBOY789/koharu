@@ -4,9 +4,10 @@ import { useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { TitleBar } from '@/components/app/TitleBar'
+import { ActivityCenter } from '@/components/editor/ActivityCenter'
 import { Editor } from '@/components/editor/Editor'
 import { SettingsPage } from '@/components/preferences/SettingsPage'
-import { StartView } from '@/components/start/StartView'
+import { ProjectLibrary } from '@/components/start/ProjectLibrary'
 import { useProject } from '@/lib/queries'
 import { useKoharuStore } from '@/lib/store'
 import { cn } from '@koharu/ui/lib/utils'
@@ -36,6 +37,7 @@ export function KoharuApp() {
       )}
     >
       <TitleBar />
+      <ActivityCenter />
       {settingsOpen ? (
         <SettingsPage />
       ) : project === undefined ? (
@@ -46,7 +48,7 @@ export function KoharuApp() {
           </div>
         </main>
       ) : project === null ? (
-        <StartView />
+        <ProjectLibrary />
       ) : (
         <Editor />
       )}

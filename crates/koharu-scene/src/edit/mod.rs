@@ -72,6 +72,12 @@ pub enum Op {
     MovePage { page: Ref, index: usize },
     /// Remove a page with its layers.
     RemovePage { page: Ref },
+    /// Changes chapter membership, wiki, page names and publishing data in the
+    /// same transaction as the page edits that accompany them.
+    #[schemars(skip)]
+    SetProjectMetadata {
+        metadata: Box<crate::ProjectMetadata>,
+    },
     /// Add a layer under `parent`, or at the top level of `page`, at `index`
     /// among the parent's children, masks included, first drawn first.
     AddLayer {
@@ -325,6 +331,14 @@ impl Run<'_, '_> {
             }
             Op::MovePage { page, index: to } => self.move_page(index, page, *to),
             Op::RemovePage { page } => self.remove_page(page),
+            Op::SetProjectMetadata { metadata } => {
+                metadata.validate(&self.project)?;
+                if let Some(cover) = &metadata.cover {
+                    self.image_size(index, cover)?;
+                }
+                self.project.metadata = std::sync::Arc::new((**metadata).clone());
+                Ok(())
+            }
             Op::AddLayer {
                 id,
                 page,

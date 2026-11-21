@@ -5,7 +5,7 @@ import { CircleAlert, Download, LoaderCircle, Square, X } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 
 import { call } from '@/lib/backend'
-import { usePages } from '@/lib/queries'
+import { useChapterJobs, usePages, useSourceJobs } from '@/lib/queries'
 import { useKoharuStore, type Job } from '@/lib/store'
 import { commands, type Transfer } from '@koharu/ipc/protocol'
 import { Button } from '@koharu/ui/components/button'
@@ -13,6 +13,14 @@ import { Button } from '@koharu/ui/components/button'
 export function ActivityCenter() {
   const { t } = useTranslation()
   const jobs = useKoharuStore((state) => state.jobs)
+  const chapterJobs = useChapterJobs().data ?? []
+  const sourceJobs = useSourceJobs().data ?? []
+  const visibleSources = sourceJobs.filter(
+    (job) => job.phase !== 'stopped' && job.phase !== 'finished',
+  )
+  const visibleChapters = chapterJobs.filter(
+    (job) => job.phase !== 'finished' && job.phase !== 'stopped',
+  )
   const downloads = useKoharuStore((state) => state.downloads)
   const activities = useMutationState({
     filters: { status: 'pending' },
@@ -24,14 +32,22 @@ export function ActivityCenter() {
     (activity): activity is { id: number; label: string } => typeof activity.label === 'string',
   )
   const visibleJobs = Object.values(jobs).filter(
-    (job) => job.state === 'running' || job.state === 'failed',
+    (job) =>
+      (job.state === 'running' || job.state === 'failed') &&
+      !visibleChapters.some((chapter) => chapter.run === job.id),
   )
   const runningDownloads = Object.values(downloads).filter(
     (download) => download.state === 'Running',
   )
   const failedDownloads = Object.values(downloads).filter((download) => failure(download) !== null)
   const visibleDownloads = [...runningDownloads, ...failedDownloads]
-  if (activities.length === 0 && visibleJobs.length === 0 && visibleDownloads.length === 0)
+  if (
+    activities.length === 0 &&
+    visibleJobs.length === 0 &&
+    visibleDownloads.length === 0 &&
+    visibleChapters.length === 0 &&
+    visibleSources.length === 0
+  )
     return null
 
   return (
@@ -67,6 +83,66 @@ export function ActivityCenter() {
       ))}
       {visibleJobs.map((job) => (
         <JobItem key={job.id} job={job} />
+      ))}
+      {visibleSources.map((job) => (
+        <div key={job.id} className='border-b p-3 last:border-b-0'>
+          <div className='flex items-center justify-between gap-2'>
+            <span className='min-w-0 truncate text-xs font-medium' title={job.name}>
+              {job.name}
+            </span>
+            {job.phase !== 'failed' && (
+              <Button
+                variant='ghost'
+                size='icon-sm'
+                className='size-6'
+                aria-label={t('sourceImport.stop')}
+                onClick={() => void call(commands.stopSourceJob, job.id).catch(() => undefined)}
+              >
+                <Square className='size-3' />
+              </Button>
+            )}
+          </div>
+          <p className='text-[11px]'>{t(`sourceImport.phase.${job.phase}`)}</p>
+          {job.error && (
+            <p role='alert' className='mt-1 text-[10px] break-words text-destructive'>
+              {job.error}
+            </p>
+          )}
+        </div>
+      ))}
+      {visibleChapters.map((job) => (
+        <div key={job.project} className='border-b p-3 last:border-b-0'>
+          <div className='flex items-center justify-between gap-2'>
+            <span className='min-w-0 truncate text-xs font-medium' title={job.name}>
+              {job.name}
+            </span>
+            {job.phase !== 'failed' && (
+              <Button
+                variant='ghost'
+                size='icon-sm'
+                className='size-6'
+                aria-label={t('chapter.stop')}
+                onClick={() =>
+                  void call(commands.stopChapterJob, job.project).catch(() => undefined)
+                }
+              >
+                <Square className='size-3' />
+              </Button>
+            )}
+          </div>
+          <p className='truncate text-[11px]' title={job.chapter}>
+            {t(`chapter.phase.${job.phase}`, { chapter: job.chapter })}
+          </p>
+          <span className='text-[10px] text-muted-foreground tabular-nums'>
+            {t('chapter.progress', { completed: job.completed, total: job.total })}
+          </span>
+          {job.error && (
+            <p role='alert' className='mt-1 text-[10px] break-words text-destructive'>
+              {job.error}
+            </p>
+          )}
+          <Progress value={progress(job.completed, job.total)} />
+        </div>
       ))}
     </aside>
   )

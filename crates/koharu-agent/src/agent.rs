@@ -35,7 +35,7 @@ use serde_json::{Value, json};
 
 use koharu_llm::{Context, KOHARU};
 
-use crate::{Tools, tools::refusal};
+use crate::{CliBackend, CliConfig, Tools, tools::refusal};
 
 /// The system prompt: Koharu's own, not a setting, since it describes the
 /// tools and the project document, which Koharu owns.
@@ -52,6 +52,9 @@ const PROMPT: &str = indoc! {"
 #[serde(default)]
 #[derive(specta::Type)]
 pub struct AgentConfig {
+    pub backend: AgentBackend,
+    pub pi: CliConfig,
+    pub agy: CliConfig,
     /// A `vendor/model` reference, as koharu-llm connects one.
     pub model: Option<String>,
     /// How much the model reasons before it answers: off, or one of rig's
@@ -67,9 +70,36 @@ pub struct AgentConfig {
     pub corrections: usize,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Deserialize, Serialize, specta::Type)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentBackend {
+    #[default]
+    Native,
+    Codex,
+    Pi,
+    Agy,
+}
+
+impl AgentConfig {
+    pub fn cli(&self) -> Option<CliConfig> {
+        let (backend, profile) = match self.backend {
+            AgentBackend::Pi => (CliBackend::Pi, &self.pi),
+            AgentBackend::Agy => (CliBackend::Agy, &self.agy),
+            AgentBackend::Native | AgentBackend::Codex => return None,
+        };
+        Some(CliConfig {
+            backend,
+            ..profile.clone()
+        })
+    }
+}
+
 impl Default for AgentConfig {
     fn default() -> Self {
         Self {
+            backend: AgentBackend::Native,
+            pi: CliConfig::default(),
+            agy: CliConfig::default(),
             model: None,
             reasoning: None,
             // rig's default is one, which ends a run at its first tool call.
@@ -139,6 +169,7 @@ impl Agent {
         prompt: &str,
         events: impl Fn(Event) + Send + Sync + 'static,
     ) -> Result<String> {
+        self.tools.reset_scope();
         self.context.fit(&self.model).await?;
         let events: Events = Arc::new(events);
         match self.attempt(prompt, &events).await {
