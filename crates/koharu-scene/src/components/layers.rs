@@ -2,7 +2,6 @@ use std::collections::BTreeMap;
 
 use revision::revisioned;
 use serde::{Deserialize, Serialize};
-use specta::Type;
 
 use crate::{
     Error, Result,
@@ -13,7 +12,8 @@ use crate::{
 use super::Origin;
 
 #[revisioned(revision = 1)]
-#[derive(Copy, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Type)]
+#[cfg_attr(feature = "bindings", derive(specta::Type))]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RasterLayerKind {
     Cleanup,
@@ -22,7 +22,8 @@ pub enum RasterLayerKind {
 
 /// A full-page transparent pixel layer composited above the page source.
 #[revisioned(revision = 1)]
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Type)]
+#[cfg_attr(feature = "bindings", derive(specta::Type))]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct RasterLayer {
     pub origin: Origin,
     pub name: String,
@@ -51,7 +52,8 @@ impl Component for RasterLayer {
 }
 
 #[revisioned(revision = 1)]
-#[derive(Copy, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Type)]
+#[cfg_attr(feature = "bindings", derive(specta::Type))]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TextLayoutKind {
     Point,
@@ -59,7 +61,8 @@ pub enum TextLayoutKind {
 }
 
 #[revisioned(revision = 2)]
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Type)]
+#[cfg_attr(feature = "bindings", derive(specta::Type))]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct TextLayout {
     pub origin: Origin,
     pub kind: TextLayoutKind,
@@ -89,7 +92,8 @@ impl Component for TextLayout {
 }
 
 #[revisioned(revision = 1)]
-#[derive(Copy, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Type)]
+#[cfg_attr(feature = "bindings", derive(specta::Type))]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum TextAlignment {
     Start,
     Center,
@@ -98,14 +102,16 @@ pub enum TextAlignment {
 }
 
 #[revisioned(revision = 1)]
-#[derive(Copy, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Type)]
+#[cfg_attr(feature = "bindings", derive(specta::Type))]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum WritingMode {
     Horizontal,
     Vertical,
 }
 
 #[revisioned(revision = 1)]
-#[derive(Copy, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Type)]
+#[cfg_attr(feature = "bindings", derive(specta::Type))]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum FontStyle {
     Normal,
@@ -114,7 +120,8 @@ pub enum FontStyle {
 }
 
 #[revisioned(revision = 1)]
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Type)]
+#[cfg_attr(feature = "bindings", derive(specta::Type))]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Typography {
     pub origin: Origin,
     pub preferred_font: Option<String>,

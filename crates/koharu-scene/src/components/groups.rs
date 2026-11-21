@@ -1,6 +1,5 @@
 use revision::revisioned;
 use serde::{Deserialize, Serialize};
-use specta::Type;
 
 use crate::{
     Error, Result,
@@ -10,7 +9,8 @@ use crate::{
 use super::Origin;
 
 #[revisioned(revision = 1)]
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Type)]
+#[cfg_attr(feature = "bindings", derive(specta::Type))]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Group {
     pub origin: Origin,
     pub name: String,
@@ -40,7 +40,8 @@ impl Component for Group {
 
 /// Identifies the page-owned group whose child order is the canonical text order.
 #[revisioned(revision = 1)]
-#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize, Type)]
+#[cfg_attr(feature = "bindings", derive(specta::Type))]
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub struct TextGroup {}
 
 impl Component for TextGroup {

@@ -1,6 +1,5 @@
 use revision::revisioned;
 use serde::{Deserialize, Serialize};
-use specta::Type;
 
 use crate::{
     Error, Result,
@@ -10,14 +9,16 @@ use crate::{
 use super::Origin;
 
 #[revisioned(revision = 1)]
-#[derive(Copy, Clone, Debug, Default, PartialEq, Serialize, Deserialize, Type)]
+#[cfg_attr(feature = "bindings", derive(specta::Type))]
+#[derive(Copy, Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Point {
     pub x: f64,
     pub y: f64,
 }
 
 #[revisioned(revision = 1)]
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Type)]
+#[cfg_attr(feature = "bindings", derive(specta::Type))]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Geometry {
     pub origin: Origin,
     pub points: Vec<Point>,
@@ -71,7 +72,8 @@ impl Component for Geometry {
 }
 
 #[revisioned(revision = 1)]
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Type)]
+#[cfg_attr(feature = "bindings", derive(specta::Type))]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Visibility {
     pub origin: Origin,
     pub visible: bool,

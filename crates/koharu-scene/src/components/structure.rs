@@ -2,7 +2,6 @@ use std::str::FromStr;
 
 use revision::revisioned;
 use serde::{Deserialize, Serialize};
-use specta::Type;
 
 use crate::{
     EntityId, Error, Result,
@@ -13,7 +12,8 @@ use crate::{
 use super::{LanguageTag, Origin};
 
 #[revisioned(revision = 1)]
-#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize, Type)]
+#[cfg_attr(feature = "bindings", derive(specta::Type))]
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub struct Project {
     pub source_locale: Option<LanguageTag>,
     pub target_locales: Vec<LanguageTag>,
@@ -41,7 +41,8 @@ impl Component for Project {
 }
 
 #[revisioned(revision = 1)]
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Type)]
+#[cfg_attr(feature = "bindings", derive(specta::Type))]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Page {
     pub label: String,
     pub width: f64,
@@ -95,7 +96,8 @@ impl From<PageDraft> for Page {
 }
 
 #[revisioned(revision = 1)]
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Type)]
+#[cfg_attr(feature = "bindings", derive(specta::Type))]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct EntityOrigin {
     pub origin: Origin,
 }
@@ -118,7 +120,8 @@ impl Component for EntityOrigin {
 }
 
 #[revisioned(revision = 1)]
-#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize, Type)]
+#[cfg_attr(feature = "bindings", derive(specta::Type))]
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct RelationKind(String);
 
@@ -148,7 +151,8 @@ impl FromStr for RelationKind {
 }
 
 #[revisioned(revision = 1)]
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Type)]
+#[cfg_attr(feature = "bindings", derive(specta::Type))]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Relation {
     pub origin: Origin,
     pub kind: RelationKind,

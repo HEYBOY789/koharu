@@ -2,7 +2,6 @@ use std::{fmt, str::FromStr};
 
 use revision::revisioned;
 use serde::{Deserialize, Serialize};
-use specta::Type;
 use uuid::Uuid;
 
 use crate::{Error, Result};
@@ -10,8 +9,9 @@ use crate::{Error, Result};
 macro_rules! entity_id {
     ($name:ident) => {
         #[revisioned(revision = 1)]
+        #[cfg_attr(feature = "bindings", derive(specta::Type))]
         #[derive(
-            Copy, Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize, Type,
+            Copy, Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize,
         )]
         #[serde(transparent)]
         pub struct $name(Uuid);
@@ -46,9 +46,8 @@ entity_id!(EntityId);
 entity_id!(RelationId);
 entity_id!(ChapterId);
 
-#[derive(
-    Copy, Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize, Type,
-)]
+#[cfg_attr(feature = "bindings", derive(specta::Type))]
+#[derive(Copy, Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct ProjectId(pub(crate) koharu_storage::DocumentId);
 
@@ -67,7 +66,8 @@ impl FromStr for ProjectId {
 }
 
 #[revisioned(revision = 1)]
-#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize, Type)]
+#[cfg_attr(feature = "bindings", derive(specta::Type))]
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct ProducerId(String);
 

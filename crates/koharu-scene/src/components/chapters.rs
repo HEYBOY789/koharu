@@ -4,7 +4,6 @@ use std::collections::HashSet;
 
 use revision::revisioned;
 use serde::{Deserialize, Serialize};
-use specta::Type;
 
 use crate::{
     ChapterId, EntityId, Error, Result,
@@ -15,7 +14,8 @@ const MAX_TITLE_BYTES: usize = 512;
 const MAX_DOCUMENT_BYTES: usize = 4 * 1024 * 1024;
 
 #[revisioned(revision = 1)]
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Type)]
+#[cfg_attr(feature = "bindings", derive(specta::Type))]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Chapter {
     pub id: ChapterId,
     pub title: String,
@@ -42,7 +42,8 @@ impl Chapter {
 /// Project-level chapter roster. Entry order is chapter order; page order
 /// inside an entry is the project page order filtered by membership.
 #[revisioned(revision = 1)]
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, Type)]
+#[cfg_attr(feature = "bindings", derive(specta::Type))]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Chapters {
     pub entries: Vec<Chapter>,
 }
@@ -123,13 +124,7 @@ impl Component for Chapters {
 /// no other file owns and which must survive between chapters. A series may grow
 /// more: the roster is a list, not a fixed record, because a long run
 /// accumulates factions, relationship maps, or power systems that do not fit.
-pub const DEFAULT_WIKI_SLUGS: [&str; 5] = [
-    "world",
-    "characters",
-    "glossary",
-    "timeline",
-    "style",
-];
+pub const DEFAULT_WIKI_SLUGS: [&str; 5] = ["world", "characters", "glossary", "timeline", "style"];
 
 const MAX_WIKI_SLUG_BYTES: usize = 64;
 const MAX_WIKI_FILES: usize = 64;
@@ -137,13 +132,15 @@ const MAX_WIKI_FILES: usize = 64;
 /// Wiki pages are kept whole so a summarizer can rewrite one file at a time
 /// without inventing a second document format.
 #[revisioned(revision = 1)]
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Type)]
+#[cfg_attr(feature = "bindings", derive(specta::Type))]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Wiki {
     pub files: Vec<WikiFile>,
 }
 
 #[revisioned(revision = 1)]
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Type)]
+#[cfg_attr(feature = "bindings", derive(specta::Type))]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct WikiFile {
     pub slug: String,
     pub body: String,

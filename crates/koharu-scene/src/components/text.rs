@@ -2,7 +2,6 @@ use std::{fmt, str::FromStr};
 
 use revision::{DeserializeRevisioned, Revisioned, SerializeRevisioned, revisioned};
 use serde::{Deserialize, Serialize};
-use specta::Type;
 
 use crate::{
     Error, Result,
@@ -13,7 +12,8 @@ use crate::{
 use super::{Authored, Origin};
 
 #[revisioned(revision = 1)]
-#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize, Type)]
+#[cfg_attr(feature = "bindings", derive(specta::Type))]
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct LanguageTag(String);
 
@@ -57,7 +57,8 @@ impl fmt::Display for LanguageTag {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Type)]
+#[cfg_attr(feature = "bindings", derive(specta::Type))]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SourceText {
     pub text: Authored<String>,
     pub language: Option<LanguageTag>,
@@ -66,7 +67,8 @@ pub struct SourceText {
 /// Marks an entity as semantic text content, independent from source analysis
 /// and visual presentation.
 #[revisioned(revision = 1)]
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Type)]
+#[cfg_attr(feature = "bindings", derive(specta::Type))]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct TextContent {
     pub origin: Origin,
 }
@@ -135,7 +137,8 @@ impl Component for SourceText {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Type)]
+#[cfg_attr(feature = "bindings", derive(specta::Type))]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Translation {
     pub text: Authored<String>,
     pub language: Option<LanguageTag>,
@@ -197,7 +200,8 @@ fn validate_authored_text(value: &Authored<String>) -> Result<()> {
 }
 
 #[revisioned(revision = 1)]
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Type)]
+#[cfg_attr(feature = "bindings", derive(specta::Type))]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct TextRole {
     pub origin: Origin,
     pub role: String,

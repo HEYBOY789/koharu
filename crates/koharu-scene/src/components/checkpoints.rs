@@ -2,12 +2,12 @@
 use crate::{BlobId, Component, Origin, Result, ValidationContext};
 use revision::revisioned;
 use serde::{Deserialize, Serialize};
-use specta::Type;
 
 macro_rules! checkpoint {
     ($name:ident, $kind:literal) => {
         #[revisioned(revision = 1)]
-        #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Type)]
+        #[cfg_attr(feature = "bindings", derive(specta::Type))]
+        #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
         pub struct $name {
             pub origin: Origin,
             pub input: BlobId,

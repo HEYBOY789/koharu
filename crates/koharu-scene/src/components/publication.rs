@@ -1,18 +1,19 @@
 use revision::revisioned;
 use serde::{Deserialize, Serialize};
-use specta::Type;
 
 use crate::{Component, Error, Result, ValidationContext};
 
 #[revisioned(revision = 1)]
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, Type)]
+#[cfg_attr(feature = "bindings", derive(specta::Type))]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct PublicationGenre {
     pub name: String,
     pub slug: String,
 }
 
 #[revisioned(revision = 1)]
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Type)]
+#[cfg_attr(feature = "bindings", derive(specta::Type))]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PublicationMetadata {
     pub title: String,

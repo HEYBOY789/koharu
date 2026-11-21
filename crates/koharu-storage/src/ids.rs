@@ -2,14 +2,14 @@ use std::{fmt, str::FromStr};
 
 use revision::revisioned;
 use serde::{Deserialize, Serialize};
-use specta::Type;
 use uuid::Uuid;
 
 macro_rules! uuid_id {
     ($name:ident) => {
         #[revisioned(revision = 1)]
+        #[cfg_attr(feature = "bindings", derive(specta::Type))]
         #[derive(
-            Copy, Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize, Type,
+            Copy, Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize,
         )]
         #[serde(transparent)]
         pub struct $name(Uuid);
@@ -63,11 +63,12 @@ macro_rules! uuid_id {
 uuid_id!(DocumentId);
 
 #[revisioned(revision = 1)]
+#[cfg_attr(feature = "bindings", derive(specta::Type))]
 #[derive(
-    Copy, Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize, Type,
+    Copy, Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize,
 )]
 #[serde(transparent)]
-pub struct Revision(#[specta(type = f64)] u64);
+pub struct Revision(#[cfg_attr(feature = "bindings", specta(type = f64))] u64);
 
 impl Revision {
     pub const ZERO: Self = Self(0);
@@ -96,8 +97,9 @@ impl fmt::Display for Revision {
 macro_rules! hash_id {
     ($name:ident) => {
         #[revisioned(revision = 1)]
+        #[cfg_attr(feature = "bindings", derive(specta::Type))]
         #[derive(
-            Copy, Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize, Type,
+            Copy, Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize,
         )]
         #[serde(transparent)]
         pub struct $name([u8; 32]);

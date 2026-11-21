@@ -2,7 +2,6 @@ use std::{collections::BTreeMap, sync::Arc};
 
 use revision::revisioned;
 use serde::{Deserialize, Serialize};
-use specta::Type;
 
 use crate::{
     BlobId, Error, Result,
@@ -12,7 +11,8 @@ use crate::{
 use super::Origin;
 
 #[revisioned(revision = 1)]
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Type)]
+#[cfg_attr(feature = "bindings", derive(specta::Type))]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct AssetMetadata {
     pub width: Option<u32>,
     pub height: Option<u32>,
@@ -20,7 +20,8 @@ pub struct AssetMetadata {
 }
 
 #[revisioned(revision = 1)]
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Type)]
+#[cfg_attr(feature = "bindings", derive(specta::Type))]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Asset {
     pub origin: Origin,
     pub blob: BlobId,
@@ -80,7 +81,8 @@ impl AssetInput {
 }
 
 #[revisioned(revision = 1)]
-#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize, Type)]
+#[cfg_attr(feature = "bindings", derive(specta::Type))]
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct AssetRole(String);
 

@@ -1,12 +1,12 @@
 use revision::revisioned;
 use serde::{Deserialize, Serialize};
-use specta::Type;
 use std::collections::HashSet;
 
 use crate::{ChapterId, Component, Error, Result, ValidationContext};
 
 #[revisioned(revision = 1)]
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Type)]
+#[cfg_attr(feature = "bindings", derive(specta::Type))]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ImportedSourceChapter {
     pub chapter: ChapterId,
     pub url: String,
@@ -15,7 +15,8 @@ pub struct ImportedSourceChapter {
 }
 
 #[revisioned(revision = 1)]
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Type)]
+#[cfg_attr(feature = "bindings", derive(specta::Type))]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ImportedSource {
     pub url: String,
     pub description: String,

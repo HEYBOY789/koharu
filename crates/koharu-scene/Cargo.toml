@@ -11,17 +11,21 @@ repository.workspace = true
 keywords.workspace = true
 publish.workspace = true
 
+[features]
+default = ["bindings"]
+bindings = ["dep:specta", "koharu-storage/bindings"]
+
 [dependencies]
 blake3 = { workspace = true }
 bytes = { workspace = true }
 imbl = { workspace = true }
 hashbrown = { workspace = true }
-koharu-storage = { workspace = true }
+koharu-storage = { path = "../koharu-storage", default-features = false }
 revision = { workspace = true }
 serde = { workspace = true }
 slotmap = { workspace = true }
 smallvec = { workspace = true }
-specta = { workspace = true }
+specta = { workspace = true, optional = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }

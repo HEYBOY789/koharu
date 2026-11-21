@@ -2,7 +2,6 @@ use std::str::FromStr;
 
 use revision::revisioned;
 use serde::{Deserialize, Serialize};
-use specta::Type;
 
 use crate::{
     Error, Result,
@@ -13,7 +12,8 @@ use crate::{
 use super::{Origin, Point};
 
 #[revisioned(revision = 1)]
-#[derive(Copy, Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize, Type)]
+#[cfg_attr(feature = "bindings", derive(specta::Type))]
+#[derive(Copy, Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub enum TextDirection {
     #[default]
     Auto,
@@ -22,7 +22,8 @@ pub enum TextDirection {
 }
 
 #[revisioned(revision = 1)]
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Type)]
+#[cfg_attr(feature = "bindings", derive(specta::Type))]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct OcrAnalysis {
     pub origin: Origin,
     pub direction: TextDirection,
@@ -62,7 +63,8 @@ impl Component for OcrAnalysis {
 }
 
 #[revisioned(revision = 1)]
-#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize, Type)]
+#[cfg_attr(feature = "bindings", derive(specta::Type))]
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct RegionKind(String);
 
@@ -92,7 +94,8 @@ impl FromStr for RegionKind {
 }
 
 #[revisioned(revision = 1)]
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Type)]
+#[cfg_attr(feature = "bindings", derive(specta::Type))]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Region {
     pub origin: Origin,
     pub kind: RegionKind,
@@ -127,14 +130,16 @@ impl Component for Region {
 }
 
 #[revisioned(revision = 1)]
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Type)]
+#[cfg_attr(feature = "bindings", derive(specta::Type))]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct DetectionLabel {
     pub kind: RegionKind,
     pub confidence: f32,
 }
 
 #[revisioned(revision = 1)]
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Type)]
+#[cfg_attr(feature = "bindings", derive(specta::Type))]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct DetectionAnalysis {
     pub origin: Origin,
     pub labels: Vec<DetectionLabel>,
