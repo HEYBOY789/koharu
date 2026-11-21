@@ -60,6 +60,7 @@ impl Tools {
     pub fn toolset() -> ToolSet {
         let mut tools = ToolSet::default();
         tools.add_tool(GetProject);
+        tools.add_tool(GetChapters);
         tools.add_tool(GetPage);
         tools.add_tool(GetLayer);
         tools.add_tool(Edit);
@@ -215,7 +216,7 @@ impl Tool for GetProject {
     type Error = ToolExecutionError;
 
     fn description(&self) -> String {
-        "The project's pages in order, each with its size and scan.".to_owned()
+        "The project's pages in order, each with its size, its scan, and how many of its blocks are translated.".to_owned()
     }
 
     fn parameters(&self) -> Value {
@@ -232,6 +233,54 @@ impl Tool for GetProject {
 }
 
 struct GetPage;
+
+struct GetChapters;
+
+impl Tool for GetChapters {
+    const NAME: &'static str = "get_chapters";
+    type Args = NoArgs;
+    type Output = Value;
+    type Error = ToolExecutionError;
+
+    fn description(&self) -> String {
+        "List chapters, with page IDs and page labels in reading order. Use this to locate a chapter and page named by the user.".into()
+    }
+
+    fn parameters(&self) -> Value {
+        schema::<NoArgs>()
+    }
+
+    fn annotations(&self) -> ToolAnnotations {
+        ToolAnnotations::default().with_read_only(true)
+    }
+
+    async fn call(&self, context: &mut ToolContext, _: NoArgs) -> Result<Value, Self::Error> {
+        let tools = project(context)?;
+        let project = tools.session.lock().project();
+        let metadata = project.metadata();
+        let chapters = metadata
+            .chapters
+            .entries
+            .iter()
+            .map(|chapter| {
+                let pages = project
+                    .pages()
+                    .filter(|page| chapter.pages.contains(&page.id))
+                    .enumerate()
+                    .map(|(index, page)| {
+                        serde_json::json!({
+                            "id": page.id,
+                            "number": index + 1,
+                            "label": metadata.page_labels.get(&page.id),
+                        })
+                    })
+                    .collect::<Vec<_>>();
+                serde_json::json!({"id": chapter.id, "title": chapter.title, "pages": pages})
+            })
+            .collect::<Vec<_>>();
+        Ok(serde_json::json!(chapters))
+    }
+}
 
 impl Tool for GetPage {
     const NAME: &'static str = "get_page";

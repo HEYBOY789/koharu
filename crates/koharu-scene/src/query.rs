@@ -5,12 +5,16 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use specta::Type;
 
-use crate::{Background, History, Layer, LayerId, Page, PageId, ProjectId, Result, Session, Size};
+use crate::{
+    Background, Content, History, Layer, LayerId, Page, PageId, ProjectId, Result, Session, Size,
+    project::depth_first,
+};
 
 #[derive(Clone, Debug, Serialize, Deserialize, Type, JsonSchema)]
 #[serde(tag = "query", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Query {
-    /// List the pages in order, with their sizes and backgrounds.
+    /// List the pages in order, with their sizes, backgrounds, and how many
+    /// of their blocks are translated.
     GetProject,
     /// Get one page with its layers, each holding its children, masks among
     /// them.
@@ -40,15 +44,40 @@ pub struct ProjectAnswer {
     /// The format version the file holds.
     pub version: String,
     pub pages: Vec<PageSummary>,
-    pub metadata: crate::ProjectMetadata,
 }
 
-/// A page without its layers, which `get_page` answers.
-#[derive(Clone, Debug, Serialize, Type)]
+/// A page without its layers, which `get_page` answers, and how far its
+/// translation is, as a CAT tool's file list shows each file's progress,
+/// Trados Studio's Files view among them.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Type, JsonSchema)]
 pub struct PageSummary {
     pub id: PageId,
     pub size: Size,
     pub background: Option<Background>,
+    /// Its blocks, hidden ones too.
+    pub texts: usize,
+    /// Its blocks that hold a translation.
+    pub translated: usize,
+}
+
+impl From<&Page> for PageSummary {
+    fn from(page: &Page) -> Self {
+        let mut texts = 0;
+        let mut translated = 0;
+        for layer in depth_first(&page.layers) {
+            if let Content::Block(block) = &layer.content {
+                texts += 1;
+                translated += usize::from(block.translation.is_some());
+            }
+        }
+        Self {
+            id: page.id,
+            size: page.size,
+            background: page.background,
+            texts,
+            translated,
+        }
+    }
 }
 
 impl Session {
@@ -58,15 +87,7 @@ impl Session {
             Query::GetProject => Answer::Project(ProjectAnswer {
                 id: project.id(),
                 version: self.version()?,
-                pages: project
-                    .pages()
-                    .map(|page| PageSummary {
-                        id: page.id,
-                        size: page.size,
-                        background: page.background,
-                    })
-                    .collect(),
-                metadata: project.metadata().clone(),
+                pages: project.pages().map(PageSummary::from).collect(),
             }),
             Query::GetPage { page } => Answer::Page(project.page(page)?.clone()),
             Query::GetLayer { layer } => Answer::Layer(Box::new(project.layer(layer)?.clone())),

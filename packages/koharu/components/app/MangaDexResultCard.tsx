@@ -248,8 +248,12 @@ export function MangaDexResultCard({
           <p className='line-clamp-2 text-[11px] break-words text-muted-foreground'>{metadata}</p>
           <p className='line-clamp-2 text-[11px] text-muted-foreground'>
             {[
-              manga.publication_status && t(`mangadex.${manga.publication_status}`),
-              manga.content_rating && t(`mangadex.${manga.content_rating}`),
+              manga.publication_status &&
+                t(`mangadex.${manga.publication_status}`, {
+                  defaultValue: manga.publication_status,
+                }),
+              manga.content_rating &&
+                t(`mangadex.${manga.content_rating}`, { defaultValue: manga.content_rating }),
             ]
               .filter(Boolean)
               .join(' · ')}

@@ -2,39 +2,33 @@
 
 import { useMutationState } from '@tanstack/react-query'
 import { CircleAlert, Download, LoaderCircle, Square, X } from 'lucide-react'
+import type { ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 
-import { call } from '@/lib/backend'
-import { useChapterJobs, usePages, useSourceJobs } from '@/lib/queries'
+import { send, useChapterJobs, usePages, useSourceJobs } from '@/lib/queries'
 import { useKoharuStore, type Job } from '@/lib/store'
 import { commands, type Transfer } from '@koharu/ipc/protocol'
 import { Button } from '@koharu/ui/components/button'
+import { Progress, ProgressLabel, ProgressValue } from '@koharu/ui/components/progress'
 
 export function ActivityCenter() {
   const { t } = useTranslation()
   const jobs = useKoharuStore((state) => state.jobs)
-  const chapterJobs = useChapterJobs().data ?? []
-  const sourceJobs = useSourceJobs().data ?? []
-  const visibleSources = sourceJobs.filter(
-    (job) => job.phase !== 'stopped' && job.phase !== 'finished',
+  const chapters = (useChapterJobs().data ?? []).filter(
+    (job) => job.phase !== 'finished' && job.phase !== 'stopped',
   )
-  const visibleChapters = chapterJobs.filter(
+  const sources = (useSourceJobs().data ?? []).filter(
     (job) => job.phase !== 'finished' && job.phase !== 'stopped',
   )
   const downloads = useKoharuStore((state) => state.downloads)
   const activities = useMutationState({
     filters: { status: 'pending' },
-    select: (mutation) => ({
-      id: mutation.mutationId,
-      label: mutation.options.meta?.activity,
-    }),
-  }).filter(
-    (activity): activity is { id: number; label: string } => typeof activity.label === 'string',
-  )
+    select: (mutation) => ({ id: mutation.mutationId, label: mutation.meta?.activity }),
+  }).flatMap(({ id, label }) => (label ? [{ id, label }] : []))
   const visibleJobs = Object.values(jobs).filter(
     (job) =>
       (job.state === 'running' || job.state === 'failed') &&
-      !visibleChapters.some((chapter) => chapter.run === job.id),
+      !chapters.some((chapter) => chapter.run === job.id),
   )
   const runningDownloads = Object.values(downloads).filter(
     (download) => download.state === 'Running',
@@ -45,8 +39,8 @@ export function ActivityCenter() {
     activities.length === 0 &&
     visibleJobs.length === 0 &&
     visibleDownloads.length === 0 &&
-    visibleChapters.length === 0 &&
-    visibleSources.length === 0
+    chapters.length === 0 &&
+    sources.length === 0
   )
     return null
 
@@ -70,7 +64,7 @@ export function ActivityCenter() {
             className='size-3.5 animate-spin justify-self-center text-primary motion-reduce:animate-none'
             aria-hidden='true'
           />
-          <span className='truncate text-[12px] font-medium'>{t(activity.label)}</span>
+          <span className='truncate text-[11px] font-medium'>{t(activity.label)}</span>
         </div>
       ))}
       {runningDownloads.length > 1 ? (
@@ -84,65 +78,70 @@ export function ActivityCenter() {
       {visibleJobs.map((job) => (
         <JobItem key={job.id} job={job} />
       ))}
-      {visibleSources.map((job) => (
-        <div key={job.id} className='border-b p-3 last:border-b-0'>
-          <div className='flex items-center justify-between gap-2'>
-            <span className='min-w-0 truncate text-xs font-medium' title={job.name}>
-              {job.name}
-            </span>
-            {job.phase !== 'failed' && (
+      {sources.map((job) => (
+        <ProgressRow
+          key={job.id}
+          icon={
+            job.error ? (
+              <CircleAlert className='size-3.5 text-destructive' />
+            ) : (
+              <Download className='size-3.5 text-primary' />
+            )
+          }
+          label={job.name}
+          detail={
+            job.error ??
+            job.progress?.detail ??
+            (job.phase === 'queued'
+              ? t('sourceImport.phase.queued')
+              : t('sourceImport.phase.downloading'))
+          }
+          completed={job.progress?.completed ?? null}
+          total={job.progress?.total ?? 0}
+          action={
+            job.error ? undefined : (
               <Button
+                size='icon-xs'
                 variant='ghost'
-                size='icon-sm'
-                className='size-6'
                 aria-label={t('sourceImport.stop')}
-                onClick={() => void call(commands.stopSourceJob, job.id).catch(() => undefined)}
+                onClick={() => send(commands.stopSourceJob, job.id)}
               >
-                <Square className='size-3' />
+                <Square className='size-2.5 fill-current' />
               </Button>
-            )}
-          </div>
-          <p className='text-[11px]'>{t(`sourceImport.phase.${job.phase}`)}</p>
-          {job.error && (
-            <p role='alert' className='mt-1 text-[10px] break-words text-destructive'>
-              {job.error}
-            </p>
-          )}
-        </div>
+            )
+          }
+        />
       ))}
-      {visibleChapters.map((job) => (
-        <div key={job.project} className='border-b p-3 last:border-b-0'>
-          <div className='flex items-center justify-between gap-2'>
-            <span className='min-w-0 truncate text-xs font-medium' title={job.name}>
-              {job.name}
-            </span>
-            {job.phase !== 'failed' && (
+      {chapters.map((job) => (
+        <ProgressRow
+          key={job.project}
+          icon={
+            job.error ? (
+              <CircleAlert className='size-3.5 text-destructive' />
+            ) : (
+              <LoaderCircle className='size-3.5 animate-spin text-primary' />
+            )
+          }
+          label={job.name}
+          detail={
+            job.error ??
+            `${t(job.phase === 'summarizing' ? 'chapter.phase.summarizing' : 'chapter.phase.translating', { chapter: job.chapter })} · ${t('chapter.progress', job)}`
+          }
+          completed={job.completed}
+          total={job.total}
+          action={
+            job.error ? undefined : (
               <Button
+                size='icon-xs'
                 variant='ghost'
-                size='icon-sm'
-                className='size-6'
                 aria-label={t('chapter.stop')}
-                onClick={() =>
-                  void call(commands.stopChapterJob, job.project).catch(() => undefined)
-                }
+                onClick={() => send(commands.stopChapterJob, job.project)}
               >
-                <Square className='size-3' />
+                <Square className='size-2.5 fill-current' />
               </Button>
-            )}
-          </div>
-          <p className='truncate text-[11px]' title={job.chapter}>
-            {t(`chapter.phase.${job.phase}`, { chapter: job.chapter })}
-          </p>
-          <span className='text-[10px] text-muted-foreground tabular-nums'>
-            {t('chapter.progress', { completed: job.completed, total: job.total })}
-          </span>
-          {job.error && (
-            <p role='alert' className='mt-1 text-[10px] break-words text-destructive'>
-              {job.error}
-            </p>
-          )}
-          <Progress value={progress(job.completed, job.total)} />
-        </div>
+            )
+          }
+        />
       ))}
     </aside>
   )
@@ -150,30 +149,15 @@ export function ActivityCenter() {
 
 function DownloadGroup({ downloads }: { downloads: Transfer[] }) {
   const { t } = useTranslation()
-  const hasKnownTotal = downloads.every((download) => download.total > 0)
-  const percent = hasKnownTotal
-    ? progress(
-        downloads.reduce((sum, download) => sum + download.completed, 0),
-        downloads.reduce((sum, download) => sum + download.total, 0),
-      )
-    : null
-
+  const total = downloads.reduce((sum, download) => sum + download.total, 0)
+  const completed = downloads.reduce((sum, download) => sum + download.completed, 0)
   return (
-    <div className='border-b p-3 last:border-b-0'>
-      <div className='grid grid-cols-[1rem_minmax(0,1fr)_2.25rem_1.5rem] items-start gap-x-2.5'>
-        <Download className='mt-0.5 size-3.5 justify-self-center text-primary' />
-        <span className='truncate text-[11px]'>
-          {t('activity.downloadingFiles', { count: downloads.length })}
-        </span>
-        <span className='text-right text-[10px] tabular-nums'>
-          {percent !== null ? `${percent}%` : null}
-        </span>
-        <span aria-hidden='true' />
-        <div className='col-start-2 col-end-4'>
-          <Progress value={percent} />
-        </div>
-      </div>
-    </div>
+    <ProgressRow
+      icon={<Download className='mt-0.5 size-3.5 justify-self-center text-primary' />}
+      label={t('activity.downloadingFiles', { count: downloads.length })}
+      completed={downloads.every((download) => download.total > 0) ? completed : null}
+      total={total}
+    />
   )
 }
 
@@ -194,40 +178,27 @@ function JobItem({ job }: { job: Job }) {
       />
     )
   }
-  const percent = progress(job.completed, job.total)
   return (
-    <div className='border-b p-3 last:border-b-0'>
-      <div className='grid grid-cols-[1rem_minmax(0,1fr)_2.25rem_1.5rem] items-start gap-x-2.5'>
-        <span className='mt-1.5 size-1.5 justify-self-center rounded-full bg-primary' />
-        <div className='min-w-0'>
-          <span className='block truncate text-[12px] font-medium capitalize'>
-            {job.stage
-              ? t(`phase.${job.stage}`, { defaultValue: job.stage })
-              : t('activity.processing')}
-          </span>
-        </div>
-        <span className='pt-0.5 text-right text-[10px] tabular-nums'>
-          {percent !== null ? `${percent}%` : null}
-        </span>
+    <ProgressRow
+      icon={<span className='mt-1.5 size-1.5 justify-self-center rounded-full bg-primary' />}
+      label={
+        job.stage ? t(`phase.${job.stage}`, { defaultValue: job.stage }) : t('activity.processing')
+      }
+      detail={pageLabel}
+      completed={job.completed}
+      total={job.total}
+      action={
         <Button
           size='icon-xs'
           variant='ghost'
           className='-mt-1'
           aria-label={t('activity.stop')}
-          onClick={() => void call(commands.stopPipeline).catch(() => undefined)}
+          onClick={() => send(commands.stopPipeline)}
         >
           <Square className='size-2.5 fill-current' />
         </Button>
-        {pageLabel ? (
-          <p className='col-start-2 col-end-4 mt-0.5 truncate text-[10px] text-muted-foreground'>
-            {pageLabel}
-          </p>
-        ) : null}
-        <div className='col-start-2 col-end-4'>
-          <Progress value={percent} />
-        </div>
-      </div>
-    </div>
+      }
+    />
   )
 }
 
@@ -243,20 +214,51 @@ function DownloadItem({ download }: { download: Transfer }) {
       />
     )
   }
-  const percent = progress(download.completed, download.total)
   return (
-    <div className='border-b p-3 last:border-b-0'>
-      <div className='grid grid-cols-[1rem_minmax(0,1fr)_2.25rem_1.5rem] items-start gap-x-2.5'>
-        <Download className='mt-0.5 size-3.5 justify-self-center text-primary' />
-        <span className='truncate text-[11px]'>{download.name || t('activity.modelDownload')}</span>
-        <span className='text-right text-[10px] tabular-nums'>
-          {percent !== null ? `${percent}%` : null}
-        </span>
-        <span aria-hidden='true' />
-        <div className='col-start-2 col-end-4'>
-          <Progress value={percent} />
-        </div>
-      </div>
+    <ProgressRow
+      icon={<Download className='mt-0.5 size-3.5 justify-self-center text-primary' />}
+      label={download.name || t('activity.modelDownload')}
+      completed={download.completed}
+      total={download.total}
+    />
+  )
+}
+
+/** A row of work under way: its name and how far along it is, in the interface's language, over
+ * its bar, which runs on its own while the total is unknown. */
+function ProgressRow({
+  icon,
+  label,
+  detail,
+  completed,
+  total,
+  action,
+}: {
+  icon: ReactNode
+  label: string
+  /** Where the work is, under its name. */
+  detail?: string
+  completed: number | null
+  total: number
+  action?: ReactNode
+}) {
+  const { i18n } = useTranslation()
+  return (
+    <div className='grid grid-cols-[1rem_minmax(0,1fr)_1.5rem] items-start gap-x-2.5 border-b p-3 last:border-b-0'>
+      {icon}
+      <Progress
+        value={completed !== null && total > 0 ? Math.min(completed, total) : null}
+        max={total || 100}
+        locale={i18n.language}
+        className='min-w-0 gap-x-2 gap-y-1.5'
+      >
+        <ProgressLabel className='min-w-0 flex-1 truncate text-[11px] font-medium'>
+          {label}
+        </ProgressLabel>
+        <ProgressValue className='text-[10px] text-foreground' />
+        {detail && <p className='w-full truncate text-[10px] text-muted-foreground'>{detail}</p>}
+      </Progress>
+      {action ?? <span aria-hidden='true' />}
     </div>
   )
 }
@@ -294,28 +296,7 @@ function Failure({
   )
 }
 
-function Progress({ value }: { value: number | null }) {
-  return (
-    <div
-      role='progressbar'
-      aria-valuemin={0}
-      aria-valuemax={100}
-      aria-valuenow={value ?? undefined}
-      className='mt-2 h-1 overflow-hidden rounded-full bg-muted'
-    >
-      <div
-        className={`h-full rounded-full bg-primary ${value === null ? 'w-1/2' : ''}`}
-        style={value === null ? undefined : { width: `${value}%` }}
-      />
-    </div>
-  )
-}
-
 /** Why a download failed, or `null` while it hasn't. */
 function failure(download: Transfer): string | null {
   return typeof download.state === 'object' ? download.state.Failed : null
-}
-
-function progress(completed: number, total: number): number | null {
-  return total > 0 ? Math.min(100, Math.round((completed / total) * 100)) : null
 }

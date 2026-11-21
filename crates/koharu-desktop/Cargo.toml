@@ -68,3 +68,11 @@ zip = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]
 windows = { workspace = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+winit-common = { workspace = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+block2 = { workspace = true }
+objc2 = { workspace = true }
+objc2-app-kit = { workspace = true }

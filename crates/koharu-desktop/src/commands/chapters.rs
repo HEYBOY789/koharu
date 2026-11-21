@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use anyhow::Context as _;
-use koharu_scene::{Chapter, ChapterId, Edit, Op, PageId, ProjectId};
+use koharu_scene::{Chapter, ChapterId, Edit, Op, PageId, ProjectId, ProjectMetadata};
 use serde::Deserialize;
 use specta::Type;
 use tauri::State;
@@ -11,6 +11,20 @@ use crate::{
     app::App,
     chapters::{ChapterJob, ChapterMode, SummarizerConfig},
 };
+
+#[tauri::command]
+#[specta::specta]
+pub fn get_project_metadata(
+    app: State<'_, Arc<App>>,
+    project: ProjectId,
+) -> Result<ProjectMetadata> {
+    let session = app.session()?;
+    let current = session.lock().project();
+    if current.id() != project {
+        return Err(anyhow::anyhow!("the open project changed").into());
+    }
+    Ok(current.metadata().clone())
+}
 
 #[derive(Deserialize, Type)]
 #[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]

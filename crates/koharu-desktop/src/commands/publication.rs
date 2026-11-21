@@ -158,7 +158,7 @@ pub async fn prepare_publication(
     let bundle = root.join("bundle");
     let cache = dirs::cache_dir()
         .context("local cache folder is unavailable")?
-        .join("Koharu/publication/catalog.json");
+        .join("Koharu/publishing/catalog.json");
     let mut command = Command::new(node);
     command
         .current_dir(

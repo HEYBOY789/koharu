@@ -76,6 +76,7 @@ pub fn handler() -> impl Fn(Invoke<CefRuntime>) -> bool + Send + Sync + 'static 
         scene::go_to,
         pages::get_page_thumbnail,
         chapters::edit_chapter,
+        chapters::get_project_metadata,
         chapters::run_chapters,
         chapters::get_chapter_jobs,
         chapters::stop_chapter_job,
@@ -131,6 +132,7 @@ pub fn handler() -> impl Fn(Invoke<CefRuntime>) -> bool + Send + Sync + 'static 
         canvas::fit,
         canvas::set_zoom,
         canvas::select,
+        canvas::nudge,
         processing::fill,
         canvas::deselect,
         #[cfg(debug_assertions)]
@@ -176,6 +178,7 @@ pub fn bindings(types: &mut Types) -> Vec<Function> {
         scene::go_to,
         pages::get_page_thumbnail,
         chapters::edit_chapter,
+        chapters::get_project_metadata,
         chapters::run_chapters,
         chapters::get_chapter_jobs,
         chapters::stop_chapter_job,
@@ -231,6 +234,7 @@ pub fn bindings(types: &mut Types) -> Vec<Function> {
         canvas::fit,
         canvas::set_zoom,
         canvas::select,
+        canvas::nudge,
         processing::fill,
         canvas::deselect,
     ](types)

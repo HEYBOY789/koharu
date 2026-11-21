@@ -51,6 +51,8 @@
   "colorPicker": {
     "brushColor": "Brush color",
     "hexCode": "Hex color code",
+    "recent": "Recent colors",
+    "recentColor": "Recent color {{color}}",
     "sampleCanvas": "Pick color from canvas",
     "transparent": "Transparent"
   },
@@ -61,8 +63,10 @@
     "loading": "Loading…"
   },
   "errors": {
+    "actionFailed": "Could not complete that action",
     "fatalTitle": "Koharu could not continue",
-    "tryAgain": "Try again"
+    "tryAgain": "Try again",
+    "unknown": "The native application returned an unknown error."
   },
   "feedback": {
     "addScreenshot": "Add a screenshot",
@@ -96,12 +100,16 @@
     "title": "Generative Fill"
   },
   "fontPicker": {
+    "addFavorite": "Add {{name}} to favorites",
     "choose": "Choose a font",
+    "favoritesOnly": "Show favorite fonts",
     "fontCount": "{{count}} fonts",
     "fontCount_one": "{{count}} font",
     "fontCount_other": "{{count}} fonts",
     "fonts": "Fonts",
+    "noFavorites": "No favorite fonts yet",
     "noResults": "No fonts match this search",
+    "removeFavorite": "Remove {{name}} from favorites",
     "search": "Search fonts"
   },
   "history": {
@@ -175,8 +183,8 @@
     "border": "Border",
     "borderColor": "Border color",
     "borderWidth": "Border width",
+    "chooseBorderWidth": "Choose border width",
     "chooseFontSize": "Choose font size",
-    "decreaseBorderWidth": "Decrease border width",
     "font": "Font",
     "fontSize": "Font size",
     "fontStyles": {
@@ -185,7 +193,6 @@
     },
     "fontWeight": "Font weight",
     "horizontal": "Horizontal",
-    "increaseBorderWidth": "Increase border width",
     "opacity": "Opacity",
     "selectPage": "Select a page to inspect its layers.",
     "source": "Source text",
@@ -195,20 +202,6 @@
     "translation": "Translation",
     "type": "Type",
     "vertical": "Vertical"
-  },
-  "languages": {
-    "ar": "العربية",
-    "en-US": "English",
-    "es-ES": "Español",
-    "fr-FR": "Français",
-    "ja-JP": "日本語",
-    "ko-KR": "한국어",
-    "pt-BR": "Português brasileiro",
-    "ru-RU": "Русский",
-    "tr-TR": "Türkçe",
-    "wuu": "吴语",
-    "zh-CN": "简体中文",
-    "zh-TW": "繁體中文"
   },
   "layers": {
     "delete": "Delete {{name}}",
@@ -249,6 +242,7 @@
     "closeProject": "Close Project",
     "delete": "Delete Selected",
     "discord": "Discord",
+    "donate": "Donate",
     "edit": "Edit",
     "export": "Export Project",
     "feedback": "Send Feedback",
@@ -299,9 +293,12 @@
       "recognize": "Recognize",
       "translate": "Translate"
     },
-    "selected": "{{count}} selected"
+    "selected": "{{count}} selected",
+    "translated": "{{translated}} of {{total}} translated"
   },
   "outputPicker": {
+    "noResults": "No languages match this search.",
+    "search": "Search languages",
     "targetLanguage": "Target language",
     "title": "Translation output"
   },
@@ -395,6 +392,7 @@
       "configured": "Configured",
       "connections": "Connections",
       "connectionsDescription": "Credentials are stored securely on this device.",
+      "contextWindow": "Context length (tokens)",
       "credential": "Credential",
       "credentialLabel": "{{provider}} credential",
       "description": "Connect translation and language-model providers.",
@@ -418,15 +416,18 @@
     },
     "title": "Settings",
     "typesetting": {
+      "addFallback": "Add a fallback",
       "addFamily": "Add font family",
-      "defaultFamilies": "Default font families",
       "description": "Set the ordered font stack used when a text layer has no assigned family.",
       "empty": "No default families. Koharu will use the system fallback.",
+      "fallbacks": "Fallbacks",
+      "fallbacksDescription": "Used in order for characters the primary lacks. Drag to reorder, or onto Primary to swap.",
       "familyLabel": "Default font family {{index}}",
       "fontFallback": "Preferred fonts",
       "fontFallbackDescription": "Koharu uses the first available family that supports the text.",
       "loadError": "Fonts could not be loaded. Existing families can still be removed.",
       "loadingFonts": "Loading fonts…",
+      "primary": "Primary",
       "removeFamily": "Remove {{family}}",
       "title": "Renderer"
     }
@@ -480,10 +481,12 @@
     "loadingProjects": "Loading projects…",
     "newDescription": "Create a clean workspace for your pages, translations, and exports.",
     "newProject": "New project",
+    "noResults": "No projects match this search.",
     "projectKind": "Koharu project",
     "projectList": "Projects",
     "projectName": "Project name",
     "projectNamePlaceholder": "My new project",
+    "search": "Search projects",
     "storageHint": "Projects are stored locally on this computer.",
     "title": "Projects",
     "yourProjects": "Your projects"
@@ -715,7 +718,8 @@
     "projectName": "Project name",
     "autoSummarize": "Automatically summarize each chapter and update the wiki",
     "autoTranslate": "Automatically translate all downloaded chapters",
-    "autoHint": "Uses your configured summarizer, translation models and target language. Chapters run in order; summary/translation runs one project at a time. Downloads can continue alongside another project’s translation. Stop is available in Activity.",
+    "autoHint": "Uses your configured summarizer, translation models and target language. Chapters run in order within each project. See Activity for progress and Stop.",
+    "modelPlaceholder": "Provider default",
     "downloading": "Downloading and importing {{chapter}}",
     "sourceDiscovery": "The agent finds a reading website and prepares its scraper; code downloads the images. MangaDex provides catalog metadata only.",
     "downloadURL": "Download source URL (optional)",

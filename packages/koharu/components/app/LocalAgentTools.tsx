@@ -2,7 +2,6 @@
 
 import { useTranslation } from 'react-i18next'
 
-import { call } from '@/lib/backend'
 import { commands, type PublicationConfig, type PublicationReadiness } from '@koharu/ipc/protocol'
 import { Button } from '@koharu/ui/components/button'
 import { Textarea } from '@koharu/ui/components/textarea'
@@ -27,7 +26,7 @@ export function LocalAgentTools({
   const { t } = useTranslation()
   async function pick(kind: 'script' | 'node' | 'binary') {
     try {
-      const selected = await call(commands.pickPublicationFile, kind)
+      const selected = await commands.pickPublicationFile(kind)
       if (selected) update({ [kind]: selected })
     } catch (cause) {
       onError(String(cause))

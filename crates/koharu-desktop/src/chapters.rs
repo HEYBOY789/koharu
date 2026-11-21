@@ -7,7 +7,7 @@ use std::{collections::BTreeMap, sync::Arc, time::Duration};
 
 use anyhow::{Context as _, Result, bail, ensure};
 use koharu_pipeline::{Event, Outcome, PipelineConfig, Request, RunId, Stage, Target};
-use koharu_scene::{Chapter, ChapterId, Content, Edit, Op, ProjectId, Session};
+use koharu_scene::{Chapter, ChapterId, Edit, Op, ProjectId, Session};
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use specta::Type;
@@ -245,56 +245,61 @@ impl App {
             config.translator.instructions.push_str("\n\n");
             config.translator.instructions.push_str(setting);
         }
-        let mut groups = BTreeMap::<_, Vec<_>>::new();
+        let mut unprocessed = Vec::new();
+        let mut pending = BTreeMap::<_, Vec<_>>::new();
         for &page in &chapter.pages {
-            let mut blocks = current
-                .layers_of(page)?
-                .into_iter()
-                .filter_map(|layer| {
-                    if let Content::Block(block) = &layer.content {
-                        Some(block)
-                    } else {
-                        None
-                    }
-                })
-                .peekable();
-            let stages = if blocks.peek().is_none() {
+            let blocks = current.blocks(page)?;
+            if blocks.is_empty() && !chapter.translated {
+                unprocessed.push(page);
+            }
+            for (id, block) in blocks {
+                if block
+                    .translation
+                    .as_ref()
+                    .is_some_and(|text| !text.content.text().trim().is_empty())
+                {
+                    continue;
+                }
+                let needs_ocr = block.source.content.text().trim().is_empty();
+                if needs_ocr && chapter.translated {
+                    continue;
+                }
+                let mut stages = Vec::new();
+                if needs_ocr {
+                    stages.push(Stage::Recognize);
+                }
+                stages.push(Stage::Translate);
+                if !current.has_pixels(block.cleanup.id) {
+                    stages.push(Stage::Inpaint);
+                }
+                pending.entry(stages).or_default().push(id);
+            }
+        }
+        let mut groups = Vec::new();
+        if !unprocessed.is_empty() {
+            groups.push((
                 vec![
                     Stage::Detect,
                     Stage::Recognize,
                     Stage::Translate,
                     Stage::Inpaint,
-                ]
-            } else if blocks.any(|block| {
-                !block.source.content.text().trim().is_empty()
-                    && block
-                        .translation
-                        .as_ref()
-                        .is_none_or(|text| text.content.text().trim().is_empty())
-            }) {
-                vec![Stage::Translate, Stage::Inpaint]
-            } else if !chapter.translated {
-                // Some detected blocks have yet to be recognized.
-                let pending = current.layers_of(page)?.into_iter().any(|layer| {
-                    matches!(&layer.content, Content::Block(block) if block.source.content.0.is_empty())
-                });
-                if !pending {
-                    continue;
-                }
-                vec![Stage::Recognize, Stage::Translate, Stage::Inpaint]
-            } else {
-                continue;
-            };
-            groups.entry(stages).or_default().push(page);
+                ],
+                Target::Pages(unprocessed),
+            ));
         }
-        for (stages, pages) in groups {
+        groups.extend(
+            pending
+                .into_iter()
+                .map(|(stages, blocks)| (stages, Target::Blocks(blocks))),
+        );
+        for (stages, target) in groups {
             if stop.is_cancelled() {
                 return Ok(());
             }
             let run = self.pipeline.run(
                 Arc::clone(session),
                 Request {
-                    target: Target::Pages(pages),
+                    target,
                     stages: stages.into_iter().collect(),
                     config: Some(config.clone()),
                 },

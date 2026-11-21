@@ -18,6 +18,7 @@ import { MangaDexResultCard } from '@/components/app/MangaDexResultCard'
 import { SourceImportDialog } from '@/components/app/SourceImportDialog'
 import { mangaDexDefaults, mangaDexLanguages, mangaDexSorts } from '@/lib/mangadex'
 import { queryClient } from '@/lib/queries'
+import type enUS from '@/public/locales/en-US/translation.json'
 import {
   commands,
   type MangaDexOption,
@@ -36,6 +37,7 @@ import {
   PaginationItem,
 } from '@koharu/ui/components/pagination'
 
+type MangaDexLabel = keyof typeof enUS.mangadex
 type ResultBatch = MangaDexPage & { chapterCache: MangaDexSearch['cache']; generation: number }
 type SearchResults = {
   query: MangaDexSearch
@@ -252,7 +254,7 @@ export function MangaDexSearchPage({ active }: { active: boolean }) {
     event.preventDefault()
     void search()
   }
-  const options = (values: readonly string[]) =>
+  const options = (values: readonly MangaDexLabel[]) =>
     values.map((id) => ({ id, name: t(`mangadex.${id}`) }))
   const comparisonNames = {
     target: languageName(input.target),
@@ -266,7 +268,7 @@ export function MangaDexSearchPage({ active }: { active: boolean }) {
   const select = (
     field: 'sort' | 'filter',
     label: string,
-    entries: Array<readonly [string, string]>,
+    entries: ReadonlyArray<readonly [string, MangaDexLabel]>,
     disabled = pending,
   ) => (
     <label className='grid min-w-0 content-start gap-2 text-xs leading-5'>
@@ -508,7 +510,7 @@ export function MangaDexSearchPage({ active }: { active: boolean }) {
                   placeholder={t('mangadex.findTag')}
                 />
                 <div className='max-h-52 space-y-2 overflow-y-auto rounded border p-2'>
-                  {['content', 'format', 'genre', 'theme'].map((group) => (
+                  {(['content', 'format', 'genre', 'theme'] as const).map((group) => (
                     <div key={group} className='space-y-1'>
                       <p className='text-[11px] font-medium text-muted-foreground'>
                         {t(`mangadex.group_${group}`)}

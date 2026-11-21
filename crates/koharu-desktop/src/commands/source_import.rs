@@ -18,7 +18,10 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use specta::Type;
 use tauri::{State, Window};
 use tauri_runtime_cef::CefRuntime;
-use tokio::process::Command;
+use tokio::{
+    io::{AsyncBufReadExt, BufReader},
+    process::Command,
+};
 use tokio_util::sync::CancellationToken;
 
 use crate::{app::App, chapters::ChapterMode, events};
@@ -38,7 +41,15 @@ pub struct SourceJob {
     pub id: Uuid,
     pub name: String,
     pub phase: SourcePhase,
+    pub progress: Option<SourceProgress>,
     pub error: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, Type)]
+pub struct SourceProgress {
+    pub completed: u32,
+    pub total: u32,
+    pub detail: String,
 }
 
 #[derive(Default)]
@@ -57,6 +68,16 @@ impl SourceJobs {
                 job.clone()
             })
         };
+        if let Some(job) = status {
+            app.emit(events::SOURCE_JOB, job);
+        }
+    }
+
+    fn progress(&self, app: &App, id: Uuid, progress: SourceProgress) {
+        let status = self.jobs.lock().get_mut(&id).map(|(job, _)| {
+            job.progress = Some(progress);
+            job.clone()
+        });
         if let Some(job) = status {
             app.emit(events::SOURCE_JOB, job);
         }
@@ -351,8 +372,9 @@ async fn run(
     catalog: bool,
     config: &PublicationConfig,
     options: &SourceImportOptions,
-    preview: bool,
+    job: Option<(&App, Uuid)>,
 ) -> Result<PathBuf> {
+    let preview = job.is_none();
     let script = toolkit_script(config).context("choose the publishing toolkit script")?;
     ensure!(script.is_file(), "publishing toolkit script is not a file");
     let toolkit = script
@@ -411,16 +433,31 @@ async fn run(
     let log_path = selection.path().join("import.log");
     let log = std::fs::File::create(&log_path)?;
     let mut process = command
-        .stdout(log.try_clone()?)
+        .stdout(Stdio::piped())
         .stderr(log)
         .spawn()
         .context("start the source importer")?;
+    let mut lines = BufReader::new(process.stdout.take().context("read source progress")?).lines();
+    let mut last_output = String::new();
+    let wait = async {
+        while let Some(line) = lines.next_line().await? {
+            if let Some((app, id)) = job
+                && let Some(data) = line.strip_prefix("KOHARU_SOURCE_PROGRESS ")
+                && let Ok(progress) = serde_json::from_str::<SourceProgress>(data)
+            {
+                app.source_import.progress(app, id, progress);
+            } else if !line.trim().is_empty() {
+                last_output = line.chars().take(512).collect();
+            }
+        }
+        process.wait().await
+    };
     let status = if preview {
-        tokio::time::timeout(Duration::from_secs(4 * 60), process.wait())
+        tokio::time::timeout(Duration::from_secs(4 * 60), wait)
             .await
             .context("source preview timed out")??
     } else {
-        process.wait().await?
+        wait.await?
     };
     if !status.success() {
         use std::io::{Read as _, Seek as _};
@@ -432,7 +469,11 @@ async fn run(
         file.take(2048).read_to_end(&mut tail)?;
         bail!(
             "source importer exited with {status}: {}",
-            String::from_utf8_lossy(&tail).trim()
+            if tail.is_empty() {
+                last_output.trim().to_owned()
+            } else {
+                String::from_utf8_lossy(&tail).trim().to_owned()
+            }
         );
     }
     Ok(output)
@@ -458,7 +499,7 @@ pub(super) async fn preview(
 ) -> Result<SourcePreview> {
     let (url, catalog) = source_address(url, options.language.as_deref())?;
     let _queue = app.source_import.queue.lock().await;
-    let output = run(&url, catalog, config, options, true).await?;
+    let output = run(&url, catalog, config, options, None).await?;
     let manifest: Manifest<SourceChapterPreview> = read(&output.join("preview.json"))?;
     manifest_matches(&manifest, &url, catalog)?;
     Ok(SourcePreview {
@@ -499,6 +540,7 @@ pub async fn import_source_url(
             .filter(|name| !name.is_empty())
             .unwrap_or_else(|| url.clone()),
         phase: SourcePhase::Queued,
+        progress: None,
         error: None,
     };
     app.source_import
@@ -535,7 +577,7 @@ async fn import(
         .update(app, id, SourcePhase::Downloading, None);
     let output = tokio::select! {
         _ = stop.cancelled() => return Ok(()),
-        output = run(&url, catalog, &config, &options, false) => output?,
+        output = run(&url, catalog, &config, &options, Some((app, id))) => output?,
     };
     let saved = tokio::task::spawn_blocking({
         let app = Arc::clone(app);

@@ -7,7 +7,9 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use specta::Type;
 
-use crate::{Layer, LayerId, Page, PageId, Project, Revision, project::depth_first};
+use crate::{
+    Layer, LayerId, Page, PageId, PageSummary, Project, ProjectId, Revision, project::depth_first,
+};
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Type, JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -22,6 +24,7 @@ pub struct PageChanges {
     pub removed: Vec<PageId>,
     pub reordered: bool,
     pub changed: BTreeSet<PageId>,
+    pub summaries: Vec<PageSummary>,
 }
 
 /// The session's steps, as Photoshop's History panel lists the states of the
@@ -55,6 +58,7 @@ impl History {
 /// What one edit, undo, or redo changed.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Type, JsonSchema)]
 pub struct Change {
+    pub project: ProjectId,
     pub revision: Revision,
     pub created: Vec<Created>,
     pub pages: PageChanges,
@@ -63,6 +67,7 @@ pub struct Change {
     /// page, not itself.
     pub layers: BTreeSet<LayerId>,
     pub history: History,
+    pub metadata_changed: bool,
 }
 
 /// A page's layers by id.
@@ -120,12 +125,18 @@ pub(crate) fn changed(before: &Project, after: &Project) -> (PageChanges, BTreeS
         .filter(|page| before.pages.contains_key(*page));
     let reordered = !stayed_before.eq(stayed_after);
     changed.retain(|page| after.pages.contains_key(page) && !added.contains(page));
+    let summaries = changed
+        .iter()
+        .filter_map(|page| after.page(*page).ok())
+        .map(PageSummary::from)
+        .collect();
     (
         PageChanges {
             added,
             removed,
             reordered,
             changed,
+            summaries,
         },
         layers,
     )

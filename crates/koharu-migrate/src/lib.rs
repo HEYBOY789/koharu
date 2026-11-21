@@ -1,6 +1,6 @@
 //! One-way conversion from the directory-based fork project into a new scene.
 
-use std::path::Path;
+use std::{collections::BTreeSet, path::Path};
 
 use anyhow::{Context, Result, ensure};
 use koharu_scene as scene;
@@ -61,6 +61,7 @@ pub async fn convert(source: &Path, destination: &Path) -> Result<Report> {
         ..Default::default()
     };
     let mut text_layers = 0;
+    let mut translated_pages = BTreeSet::new();
 
     for (index, page) in snapshot.pages().enumerate() {
         let id = scene::PageId(page.id().as_uuid());
@@ -90,6 +91,19 @@ pub async fn convert(source: &Path, destination: &Path) -> Result<Report> {
             })
             .with_context(|| format!("convert page {} ({})", data.label, id))?;
         metadata.page_labels.insert(id, data.label);
+        if snapshot
+            .component::<legacy::TranslationCheckpoint>(page.id())?
+            .is_some()
+        {
+            translated_pages.insert(id);
+        }
+    }
+    for chapter in &mut metadata.chapters.entries {
+        chapter.translated = !chapter.pages.is_empty()
+            && chapter
+                .pages
+                .iter()
+                .all(|page| translated_pages.contains(page));
     }
     let mut ops = Vec::new();
     let cover_role = legacy::AssetRole::new("cover")?;

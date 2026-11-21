@@ -128,6 +128,7 @@ impl Session {
         // kept, but it adds no undo step.
         tx.commit()?;
         let (pages, layers) = change::changed(&self.project, &next);
+        let metadata_changed = self.project.metadata != next.metadata;
         let changed = next != self.project;
         if changed {
             let before = std::mem::replace(&mut self.project, next);
@@ -142,11 +143,13 @@ impl Session {
             self.redo.clear();
         }
         let change = Change {
+            project: self.id(),
             revision: self.revision(),
             created,
             pages,
             layers,
             history: self.history(),
+            metadata_changed,
         };
         if changed {
             // No one listening isn't a failure.
@@ -311,11 +314,13 @@ impl Session {
         }
         let (pages, layers) = change::changed(&before, &self.project);
         let change = Change {
+            project: self.id(),
             revision: self.revision(),
             created: Vec::new(),
             pages,
             layers,
             history: self.history(),
+            metadata_changed: before.metadata != self.project.metadata,
         };
         let _ = self.changes.send(change.clone());
         Ok(Some(change))

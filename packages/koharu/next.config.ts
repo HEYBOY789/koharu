@@ -14,6 +14,8 @@ const nextConfig: NextConfig = {
 }
 
 export default withSentryConfig(nextConfig, {
+  // The desktop serves a static export and has no Next.js server to instrument.
+  buildTimeInstrumentation: false,
   org: process.env.SENTRY_ORG,
   // The interface's events reach Sentry through the Rust SDK, so its source maps go to
   // the Rust project, where they resolve.

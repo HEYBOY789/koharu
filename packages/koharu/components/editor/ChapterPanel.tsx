@@ -6,8 +6,7 @@ import { useTranslation } from 'react-i18next'
 
 import { CommitTextarea } from '@/components/controls/CommitTextarea'
 import { Markdown } from '@/components/controls/Markdown'
-import { call, dispatch } from '@/lib/backend'
-import { queryClient, useChapterJobs, useProject } from '@/lib/queries'
+import { queryClient, send, useChapterJobs, useProject, useProjectMetadata } from '@/lib/queries'
 import { useKoharuStore } from '@/lib/store'
 import {
   commands,
@@ -26,7 +25,8 @@ export function ChapterPanel() {
   const { t } = useTranslation()
   const project = useProject().data
   const selection = useKoharuStore((state) => state.selectedPages)
-  const chapters = project?.metadata.chapters?.entries ?? []
+  const metadata = useProjectMetadata(project?.id).data
+  const chapters = metadata?.chapters?.entries ?? []
   const chapter = chapters.find((entry) => project?.page && entry.pages.includes(project.page))
   const job = useChapterJobs().data?.find((entry) => entry.project === project?.id)
   const active = job?.phase === 'summarizing' || job?.phase === 'translating'
@@ -35,21 +35,27 @@ export function ChapterPanel() {
   const [editing, setEditing] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
   if (!project) return null
-  const wiki = project.metadata.wiki?.files ?? []
-  const edit = (action: ChapterEdit) => dispatch(commands.editChapter, action, project.id)
+  const wiki = metadata?.wiki?.files ?? []
+  const completed = chapters.filter(
+    (entry) =>
+      entry.translated ||
+      (entry.pages.length > 0 &&
+        entry.pages.every((id) => {
+          const page = project.pages.find((page) => page.id === id)
+          return page && page.texts > 0 && page.translated === page.texts
+        })),
+  ).length
+  const edit = (action: ChapterEdit) => send(commands.editChapter, action, project.id)
   const create = (event: FormEvent) => {
     event.preventDefault()
     if (!title.trim() || selection.length === 0) return
-    void call(
-      commands.editChapter,
-      { action: 'create', title: title.trim(), pages: selection },
-      project.id,
-    )
+    void commands
+      .editChapter({ action: 'create', title: title.trim(), pages: selection }, project.id)
       .then(() => setTitle(''))
       .catch(() => undefined)
   }
   const run = (mode: ChapterMode, fromHere = false) => {
-    if (chapter) dispatch(commands.runChapters, project.id, chapter.id, fromHere, mode)
+    if (chapter) send(commands.runChapters, project.id, chapter.id, fromHere, mode)
   }
 
   return (
@@ -62,7 +68,7 @@ export function ChapterPanel() {
                 {chapter.title}
               </h2>
               <span className='shrink-0 text-xs text-muted-foreground tabular-nums'>
-                {chapters.filter((entry) => entry.translated).length}/{chapters.length}
+                {completed}/{chapters.length}
               </span>
             </div>
             <label className='flex items-center gap-2 text-xs'>
@@ -229,7 +235,8 @@ function SummarizerSettings() {
       onSubmit={(event) => {
         event.preventDefault()
         if (value)
-          void call(commands.saveSummarizerSettings, value)
+          void commands
+            .saveSummarizerSettings(value)
             .then(() => {
               queryClient.setQueryData(summarizerKey, value)
               setDraft(null)

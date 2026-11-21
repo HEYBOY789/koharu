@@ -382,11 +382,15 @@ impl Inspection {
             if hidden.contains(&current.id) || project.locked_at(current.id).is_some() {
                 continue;
             }
-            if others[..index].iter().any(|earlier| {
-                !hidden.contains(&earlier.id)
-                    && duplicate(&current, earlier)
-                    && overlap(current.bounds, earlier.bounds) > 0.48
-            }) {
+            let owns_cleanup = matches!(&project.layer(current.id)?.content,
+                Content::Block(block) if block.cleanup.visible && project.has_pixels(block.cleanup.id));
+            if !owns_cleanup
+                && others[..index].iter().any(|earlier| {
+                    !hidden.contains(&earlier.id)
+                        && duplicate(&current, earlier)
+                        && overlap(current.bounds, earlier.bounds) > 0.48
+                })
+            {
                 ops.push(Op::UpdateLayer {
                     layer: current.id.into(),
                     patch: json!({"visible": false}),

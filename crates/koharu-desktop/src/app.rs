@@ -256,15 +256,24 @@ impl App {
                 let showing = Arc::clone(&app);
                 let session = session.clone();
                 let shown = tokio::task::spawn_blocking(move || {
-                    if !showing
-                        .project
-                        .lock()
-                        .as_ref()
-                        .is_some_and(|open| session.ptr_eq(&Arc::downgrade(&open.session)))
-                    {
-                        return Ok(());
-                    }
-                    let shown = showing.settle();
+                    let redraw = {
+                        let open = showing.project.lock();
+                        let Some(open) = open
+                            .as_ref()
+                            .filter(|open| session.ptr_eq(&Arc::downgrade(&open.session)))
+                        else {
+                            return Ok(());
+                        };
+                        lagged
+                            || told.iter().any(|change| match open.page {
+                                Some(page) => {
+                                    change.pages.changed.contains(&page)
+                                        || change.pages.removed.contains(&page)
+                                }
+                                None => !change.pages.added.is_empty(),
+                            })
+                    };
+                    let shown = redraw.then(|| showing.settle()).flatten();
                     // The interface missed changes: it reads the project again.
                     if lagged {
                         let name = showing

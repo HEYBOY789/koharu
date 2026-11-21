@@ -288,6 +288,10 @@ impl Project {
             .collect())
     }
 
+    pub fn has_pixels(&self, layer: LayerId) -> bool {
+        self.tiles(layer).is_some_and(|tiles| !tiles.is_empty())
+    }
+
     pub(crate) fn tiles(&self, layer: LayerId) -> Option<&TileMap> {
         self.tiles.get(&layer)
     }

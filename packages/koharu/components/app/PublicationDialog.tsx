@@ -5,7 +5,6 @@ import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { LocalAgentTools } from '@/components/app/LocalAgentTools'
-import { call } from '@/lib/backend'
 import { useProject } from '@/lib/queries'
 import {
   commands,
@@ -66,7 +65,8 @@ export function PublicationDialog({ labels, close }: { labels: Labels; close: ()
               setBusy(true)
               setError('')
               setLocation('')
-              void call(commands.preparePublication, value, labels)
+              void commands
+                .preparePublication(value, labels)
                 .then((path) => {
                   if (path) setLocation(path)
                 })
@@ -100,7 +100,7 @@ export function PublicationDialog({ labels, close }: { labels: Labels; close: ()
                     })
                   }
                 >
-                  {['ongoing', 'completed', 'hiatus'].map((status) => (
+                  {(['ongoing', 'completed', 'hiatus'] as const).map((status) => (
                     <NativeSelectOption key={status} value={status}>
                       {t(`mangadex.${status}`)}
                     </NativeSelectOption>
