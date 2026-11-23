@@ -80,23 +80,22 @@ impl Default for TranslatorConfig {
 /// The system prompt: Index-Translate's structured-data template in English,
 /// as bilibili/Index-Translate's `docs/prompts.md` gives it
 /// (93ac63774d1c6939aec05e6f0f191bf90f225365, Apache-2.0), for the JSON the
-/// answer is parsed by; then the user's instructions as they wrote them,
-/// whatever their form.
-fn system(config: &TranslatorConfig) -> Result<String> {
-    let template = formatdoc! {"
+/// answer is parsed by; then the user's and chapter's translation instructions.
+fn system(config: &TranslatorConfig, setting: Option<&str>) -> Result<String> {
+    let mut prompt = formatdoc! {"
         Translate the manga text in each message into {target}. Each message is a page's texts as a JSON object, numbered in reading order: translate only the values, and never alter the structure or the keys. Output only the translated JSON, without any explanation.",
         target = name(&config.target)?,
     };
-    Ok(match config.instructions.trim() {
-        "" => template,
-        instructions => formatdoc! {"
-            {template}
-
-            {instructions}",
-            template = template,
-            instructions = instructions,
-        },
-    })
+    for instructions in [Some(config.instructions.as_str()), setting]
+        .into_iter()
+        .flatten()
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+    {
+        prompt.push_str("\n\n");
+        prompt.push_str(instructions);
+    }
+    Ok(prompt)
 }
 
 fn target<'de, D: Deserializer<'de>>(deserializer: D) -> Result<LanguageIdentifier, D::Error> {
@@ -111,6 +110,7 @@ struct Page {
     blocks: Vec<(LayerId, LanguageIdentifier)>,
     texts: Vec<String>,
     image: Option<String>,
+    setting: Option<String>,
 }
 
 pub(crate) async fn translate(
@@ -148,7 +148,7 @@ pub(crate) async fn translate(
             conversation.hosted(&translator).await?
         }
     };
-    let system = system(&translator)?;
+    let system = system(&translator, page.setting.as_deref())?;
     let turn = Turn::new(
         system,
         &page.texts,
@@ -199,6 +199,11 @@ fn page(member: &Member, vision: bool) -> Result<Option<Page>> {
         blocks,
         texts,
         image,
+        setting: project
+            .metadata()
+            .chapters
+            .chapter_for_page(member.page)
+            .and_then(|chapter| chapter.setting.clone()),
     }))
 }
 
@@ -313,7 +318,7 @@ mod tests {
 
     #[test]
     fn instructions_follow_the_whole_template() {
-        let template = system(&TranslatorConfig::default()).expect("English names it");
+        let template = system(&TranslatorConfig::default(), None).expect("English names it");
         let config = TranslatorConfig {
             instructions: indoc! {"
 
@@ -326,7 +331,7 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(
-            system(&config).expect("English names it"),
+            system(&config, None).expect("English names it"),
             formatdoc! {"
                 {template}
 

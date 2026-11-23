@@ -1,21 +1,33 @@
 'use client'
 
-import { useQuery } from '@tanstack/react-query'
+import { useMutation, useQuery } from '@tanstack/react-query'
+import { FolderInput, Plus, Trash2 } from 'lucide-react'
 import { useMemo, useState, type FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { CommitTextarea } from '@/components/controls/CommitTextarea'
 import { Markdown } from '@/components/controls/Markdown'
+import { PiModelHint } from '@/components/controls/PiModelHint'
 import { queryClient, send, useChapterJobs, useProject, useProjectMetadata } from '@/lib/queries'
 import { useKoharuStore } from '@/lib/store'
 import {
   commands,
   type ChapterEdit,
   type ChapterMode,
+  type ProjectId,
   type SummarizerConfig,
+  type WikiFile,
 } from '@koharu/ipc/protocol'
 import { Button } from '@koharu/ui/components/button'
 import { Checkbox } from '@koharu/ui/components/checkbox'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@koharu/ui/components/dialog'
 import { Input } from '@koharu/ui/components/input'
 import { NativeSelect, NativeSelectOption } from '@koharu/ui/components/native-select'
 import { ScrollArea } from '@koharu/ui/components/scroll-area'
@@ -31,7 +43,6 @@ export function ChapterPanel() {
   const job = useChapterJobs().data?.find((entry) => entry.project === project?.id)
   const active = job?.phase === 'summarizing' || job?.phase === 'translating'
   const [title, setTitle] = useState('')
-  const [wikiSlug, setWikiSlug] = useState('glossary')
   const [editing, setEditing] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const completed = useMemo(() => {
@@ -96,19 +107,23 @@ export function ChapterPanel() {
               >
                 {t('chapter.summarize')}
               </Button>
-              <Button
-                size='sm'
-                disabled={active}
-                onClick={() => run(chapter.summarize ? 'summarize_translate' : 'translate')}
-              >
+              <Button size='sm' disabled={active} onClick={() => run('translate')}>
                 {t('chapter.translate')}
               </Button>
             </div>
             <Button
               size='sm'
+              variant='secondary'
+              disabled={active}
+              onClick={() => run('summarize_translate')}
+            >
+              {t('chapter.summarizeAndTranslate')}
+            </Button>
+            <Button
+              size='sm'
               variant='outline'
               disabled={active}
-              onClick={() => run('summarize_translate', true)}
+              onClick={() => run('resume', true)}
             >
               {t('chapter.runFromHere', { count: chapters.length - chapters.indexOf(chapter) })}
             </Button>
@@ -139,29 +154,14 @@ export function ChapterPanel() {
                   <Markdown>{chapter.summary || t('chapter.noSummary')}</Markdown>
                 )}
               </TabsContent>
-              <TabsContent value='wiki' className='grid gap-2'>
-                {wiki.length > 0 && (
-                  <NativeSelect
-                    value={wikiSlug}
-                    aria-label={t('chapter.wiki')}
-                    onChange={(event) => setWikiSlug(event.currentTarget.value)}
-                  >
-                    {wiki.map((file) => (
-                      <NativeSelectOption key={file.slug} value={file.slug}>
-                        {file.slug}
-                      </NativeSelectOption>
-                    ))}
-                  </NativeSelect>
-                )}
-                {editing ? (
-                  <CommitTextarea
-                    key={wikiSlug}
-                    value={wiki.find((file) => file.slug === wikiSlug)?.body ?? ''}
-                    onCommit={(body) => edit({ action: 'set_wiki', slug: wikiSlug, body })}
-                  />
-                ) : (
-                  <Markdown>{wiki.find((file) => file.slug === wikiSlug)?.body ?? ''}</Markdown>
-                )}
+              <TabsContent value='wiki' keepMounted>
+                <ChapterWiki
+                  project={project.id}
+                  files={wiki}
+                  editing={editing}
+                  onEdit={() => setEditing(true)}
+                  locked={job?.phase === 'summarizing'}
+                />
               </TabsContent>
               <TabsContent value='prompt'>
                 {editing ? (
@@ -215,16 +215,152 @@ export function ChapterPanel() {
           onToggle={(event) => setSettingsOpen(event.currentTarget.open)}
         >
           <summary>{t('chapter.summarizerSettings')}</summary>
-          {settingsOpen && <SummarizerSettings />}
+          {settingsOpen && (
+            <SummarizerSettings
+              applyDefault={(summarize) => edit({ action: 'set_summarize_all', summarize })}
+            />
+          )}
         </details>
       </div>
     </ScrollArea>
   )
 }
 
+function ChapterWiki({
+  project,
+  files,
+  editing,
+  onEdit,
+  locked,
+}: {
+  project: ProjectId
+  files: WikiFile[]
+  editing: boolean
+  onEdit: () => void
+  locked: boolean
+}) {
+  const { t } = useTranslation()
+  const [selected, setSelected] = useState('glossary')
+  const [adding, setAdding] = useState(false)
+  const [slug, setSlug] = useState('')
+  const file = files.find((entry) => entry.slug === selected) ?? files[0]
+  const add = useMutation({
+    mutationFn: (name: string) => commands.editChapter({ action: 'add_wiki', slug: name }, project),
+    onSuccess: (_, name) => {
+      setSelected(name)
+      setAdding(false)
+      onEdit()
+    },
+  })
+  const importWiki = useMutation({
+    mutationFn: () => commands.importWiki(project),
+    onSuccess: ([first]) => {
+      if (first) setSelected(first)
+    },
+  })
+  const disabled = locked || add.isPending || importWiki.isPending
+  return (
+    <div className='grid min-w-0 gap-2'>
+      <div className='flex min-w-0 items-center gap-1'>
+        {file && (
+          <NativeSelect
+            className='min-w-0 flex-1 [&>select]:w-full'
+            value={file.slug}
+            aria-label={t('chapter.wiki')}
+            onChange={(event) => setSelected(event.currentTarget.value)}
+          >
+            {files.map((entry) => (
+              <NativeSelectOption key={entry.slug} value={entry.slug}>
+                {entry.slug}
+              </NativeSelectOption>
+            ))}
+          </NativeSelect>
+        )}
+        <Button
+          size='icon-xs'
+          variant='ghost'
+          disabled={disabled}
+          aria-label={t('chapter.wikiImport')}
+          title={t('chapter.wikiImport')}
+          onClick={() => importWiki.mutate()}
+        >
+          <FolderInput />
+        </Button>
+        <Button
+          size='icon-xs'
+          variant='ghost'
+          disabled={disabled}
+          aria-label={t('chapter.wikiAdd')}
+          title={t('chapter.wikiAdd')}
+          onClick={() => {
+            setSlug('')
+            setAdding(true)
+          }}
+        >
+          <Plus />
+        </Button>
+        {file && (
+          <Button
+            size='icon-xs'
+            variant='ghost'
+            disabled={disabled}
+            aria-label={t('chapter.wikiRemove')}
+            title={t('chapter.wikiRemove')}
+            onClick={() =>
+              send(commands.editChapter, { action: 'remove_wiki', slug: file.slug }, project)
+            }
+          >
+            <Trash2 />
+          </Button>
+        )}
+      </div>
+      {file &&
+        (editing && !locked ? (
+          <CommitTextarea
+            key={file.slug}
+            aria-label={t('chapter.wiki')}
+            value={file.body}
+            onCommit={(body) =>
+              send(commands.editChapter, { action: 'set_wiki', slug: file.slug, body }, project)
+            }
+          />
+        ) : (
+          <Markdown>{file.body}</Markdown>
+        ))}
+      <Dialog open={adding} onOpenChange={setAdding}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{t('chapter.wikiAddTitle')}</DialogTitle>
+            <DialogDescription>{t('chapter.wikiAddDescription')}</DialogDescription>
+          </DialogHeader>
+          <form
+            className='grid gap-3'
+            onSubmit={(event) => {
+              event.preventDefault()
+              add.mutate(slug.trim())
+            }}
+          >
+            <Input
+              value={slug}
+              aria-label={t('chapter.wikiAddTitle')}
+              placeholder={t('chapter.wikiAddPlaceholder')}
+              onChange={(event) => setSlug(event.currentTarget.value)}
+            />
+            <DialogFooter>
+              <Button type='submit' disabled={disabled || !/^[a-z0-9_]{1,64}$/.test(slug.trim())}>
+                {t('chapter.wikiAddAction')}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+    </div>
+  )
+}
+
 const summarizerKey = ['summarizer'] as const
 
-function SummarizerSettings() {
+function SummarizerSettings({ applyDefault }: { applyDefault: (value: boolean) => void }) {
   const { t } = useTranslation()
   const result = useQuery({ queryKey: summarizerKey, queryFn: commands.getSummarizerSettings })
   const [draft, setDraft] = useState<SummarizerConfig | null>(null)
@@ -266,12 +402,7 @@ function SummarizerSettings() {
           onChange={(event) => update({ model: event.currentTarget.value || null })}
         />
       </label>
-      {agent.backend === 'pi' && (
-        <p className='text-muted-foreground'>
-          {t('chapter.piModelHint')}{' '}
-          <code className='break-all'>local-proxy/ag/gemini-3.8-flash-high</code>
-        </p>
-      )}
+      {agent.backend === 'pi' && <PiModelHint />}
       <label className='grid gap-1'>
         {t('chapter.executable')}
         <Input
@@ -279,6 +410,35 @@ function SummarizerSettings() {
           onChange={(event) => update({ binary: event.currentTarget.value || null })}
         />
       </label>
+      <label className='grid gap-1'>
+        {t('agent.reasoning')}
+        <Input
+          value={agent.effort ?? ''}
+          onChange={(event) => update({ effort: event.currentTarget.value || null })}
+        />
+      </label>
+      <label className='grid gap-1'>
+        {t('chapter.summarizerSkill')}
+        <Input
+          value={agent.skill ?? ''}
+          onChange={(event) => update({ skill: event.currentTarget.value || null })}
+        />
+      </label>
+      <label className='flex items-center gap-2'>
+        <Checkbox
+          checked={agent.summarize_default ?? true}
+          onCheckedChange={(checked) => update({ summarize_default: checked === true })}
+        />
+        {t('chapter.summarizerDefault')}
+      </label>
+      <Button
+        size='sm'
+        variant='outline'
+        type='button'
+        onClick={() => applyDefault(agent.summarize_default ?? true)}
+      >
+        {t('chapter.summarizerApplyDefault')}
+      </Button>
       <Button size='sm' disabled={!draft} type='submit'>
         {t('chapter.saveSettings')}
       </Button>

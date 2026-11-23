@@ -11,7 +11,7 @@ use fs_err::File;
 use image::ImageFormat;
 use koharu_psd::Labels;
 use koharu_renderer::{Frame, Renderer};
-use koharu_scene::{PageId, Session};
+use koharu_scene::{PageId, Session, Wiki};
 use parking_lot::Mutex;
 use serde::Deserialize;
 use specta::Type;
@@ -132,6 +132,10 @@ pub async fn export_chapters(
 #[specta::specta]
 pub async fn export_wiki(app: State<'_, Arc<App>>, window: Window<CefRuntime>) -> Result<()> {
     let session = app.session()?;
+    let wiki = session.lock().project().metadata().wiki.clone();
+    if wiki.files.iter().all(|file| file.body.trim().is_empty()) {
+        return Err(anyhow::anyhow!("the wiki has no content to export").into());
+    }
     let Some(output) = rfd::AsyncFileDialog::new()
         .set_parent(&window)
         .pick_folder()
@@ -140,14 +144,19 @@ pub async fn export_wiki(app: State<'_, Arc<App>>, window: Window<CefRuntime>) -
         return Ok(());
     };
     let output = output.path().to_owned();
-    Ok(tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
-        let project = session.lock().project();
-        for file in &project.metadata().wiki.files {
-            fs_err::write(output.join(format!("{}.md", file.slug)), &file.body)?;
+    Ok(tokio::task::spawn_blocking(move || write_wiki(&wiki, &output)).await??)
+}
+
+/// Keep the same `wiki/` layout the importer accepts for a series folder.
+pub(super) fn write_wiki(wiki: &Wiki, output: &Path) -> anyhow::Result<()> {
+    let directory = output.join("wiki");
+    fs_err::create_dir_all(&directory)?;
+    for file in &wiki.files {
+        if !file.body.trim().is_empty() {
+            fs_err::write(directory.join(format!("{}.md", file.slug)), &file.body)?;
         }
-        Ok(())
-    })
-    .await??)
+    }
+    Ok(())
 }
 
 pub(super) fn write(

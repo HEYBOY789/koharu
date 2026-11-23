@@ -600,21 +600,20 @@ async fn import(
                 .clone()
                 .filter(|name| !name.trim().is_empty())
                 .unwrap_or_else(|| sanitize_filename::sanitize(&manifest.metadata.title));
+            let summarize = if options.summarize || options.translate {
+                options.summarize
+            } else {
+                koharu_config::get::<crate::chapters::SummarizerConfig>()?.summarize_default
+            };
             let path = app.library.path(&name)?;
             let result = if path.is_file() {
                 let session = app.library.open(&name)?;
-                populate(
-                    &mut session.lock(),
-                    &manifest,
-                    &output,
-                    options.summarize,
-                    &stop,
-                )?
+                populate(&mut session.lock(), &manifest, &output, summarize, &stop)?
             } else {
                 let staging = tempfile::tempdir_in(path.parent().context("library has no root")?)?;
                 let pending = staging.path().join("project.khr");
                 let mut session = Session::create(&pending)?;
-                let first = populate(&mut session, &manifest, &output, options.summarize, &stop)?;
+                let first = populate(&mut session, &manifest, &output, summarize, &stop)?;
                 if stop.is_cancelled() {
                     return Ok((name, Vec::new()));
                 }
@@ -633,7 +632,7 @@ async fn import(
     let (name, chapters) = saved;
     if !chapters.is_empty() {
         let mode = match (options.summarize, options.translate) {
-            (true, true) => Some(ChapterMode::SummarizeTranslate),
+            (true, true) => Some(ChapterMode::Resume),
             (true, false) => Some(ChapterMode::Summarize),
             (false, true) => Some(ChapterMode::Translate),
             (false, false) => None,

@@ -21,6 +21,7 @@ pub enum ChapterMode {
     Summarize,
     Translate,
     SummarizeTranslate,
+    Resume,
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Type)]
@@ -199,9 +200,23 @@ impl App {
                 chapter.title
             );
             let summarize = match mode {
-                ChapterMode::Summarize => true,
-                ChapterMode::SummarizeTranslate => {
-                    chapter.summarize && (chapter.summary.is_none() || chapter.setting.is_none())
+                ChapterMode::Summarize | ChapterMode::SummarizeTranslate => true,
+                ChapterMode::Resume => {
+                    chapter.summarize
+                        && !(chapter
+                            .summary
+                            .as_ref()
+                            .is_some_and(|text| !text.trim().is_empty())
+                            && chapter
+                                .setting
+                                .as_ref()
+                                .is_some_and(|text| !text.trim().is_empty())
+                            && current
+                                .metadata()
+                                .wiki
+                                .files
+                                .iter()
+                                .any(|file| !file.body.trim().is_empty()))
                 }
                 ChapterMode::Translate => false,
             };
@@ -232,7 +247,7 @@ impl App {
         project: ProjectId,
         session: &Arc<Mutex<Session>>,
         chapter: &Chapter,
-        mut config: PipelineConfig,
+        config: PipelineConfig,
         stop: &CancellationToken,
     ) -> Result<()> {
         let current = session.lock().project();
@@ -241,10 +256,6 @@ impl App {
             .chapters
             .chapter(chapter.id)
             .context("chapter was removed")?;
-        if let Some(setting) = &chapter.setting {
-            config.translator.instructions.push_str("\n\n");
-            config.translator.instructions.push_str(setting);
-        }
         let mut unprocessed = Vec::new();
         let mut pending = BTreeMap::<_, Vec<_>>::new();
         for &page in &chapter.pages {

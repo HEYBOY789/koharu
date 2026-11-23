@@ -548,7 +548,18 @@
       "translating": "Translating {{chapter}}",
       "failed": "Stopped at {{chapter}}"
     },
-    "progress": "{{completed}}/{{total}} chapters complete"
+    "progress": "{{completed}}/{{total}} chapters complete",
+    "summarizeAndTranslate": "Summarize & translate",
+    "wikiAdd": "Add wiki file",
+    "wikiRemove": "Delete this wiki file",
+    "wikiAddTitle": "New wiki file",
+    "wikiAddDescription": "Use lowercase letters, digits, and underscores.",
+    "wikiAddPlaceholder": "factions",
+    "wikiAddAction": "Add",
+    "wikiImport": "Import a wiki folder",
+    "summarizerSkill": "Summarizer skill path (optional)",
+    "summarizerDefault": "Summarize new chapters by default",
+    "summarizerApplyDefault": "Apply to existing chapters"
   },
   "mangadex": {
     "loadingCover": "Loading cover…",

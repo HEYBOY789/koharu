@@ -168,7 +168,7 @@ export type Chapter = {
 	translated?: boolean,
 };
 
-export type ChapterEdit = { action: "create"; title: string; pages: PageId[] } | { action: "assign"; chapter: ChapterId; pages: PageId[] } | { action: "rename"; chapter: ChapterId; title: string } | { action: "remove"; chapter: ChapterId } | { action: "set_summarize"; chapter: ChapterId; summarize: boolean } | { action: "set_summary"; chapter: ChapterId; summary: string } | { action: "set_prompt"; chapter: ChapterId; prompt: string } | { action: "set_wiki"; slug: string; body: string } | { action: "remove_wiki"; slug: string };
+export type ChapterEdit = { action: "create"; title: string; pages: PageId[] } | { action: "assign"; chapter: ChapterId; pages: PageId[] } | { action: "rename"; chapter: ChapterId; title: string } | { action: "remove"; chapter: ChapterId } | { action: "set_summarize"; chapter: ChapterId; summarize: boolean } | { action: "set_summarize_all"; summarize: boolean } | { action: "set_summary"; chapter: ChapterId; summary: string } | { action: "set_prompt"; chapter: ChapterId; prompt: string } | { action: "set_wiki"; slug: string; body: string } | { action: "add_wiki"; slug: string } | { action: "remove_wiki"; slug: string };
 
 export type ChapterId = string;
 
@@ -183,7 +183,7 @@ export type ChapterJob = {
 	error: string | null,
 };
 
-export type ChapterMode = "summarize" | "translate" | "summarize_translate";
+export type ChapterMode = "summarize" | "translate" | "summarize_translate" | "resume";
 
 export type ChapterPhase = "summarizing" | "translating" | "finished" | "stopped" | "failed";
 
@@ -1250,6 +1250,8 @@ goTo: (step: number) => runner("go_to", (options) => invoke<null>("go_to", { ste
 getPageThumbnail: (page: PageId) => runner("get_page_thumbnail", (options) => invoke<ArrayBuffer>("get_page_thumbnail", { page }, options)),
 editChapter: (action: ChapterEdit, project: ProjectId) => runner("edit_chapter", (options) => invoke<null>("edit_chapter", { action, project }, options)),
 getProjectMetadata: (project: ProjectId) => runner("get_project_metadata", (options) => invoke<ProjectMetadata>("get_project_metadata", { project }, options)),
+/** Merge Markdown files into the selected project's wiki in one undo step. */
+importWiki: (project: ProjectId) => runner("import_wiki", (options) => invoke<string[]>("import_wiki", { project }, options)),
 runChapters: (project: ProjectId, chapter: ChapterId, fromHere: boolean, mode: ChapterMode) => runner("run_chapters", (options) => invoke<null>("run_chapters", { project, chapter, fromHere, mode }, options)),
 getChapterJobs: () => runner("get_chapter_jobs", (options) => invoke<ChapterJob[]>("get_chapter_jobs", {  }, options)),
 stopChapterJob: (project: ProjectId) => runner("stop_chapter_job", (options) => invoke<null>("stop_chapter_job", { project }, options)),

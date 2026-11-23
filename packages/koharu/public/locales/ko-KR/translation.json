@@ -548,7 +548,18 @@
       "translating": "Translating {{chapter}}",
       "failed": "Stopped at {{chapter}}"
     },
-    "progress": "{{completed}}/{{total}} chapters complete"
+    "progress": "{{completed}}/{{total}} chapters complete",
+    "summarizeAndTranslate": "Summarize & translate",
+    "wikiAdd": "위키 파일 추가",
+    "wikiRemove": "이 위키 파일 삭제",
+    "wikiAddTitle": "새 위키 파일",
+    "wikiAddDescription": "Use lowercase letters, digits, and underscores.",
+    "wikiAddPlaceholder": "factions",
+    "wikiAddAction": "추가",
+    "wikiImport": "위키 폴더 가져오기",
+    "summarizerSkill": "Summarizer skill path (optional)",
+    "summarizerDefault": "Summarize new chapters by default",
+    "summarizerApplyDefault": "Apply to existing chapters"
   },
   "mangadex": {
     "loadingCover": "표지 로딩 중…",

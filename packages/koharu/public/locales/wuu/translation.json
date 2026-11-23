@@ -548,7 +548,18 @@
       "translating": "Translating {{chapter}}",
       "failed": "Stopped at {{chapter}}"
     },
-    "progress": "{{completed}}/{{total}} chapters complete"
+    "progress": "{{completed}}/{{total}} chapters complete",
+    "summarizeAndTranslate": "Summarize & translate",
+    "wikiAdd": "添加 Wiki 文件",
+    "wikiRemove": "删除此 Wiki 文件",
+    "wikiAddTitle": "新建 Wiki 文件",
+    "wikiAddDescription": "Use lowercase letters, digits, and underscores.",
+    "wikiAddPlaceholder": "factions",
+    "wikiAddAction": "添加",
+    "wikiImport": "导入 Wiki 文件夹",
+    "summarizerSkill": "Summarizer skill path (optional)",
+    "summarizerDefault": "Summarize new chapters by default",
+    "summarizerApplyDefault": "Apply to existing chapters"
   },
   "mangadex": {
     "loadingCover": "正在加载封面…",
